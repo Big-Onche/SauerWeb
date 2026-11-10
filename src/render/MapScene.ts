@@ -33,6 +33,7 @@ import { BrowserWeaponInput } from "../weapons/WeaponInput";
 import { WeaponHUD } from "../weapons/WeaponHUD";
 import { WeaponRenderer } from "../weapons/WeaponRenderer";
 import { WeaponAudio } from "../weapons/WeaponAudio";
+import { ParticleRenderer } from "./ParticleRenderer";
 
 export type CameraMode = "free" | "player";
 
@@ -63,6 +64,7 @@ export class MapScene {
   private readonly weaponInput: BrowserWeaponInput;
   private readonly weaponHUD: WeaponHUD;
   private readonly weaponRenderer: WeaponRenderer;
+  private readonly particleRenderer: ParticleRenderer;
   private cameraMode: CameraMode = "free";
   private materialCache: MaterialCache;
   private fallbackMaterial?: StandardMaterial;
@@ -107,6 +109,7 @@ export class MapScene {
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.weaponHUD.setVisible(false);
+    this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera);
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
     new WeaponAudio(this.weapons.events);
 
@@ -139,6 +142,7 @@ export class MapScene {
     this.skyboxObjectUrls.forEach((url) => URL.revokeObjectURL(url));
     this.skyboxObjectUrls = [];
     this.scene.onBeforeRenderObservable.clear();
+    this.particleRenderer.clear();
     this.weaponRenderer.clear();
     this.weapons.projectiles.clear();
     this.physics.setMap(map);
@@ -178,6 +182,7 @@ export class MapScene {
       vertices += batch.positions.length / 3;
     });
     map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
+    this.particleRenderer.loadMap(map.entityRegistry);
     const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
       () => generation === this.loadGeneration);
     this.physics.setMapModels(loadedMapModels.collisions);
