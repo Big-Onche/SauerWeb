@@ -3,6 +3,7 @@ import { SauerMapParser } from "./map/SauerMapParser";
 import type { SauerMap } from "./map/types";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
 import { MapScene, type SceneStats } from "./render/MapScene";
+import { PhysicsState } from "./physics/types";
 
 interface MapListItem {
   name: string;
@@ -37,6 +38,9 @@ app.innerHTML = `
           <h2 id="map-title">Choose a map</h2>
         </div>
         <div class="view-buttons">
+          <button id="camera-mode" class="icon-button" type="button" aria-pressed="false" title="Use native player physics (F2)">♙</button>
+          <button id="physics-pause" class="icon-button" type="button" aria-pressed="false" title="Pause player physics (P)" hidden>Ⅱ</button>
+          <button id="physics-reset" class="icon-button" type="button" title="Reset player to spawn (R)" hidden>↺</button>
           <button id="entities" class="icon-button" type="button" aria-pressed="false"
             title="Toggle entity debug markers">◎</button>
           <button id="materials" class="icon-button" type="button" aria-pressed="false" title="Toggle material-volume debug view">◩</button>
@@ -52,8 +56,9 @@ app.innerHTML = `
       <div id="loading" class="loading" hidden><span></span><p>Reading octree…</p></div>
       <div id="error" class="error" hidden></div>
       <div id="stats" class="stats" hidden></div>
+      <div id="physics-debug" class="physics-debug" hidden></div>
       <details id="model-report" class="model-report" hidden><summary></summary><ul></ul></details>
-      <div class="controls"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span><i></i><span>Mouse to look</span></div>
+      <div id="controls" class="controls"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span><i></i><span>Mouse to look</span></div>
     </section>
   </main>
 `;
@@ -71,6 +76,11 @@ const stats = required<HTMLDivElement>("#stats");
 const wireframe = required<HTMLButtonElement>("#wireframe");
 const materials = required<HTMLButtonElement>("#materials");
 const entities = required<HTMLButtonElement>("#entities");
+const cameraMode = required<HTMLButtonElement>("#camera-mode");
+const physicsPause = required<HTMLButtonElement>("#physics-pause");
+const physicsReset = required<HTMLButtonElement>("#physics-reset");
+const physicsDebug = required<HTMLDivElement>("#physics-debug");
+const controls = required<HTMLDivElement>("#controls");
 const modelReport = required<HTMLDetailsElement>("#model-report");
 const parser = new SauerMapParser();
 const mapScene = new MapScene(canvas);
@@ -99,6 +109,17 @@ entities.addEventListener("click", () => {
   entities.setAttribute("aria-pressed", String(enabled));
   mapScene.setEntityDebug(enabled);
 });
+cameraMode.addEventListener("click", () => toggleCameraMode());
+physicsPause.addEventListener("click", () => togglePhysicsPause());
+physicsReset.addEventListener("click", () => mapScene.resetPlayer());
+window.addEventListener("keydown", (event) => {
+  if (event.code === "F2") {
+    event.preventDefault();
+    toggleCameraMode();
+  } else if (mapScene.currentCameraMode() === "player" && event.code === "KeyP") togglePhysicsPause();
+  else if (mapScene.currentCameraMode() === "player" && event.code === "KeyR") mapScene.resetPlayer();
+});
+window.setInterval(() => updatePhysicsDebug(), 100);
 
 async function loadMapIndex(): Promise<void> {
   try {
@@ -187,6 +208,45 @@ function setBusy(busy: boolean): void {
   loading.hidden = !busy;
   error.hidden = true;
   if (busy) modelReport.hidden = true;
+}
+
+function toggleCameraMode(): void {
+  const playerMode = mapScene.currentCameraMode() !== "player";
+  mapScene.setCameraMode(playerMode ? "player" : "free");
+  cameraMode.setAttribute("aria-pressed", String(playerMode));
+  cameraMode.title = playerMode ? "Use developer free camera (F2)" : "Use native player physics (F2)";
+  physicsDebug.hidden = !playerMode;
+  physicsPause.hidden = !playerMode;
+  physicsReset.hidden = !playerMode;
+  controls.innerHTML = playerMode
+    ? `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span><i></i><kbd>R</kbd><span>Reset</span><i></i><kbd>F2</kbd><span>Free camera</span>`
+    : `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Fly</span><i></i><kbd>F2</kbd><span>Player physics</span>`;
+}
+
+function togglePhysicsPause(): void {
+  const paused = physicsPause.getAttribute("aria-pressed") !== "true";
+  physicsPause.setAttribute("aria-pressed", String(paused));
+  physicsPause.textContent = paused ? "▶" : "Ⅱ";
+  mapScene.setPhysicsPaused(paused);
+}
+
+function updatePhysicsDebug(): void {
+  if (physicsDebug.hidden) return;
+  const snapshot = mapScene.physicsDebugSnapshot();
+  const player = snapshot.entity;
+  const formatVector = (value: SauerMap["entities"][number]["position"]) => `${value.x.toFixed(3)} ${value.y.toFixed(3)} ${value.z.toFixed(3)}`;
+  physicsDebug.innerHTML = `
+    <header><strong>PHYSENT</strong><span>${snapshot.paused ? "PAUSED" : `${snapshot.steps} × ${snapshot.stepMilliseconds} ms`}</span></header>
+    <dl>
+      <dt>state</dt><dd>${PhysicsState[player.physicsState]}</dd>
+      <dt>origin</dt><dd>${formatVector(player.position)}</dd>
+      <dt>render</dt><dd>${formatVector(snapshot.renderPosition)}</dd>
+      <dt>velocity</dt><dd>${formatVector(player.velocity)}</dd>
+      <dt>falling</dt><dd>${formatVector(player.falling)}</dd>
+      <dt>floor</dt><dd>${formatVector(player.floor)}</dd>
+      <dt>air</dt><dd>${player.timeInAir} ms</dd>
+      <dt>interp</dt><dd>${snapshot.interpolation.toFixed(3)}</dd>
+    </dl>`;
 }
 
 function required<ElementType extends Element>(selector: string): ElementType {

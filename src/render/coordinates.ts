@@ -10,6 +10,10 @@ export function toBabylonArray(position: Vec3): [number, number, number] {
   return [position.x, position.z, position.y];
 }
 
+export function toBabylonDirection(direction: Vec3): Vector3 {
+  return new Vector3(direction.x, direction.z, direction.y);
+}
+
 /** Mirrors Sauerbraten's vecfromyawpitch(yaw, 0, 1, 0). */
 export function toBabylonYawDirection(yawDegrees: number): Vector3 {
   const yaw = yawDegrees * Math.PI / 180;

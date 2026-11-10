@@ -17,10 +17,14 @@ import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "./geometry";
 import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
-import { toBabylonPosition, toBabylonYawDirection } from "./coordinates";
+import { toBabylonDirection, toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 import { resolveMapLighting } from "./MapLighting";
 import { loadMapModels } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
+import { BrowserPhysicsInput } from "../physics/input";
+import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../physics/simulation";
+
+export type CameraMode = "free" | "player";
 
 export interface SceneStats {
   meshes: number;
@@ -34,7 +38,12 @@ export interface SceneStats {
 export class MapScene {
   readonly engine: Engine;
   readonly scene: Scene;
-  private readonly camera: UniversalCamera;
+  private readonly canvas: HTMLCanvasElement;
+  private readonly freeCamera: UniversalCamera;
+  private readonly playerCamera: UniversalCamera;
+  private readonly physics = new PhysicsSimulation();
+  private readonly physicsInput: BrowserPhysicsInput;
+  private cameraMode: CameraMode = "free";
   private materialCache: MaterialCache;
   private fallbackMaterial?: StandardMaterial;
   private skyboxMaterial?: StandardMaterial;
@@ -50,26 +59,29 @@ export class MapScene {
   private readonly mapModelMeshes: Mesh[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
     this.scene = new Scene(this.engine);
     this.materialCache = new MaterialCache(this.scene);
     this.scene.useRightHandedSystem = true;
     this.scene.clearColor = new Color4(0.055, 0.067, 0.06, 1);
 
-    this.camera = new UniversalCamera("camera", new Vector3(0, 64, 0), this.scene);
-    this.camera.minZ = 0.1;
-    this.camera.maxZ = 50_000;
-    this.camera.fovMode = Camera.FOVMODE_VERTICAL_FIXED;
-    this.camera.fov = 70 * Math.PI / 180;
-    this.camera.speed = 4;
-    this.camera.angularSensibility = 2200;
-    this.camera.keysUp = [87, 38];
-    this.camera.keysDown = [83, 40];
-    this.camera.keysLeft = [65, 37];
-    this.camera.keysRight = [68, 39];
-    this.camera.attachControl(canvas, true);
+    this.freeCamera = this.createCamera("free-camera");
+    this.freeCamera.speed = 4;
+    this.freeCamera.angularSensibility = 2200;
+    this.freeCamera.keysUp = [87, 38];
+    this.freeCamera.keysDown = [83, 40];
+    this.freeCamera.keysLeft = [65, 37];
+    this.freeCamera.keysRight = [68, 39];
+    this.freeCamera.attachControl(canvas, true);
+    this.playerCamera = this.createCamera("player-camera");
+    this.scene.activeCamera = this.freeCamera;
+    this.physicsInput = new BrowserPhysicsInput(canvas);
 
-    this.engine.runRenderLoop(() => this.scene.render());
+    this.engine.runRenderLoop(() => {
+      this.updatePhysics(performance.now());
+      this.scene.render();
+    });
     window.addEventListener("resize", () => this.engine.resize());
     new ResizeObserver(() => this.engine.resize()).observe(canvas);
   }
@@ -171,6 +183,42 @@ export class MapScene {
     this.entityMeshes.forEach((mesh) => mesh.setEnabled(enabled));
   }
 
+  setCameraMode(mode: CameraMode): void {
+    if (mode === this.cameraMode) return;
+    this.cameraMode = mode;
+    const playerMode = mode === "player";
+    this.physicsInput.enabled = playerMode;
+    if (playerMode) {
+      this.freeCamera.detachControl();
+      this.physics.reset(performance.now());
+      this.scene.activeCamera = this.playerCamera;
+      this.updatePlayerCamera(this.physics.player.position);
+    } else {
+      if (document.pointerLockElement === this.canvas) void document.exitPointerLock();
+      this.freeCamera.position.copyFrom(this.playerCamera.position);
+      this.freeCamera.setTarget(this.playerCamera.getTarget());
+      this.freeCamera.attachControl(this.canvas, true);
+      this.scene.activeCamera = this.freeCamera;
+    }
+  }
+
+  setPhysicsPaused(paused: boolean): void {
+    this.physics.setPaused(paused);
+  }
+
+  resetPlayer(): void {
+    this.physics.reset();
+    this.updatePlayerCamera(this.physics.player.position);
+  }
+
+  physicsDebugSnapshot(): PhysicsDebugSnapshot {
+    return this.physics.debugSnapshot();
+  }
+
+  currentCameraMode(): CameraMode {
+    return this.cameraMode;
+  }
+
   private createEntityMarker(entity: RegisteredMapEntity): void {
     if (entity.category === "empty") return;
     const position = toBabylonPosition(entity.position);
@@ -185,7 +233,7 @@ export class MapScene {
     marker.setEnabled(this.entityDebug);
     this.entityMeshes.push(marker);
     const direction = entity.orientation?.direction
-      ? new Vector3(entity.orientation.direction.x, entity.orientation.direction.z, entity.orientation.direction.y)
+      ? toBabylonDirection(entity.orientation.direction)
       : entity.orientation?.yawDegrees === undefined ? undefined : toBabylonYawDirection(entity.orientation.yawDegrees);
     if (!direction) return;
     const line = MeshBuilder.CreateLines(`entity-${entity.index}-orientation`, { points: [position, position.add(direction.scale(7))] }, this.scene);
@@ -345,11 +393,41 @@ export class MapScene {
     const playerStart = map.entities.find((entity) => entity.type === 3);
     const fallback = { x: map.header.worldSize / 2, y: map.header.worldSize / 2, z: map.header.worldSize * 0.65 };
     const spawn = playerStart ? { ...playerStart.position, z: playerStart.position.z + 14 } : fallback;
-    this.camera.position.copyFrom(toBabylonPosition(spawn));
+    const spawnYaw = playerStart?.attributes[0] ?? 0;
+    this.physics.spawn(spawn, spawnYaw);
+    this.freeCamera.position.copyFrom(toBabylonPosition(spawn));
     const target = this.geometryCenter(batches);
-    const fallbackDirection = playerStart ? toBabylonYawDirection(playerStart.attributes[0]) : new Vector3(0, 0, -1);
-    this.camera.setTarget(target ?? this.camera.position.add(fallbackDirection));
-    this.camera.speed = Math.max(1, map.header.worldSize / 1024);
+    const fallbackDirection = playerStart ? toBabylonYawDirection(spawnYaw) : new Vector3(0, 0, -1);
+    this.freeCamera.setTarget(target ?? this.freeCamera.position.add(fallbackDirection));
+    this.freeCamera.speed = Math.max(1, map.header.worldSize / 1024);
+    this.updatePlayerCamera(spawn);
+  }
+
+  private createCamera(name: string): UniversalCamera {
+    const camera = new UniversalCamera(name, new Vector3(0, 64, 0), this.scene);
+    camera.minZ = 0.1;
+    camera.maxZ = 50_000;
+    camera.fovMode = Camera.FOVMODE_VERTICAL_FIXED;
+    camera.fov = 70 * Math.PI / 180;
+    return camera;
+  }
+
+  private updatePhysics(nowMilliseconds: number): void {
+    if (this.cameraMode !== "player") return;
+    const renderPosition = this.physics.update(nowMilliseconds, this.physicsInput.sample());
+    this.updatePlayerCamera(renderPosition);
+  }
+
+  private updatePlayerCamera(position: RegisteredMapEntity["position"]): void {
+    this.playerCamera.position.copyFrom(toBabylonPosition(position));
+    const yaw = this.physics.player.yaw * Math.PI / 180;
+    const pitch = this.physics.player.pitch * Math.PI / 180;
+    const direction = toBabylonDirection({
+      x: -Math.sin(yaw) * Math.cos(pitch),
+      y: Math.cos(yaw) * Math.cos(pitch),
+      z: Math.sin(pitch),
+    });
+    this.playerCamera.setTarget(this.playerCamera.position.add(direction));
   }
 
   private geometryCenter(batches: GeometryBatch[]): Vector3 | undefined {
