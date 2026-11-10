@@ -36,14 +36,14 @@ All multi-byte fields are little-endian.
 
 Node tags are `children`, `empty`, `solid`, `normal`, and `lodcube`. A non-branch node stores six texture IDs. Normal and LOD cubes store twelve edge bytes, each containing two four-bit edge endpoints. Version 33 optionally stores a 16-bit material, merge mask, and compact surface block.
 
-The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leaves but never replaces the tree. Output is batched by the eight natural root octants. A face is suppressed when the adjacent octree leaf at its center is non-empty; this removes ordinary internal faces while retaining the source octree for a later exact `visibleface` port.
+The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leaves but never replaces the tree. Output is batched by root octant and VSlot. Until the complete engine `visibleface` behavior is ported, face suppression is deliberately conservative: only a solid neighbor at least as large as the current solid cube can hide a face. This retains some harmless internal faces but cannot turn partial neighbor coverage or deformed cubes into visible holes.
 
 Surface vertices use Sauerbraten's low-12-bit coordinate encoding. The renderer restores the high origin bits and divides by eight, matching `addcubeverts`. Explicit surface polygons are fan-triangulated with reversed winding after the centralized `(x, y, z) → (x, z, y)` conversion.
 
 ## Deliberate next steps
 
 - Port historical layout branches from `loadc` for formats 6–32.
-- Replace center-neighbor face suppression with the complete `visibleface` / merged-face behavior from `octarender.cpp`.
+- Replace conservative solid-neighbor face suppression with the complete `visibleface` / merged-face behavior from `octarender.cpp`.
 - Execute the safe texture subset of default and map `.cfg` files, resolve Slots/VSlots to package images, and generate texture UVs.
 - Decode lightmap atlases and bind serialized lightmap UVs.
 - Decode PVS and blendmap payloads rather than stopping at the octree boundary.

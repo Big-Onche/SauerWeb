@@ -42,7 +42,7 @@ function appendCube(map: SauerMap, cube: OctreeCube, rootIndex: number, textures
     if (!isFaceVisible(map, cube, orientation)) continue;
     const surface = cube.surfaces[orientation];
     const layerCount = surface ? surface.vertexCount & 0x0f : 4;
-    const source = surface?.vertices.slice(0, layerCount) ?? FACE_CORNERS[orientation].map((corner) => generatedVertex(cube, corner));
+    const source = surface && layerCount > 0 ? surface.vertices.slice(0, layerCount) : FACE_CORNERS[orientation].map((corner) => generatedVertex(cube, corner));
     if (source.length < 3) continue;
     const textureIndex = cube.textures[orientation];
     const key = `${rootIndex}:${textureIndex}`;
@@ -63,7 +63,9 @@ function isFaceVisible(map: SauerMap, cube: OctreeCube, orientation: number): bo
     z: cube.origin.z + cube.size / 2 + normal.z * (cube.size / 2 + 0.01),
   };
   if (point.x < 0 || point.y < 0 || point.z < 0 || point.x >= map.header.worldSize || point.y >= map.header.worldSize || point.z >= map.header.worldSize) return true;
-  return findLeaf(map.world, point)?.kind === "empty";
+  const neighbor = findLeaf(map.world, point);
+  if (!neighbor || neighbor.kind === "empty") return true;
+  return cube.kind !== "solid" || neighbor.kind !== "solid" || neighbor.size < cube.size;
 }
 
 function findLeaf(cubes: OctreeCube[], point: Vec3): OctreeCube | undefined {
