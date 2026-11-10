@@ -24,6 +24,21 @@ export function magnitude(value: Vec3): number {
   return Math.hypot(value.x, value.y, value.z);
 }
 
+export function dot(first: Vec3, second: Vec3): number {
+  return first.x * second.x + first.y * second.y + first.z * second.z;
+}
+
+export function subtract(first: Vec3, second: Vec3): Vec3 {
+  return { x: first.x - second.x, y: first.y - second.y, z: first.z - second.z };
+}
+
+export function projectAgainst(target: Vec3, normal: Vec3): void {
+  const amount = dot(target, normal);
+  target.x -= normal.x * amount;
+  target.y -= normal.y * amount;
+  target.z -= normal.z * amount;
+}
+
 export function normalize(value: Vec3): void {
   const length = magnitude(value);
   if (length > 0) scaleVec3(value, 1 / length);
@@ -36,4 +51,3 @@ export function lerpVec3(from: Vec3, to: Vec3, amount: number): Vec3 {
     z: from.z + (to.z - from.z) * amount,
   };
 }
-

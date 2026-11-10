@@ -3,6 +3,8 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { generateGeometry } from "../render/geometry";
+import { createInputState } from "../physics/input";
+import { PhysicsSimulation } from "../physics/simulation";
 import { SauerMapParser } from "./SauerMapParser";
 
 describe("SauerMapParser", () => {
@@ -42,6 +44,18 @@ describe("SauerMapParser", () => {
       expect(minimum).toBeGreaterThanOrEqual(0);
       expect(maximum).toBeLessThanOrEqual(map.header.worldSize);
     }
+
+    const playerStart = map.entities.find((entity) => entity.type === 3);
+    expect(playerStart).toBeDefined();
+    const simulation = new PhysicsSimulation();
+    simulation.setMap(map);
+    const spawn = { ...playerStart!.position, z: playerStart!.position.z + simulation.player.eyeHeight };
+    simulation.spawn(spawn, playerStart!.attributes[0], 0);
+    for (let time = 5; time <= 250; time += 5) simulation.update(time, createInputState());
+    const landedHeight = simulation.player.position.z;
+    for (let time = 255; time <= 1000; time += 5) simulation.update(time, createInputState());
+    expect(simulation.player.position.z).toBeCloseTo(landedHeight, 3);
+    expect(simulation.player.position.z).toBeGreaterThan(spawn.z - 8);
   });
 
   it("rejects non-map data with a descriptive error", () => {

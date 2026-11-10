@@ -27,6 +27,16 @@ The next implementation stage must preserve the native split between traversal a
 - `src/engine/bih.cpp` and `src/engine/mpr.h`: mapmodel BIH and convex MPR collision paths. These are separate from world-octree collision and should remain optional query participants.
 - `src/engine/world.h` and `src/engine/octa.h`: cube/extension/clip-plane storage and edge encoding.
 
+## Milestone 03 sources
+
+| Browser implementation | Native source | Behavior |
+| --- | --- | --- |
+| `src/physics/collision.ts` | `src/engine/physics.cpp:776-1057`, `src/engine/octa.cpp:1204-1251`, `src/engine/mpr.h:113-175` | octree broad phase, solid/deformed cube planes, capsule support points, clip materials, and contact normals |
+| `src/physics/ground.ts` | `src/engine/physics.cpp:1072-1400` | floor classification, projection, landing/falling, stairs, ground adhesion, sliding, and collision retries |
+| `src/physics/simulation.ts` | `src/engine/physics.cpp:1590-1723`, `src/fpsgame/fps.cpp:264-270` | slope-relative desired velocity, gravity, jumping, ten movement substeps, and five-retry collision behavior |
+
+Map-parser integration tests run the controller on the real `aard3c` and `triforts` octrees to ensure their player starts settle on geometry rather than falling through the world.
+
 ## Compatibility invariants
 
 - All authoritative positions and velocities use Sauerbraten coordinates (Z-up). Conversion to Babylon Y-up occurs only in `src/render/coordinates.ts`.

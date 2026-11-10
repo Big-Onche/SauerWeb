@@ -394,6 +394,7 @@ export class MapScene {
     const fallback = { x: map.header.worldSize / 2, y: map.header.worldSize / 2, z: map.header.worldSize * 0.65 };
     const spawn = playerStart ? { ...playerStart.position, z: playerStart.position.z + 14 } : fallback;
     const spawnYaw = playerStart?.attributes[0] ?? 0;
+    this.physics.setMap(map);
     this.physics.spawn(spawn, spawnYaw);
     this.freeCamera.position.copyFrom(toBabylonPosition(spawn));
     const target = this.geometryCenter(batches);
