@@ -57,6 +57,11 @@ export interface MapModelAsset {
   ambient?: number;
   specular?: number;
   glow?: number;
+  collide?: boolean;
+  ellipseCollide?: boolean;
+  collisionRadius?: number;
+  collisionHeight?: number;
+  boundingBoxExtend?: [number, number, number];
   reason: string;
 }
 

@@ -121,6 +121,7 @@ export class MapScene {
     this.skyboxObjectUrls.forEach((url) => URL.revokeObjectURL(url));
     this.skyboxObjectUrls = [];
     this.scene.onBeforeRenderObservable.clear();
+    this.physics.setMap(map);
     const batches = generateGeometry(map, textures);
     const materialBatches = generateMaterialGeometry(map);
     let faces = 0;
@@ -159,6 +160,7 @@ export class MapScene {
     map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
     const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
       () => generation === this.loadGeneration);
+    this.physics.setMapModels(loadedMapModels.collisions);
     this.mapModelMeshes.push(...loadedMapModels.meshes);
     triangles += loadedMapModels.triangles;
     vertices += loadedMapModels.vertices;
@@ -412,7 +414,6 @@ export class MapScene {
     const fallback = { x: map.header.worldSize / 2, y: map.header.worldSize / 2, z: map.header.worldSize * 0.65 };
     const spawn = playerStart ? { ...playerStart.position, z: playerStart.position.z + 14 } : fallback;
     const spawnYaw = playerStart?.attributes[0] ?? 0;
-    this.physics.setMap(map);
     this.physics.spawn(spawn, spawnYaw);
     this.freeCamera.position.copyFrom(toBabylonPosition(spawn));
     const target = this.geometryCenter(batches);

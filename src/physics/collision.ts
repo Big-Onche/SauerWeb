@@ -1,11 +1,20 @@
-import { MATF_CLIP, MAT_CLIP, MAT_NOCLIP } from "../map/materials";
+import { MATF_CLIP, MATF_VOLUME, MAT_CLIP, MAT_GAMECLIP, MAT_GLASS, MAT_NOCLIP } from "../map/materials";
 import type { OctreeCube, SauerMap, Vec3 } from "../map/types";
-import type { PhysicsEntity } from "./types";
+import { type PhysicsEntity, PhysicsEntityType } from "./types";
 import { dot, magnitude, normalize, subtract } from "./vector";
 
 export interface CollisionResult {
   normal: Vec3;
   distance: number;
+}
+
+export interface MapModelCollision {
+  entityIndex: number;
+  origin: Vec3;
+  yaw: number;
+  center: Vec3;
+  radius: Vec3;
+  ellipse: boolean;
 }
 
 interface Plane extends Vec3 {
@@ -21,6 +30,28 @@ export class OctreeCollisionWorld {
   private readonly planeCache = new WeakMap<OctreeCube, Plane[]>();
 
   constructor(private readonly map: SauerMap) {}
+
+  private mapModels: MapModelCollision[] = [];
+
+  setMapModels(mapModels: MapModelCollision[]): void {
+    this.mapModels = mapModels;
+  }
+
+  lookupMaterial(position: Vec3): number {
+    if (position.x < 0 || position.y < 0 || position.z < 0 || position.x >= this.map.header.worldSize ||
+        position.y >= this.map.header.worldSize || position.z >= this.map.header.worldSize) return 0;
+    for (const root of this.map.world) {
+      if (!contains(root, position)) continue;
+      let cube = root;
+      while (cube.children) {
+        const child = cube.children.find((candidate) => contains(candidate, position));
+        if (!child) break;
+        cube = child;
+      }
+      return cube.material;
+    }
+    return 0;
+  }
 
   collide(entity: PhysicsEntity, direction: Vec3, cutoff = 0): CollisionResult | undefined {
     const minimum = {
@@ -38,6 +69,10 @@ export class OctreeCollisionWorld {
       const result = this.visit(cube, entity, direction, cutoff, minimum, maximum);
       if (result && (!best || result.distance > best.distance)) best = result;
     });
+    for (const model of this.mapModels) {
+      const result = collideMapModel(entity, direction, model);
+      if (result && (!best || result.distance > best.distance)) best = result;
+    }
     return best;
   }
 
@@ -53,8 +88,11 @@ export class OctreeCollisionWorld {
       return best;
     }
     const clip = cube.material & MATF_CLIP;
-    if (clip === MAT_NOCLIP || (cube.kind === "empty" && clip !== MAT_CLIP)) return undefined;
-    return this.collidePlanes(entity, direction, cutoff, clip === MAT_CLIP ? axisPlanes(cube) : this.planes(cube));
+    if (clip === MAT_NOCLIP) return undefined;
+    const forcedSolid = clip === MAT_CLIP && ((cube.material & MATF_VOLUME) === MAT_GLASS || entity.entityType < PhysicsEntityType.Camera) ||
+      clip === MAT_GAMECLIP && entity.entityType === PhysicsEntityType.Ai;
+    if (cube.kind === "empty" && !forcedSolid) return undefined;
+    return this.collidePlanes(entity, direction, cutoff, forcedSolid ? axisPlanes(cube) : this.planes(cube));
   }
 
   private collidePlanes(entity: PhysicsEntity, direction: Vec3, cutoff: number, planes: Plane[]): CollisionResult | undefined {
@@ -90,6 +128,65 @@ export class OctreeCollisionWorld {
     this.planeCache.set(cube, planes);
     return planes;
   }
+}
+
+function collideMapModel(entity: PhysicsEntity, direction: Vec3, model: MapModelCollision): CollisionResult | undefined {
+  const yaw = model.yaw * Math.PI / 180;
+  const cosine = Math.cos(yaw), sine = Math.sin(yaw);
+  const rotatedCenter = {
+    x: model.center.x * cosine - model.center.y * sine + model.origin.x,
+    y: model.center.y * cosine + model.center.x * sine + model.origin.y,
+    z: model.center.z + model.origin.z,
+  };
+  const below = rotatedCenter.z - model.radius.z - (entity.position.z + entity.aboveEye);
+  const above = entity.position.z - entity.eyeHeight - (rotatedCenter.z + model.radius.z);
+  if (below >= 0 || above >= 0) return undefined;
+  const dx = entity.position.x - rotatedCenter.x, dy = entity.position.y - rotatedCenter.y;
+  const localX = dx * cosine + dy * sine, localY = -dx * sine + dy * cosine;
+  let normal: Vec3 | undefined;
+  let penetration = 0;
+  if (model.ellipse) {
+    const angle = Math.atan2(-localY, -localX);
+    const modelRadius = Math.hypot(model.radius.x * Math.cos(angle), model.radius.y * Math.sin(angle));
+    const distance = Math.hypot(dx, dy) - entity.radius - modelRadius;
+    if (distance >= 0) return undefined;
+    penetration = distance;
+    if (distance > (entity.position.z < rotatedCenter.z ? below : above) && (magnitude(direction) === 0 || -dx * direction.x - dy * direction.y > 0)) {
+      normal = { x: dx, y: dy, z: 0 };
+      normalize(normal);
+    }
+  } else {
+    const offsetX = Math.max(-model.radius.x, Math.min(model.radius.x, localX)) - localX;
+    const offsetY = Math.max(-model.radius.y, Math.min(model.radius.y, localY)) - localY;
+    const distance = Math.hypot(offsetX, offsetY) - entity.radius;
+    if (distance >= 0) return undefined;
+    penetration = distance;
+    const sideX = localX <= -model.radius.x ? -1 : localX >= model.radius.x ? 1 : 0;
+    const sideY = localY <= -model.radius.y ? -1 : localY >= model.radius.y ? 1 : 0;
+    if (distance > (entity.position.z < rotatedCenter.z ? below : above) && (sideX || sideY)) {
+      const localDirection = { x: direction.x * cosine + direction.y * sine, y: -direction.x * sine + direction.y * cosine };
+      if (sideX * localX - model.radius.x > sideY * localY - model.radius.y) {
+        if (magnitude(direction) === 0 || sideX * localDirection.x < -1e-6) {
+          normal = { x: sideX * cosine, y: sideX * sine, z: 0 };
+        }
+      } else if (magnitude(direction) === 0 || sideY * localDirection.y < -1e-6) {
+        normal = { x: -sideY * sine, y: sideY * cosine, z: 0 };
+      }
+    }
+  }
+  if (!normal) {
+    if (entity.position.z < rotatedCenter.z) {
+      if (magnitude(direction) !== 0 && (direction.z <= 0 || entity.entityType < PhysicsEntityType.Inanimate &&
+          below < entity.zMargin - (entity.eyeHeight + entity.aboveEye) / 4)) return undefined;
+      normal = { x: 0, y: 0, z: -1 };
+    } else {
+      if (magnitude(direction) !== 0 && (direction.z >= 0 || entity.entityType < PhysicsEntityType.Inanimate &&
+          above < entity.zMargin - (entity.eyeHeight + entity.aboveEye) / 3)) return undefined;
+      normal = { x: 0, y: 0, z: 1 };
+    }
+  }
+  if (magnitude(direction) > 0 && dot(normal, direction) >= 0) return undefined;
+  return { normal, distance: penetration };
 }
 
 function axisPlanes(cube: OctreeCube): Plane[] {
@@ -141,6 +238,11 @@ function addTrianglePlane(planes: Plane[], first: Vec3, second: Vec3, third: Vec
 function overlapsCube(cube: OctreeCube, minimum: Vec3, maximum: Vec3): boolean {
   return maximum.x >= cube.origin.x && minimum.x <= cube.origin.x + cube.size && maximum.y >= cube.origin.y &&
     minimum.y <= cube.origin.y + cube.size && maximum.z >= cube.origin.z && minimum.z <= cube.origin.z + cube.size;
+}
+
+function contains(cube: OctreeCube, point: Vec3): boolean {
+  return point.x >= cube.origin.x && point.y >= cube.origin.y && point.z >= cube.origin.z && point.x < cube.origin.x + cube.size &&
+    point.y < cube.origin.y + cube.size && point.z < cube.origin.z + cube.size;
 }
 
 function plane(x: number, y: number, z: number, offset: number): Plane {

@@ -10,6 +10,7 @@ import type { MapModelAsset, MapModelMeshSettings, MapModelSkin } from "../asset
 import { packageAssetUrl } from "../assets/TextureResolver";
 import type { RegisteredMapEntity } from "../map/types";
 import { toBabylonPosition } from "./coordinates";
+import type { MapModelCollision } from "../physics/collision";
 
 export interface ModelGeometry {
   meshes: ModelGeometryMesh[];
@@ -27,6 +28,7 @@ export interface LoadedMapModels {
   issues: string[];
   triangles: number;
   vertices: number;
+  collisions: MapModelCollision[];
 }
 
 export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[], assets: MapModelAsset[], wireframe: boolean,
@@ -35,6 +37,7 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
   const issues: string[] = [];
   let triangles = 0;
   let vertices = 0;
+  const collisions: MapModelCollision[] = [];
   const referenced = new Map<number, RegisteredMapEntity[]>();
   for (const entity of entities) {
     if (entity.typeName !== "mapmodel") continue;
@@ -53,6 +56,20 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
       const geometry = await fetchModelGeometry(asset);
       if (!generationIsCurrent()) return;
       const materials = new Map<string, StandardMaterial>();
+      if (asset.collide !== false) {
+        const bounds = collisionBounds(geometry, asset);
+        for (const entity of instances) {
+          if (!mapModelInitiallyCollides(entity.attributes[2])) continue;
+          collisions.push({
+            entityIndex: entity.index,
+            origin: { ...entity.position },
+            yaw: entity.orientation?.yawDegrees ?? 0,
+            center: bounds.center,
+            radius: bounds.radius,
+            ellipse: asset.ellipseCollide === true,
+          });
+        }
+      }
       for (const entity of instances) {
         for (const source of geometry.meshes) {
           const mesh = createModelMesh(scene, source, asset, entity, materials, wireframe);
@@ -67,7 +84,36 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
     }
   }));
   issues.forEach((issue) => console.warn(issue));
-  return { meshes, issues, triangles, vertices };
+  return { meshes, issues, triangles, vertices, collisions };
+}
+
+function mapModelInitiallyCollides(triggerType: number): boolean {
+  const type = triggerType & 31;
+  const valid = type >= 1 && type <= 14 || type === 29;
+  return !valid || type === 9 || type === 10 || type === 11 || type === 14;
+}
+
+function collisionBounds(geometry: ModelGeometry, asset: MapModelAsset): { center: RegisteredMapEntity["position"]; radius: RegisteredMapEntity["position"] } {
+  const minimum = { x: Infinity, y: Infinity, z: Infinity };
+  const maximum = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const mesh of geometry.meshes) {
+    const positions = translateAndScale(mesh.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
+    for (let index = 0; index < positions.length; index += 3) {
+      minimum.x = Math.min(minimum.x, positions[index]); maximum.x = Math.max(maximum.x, positions[index]);
+      minimum.y = Math.min(minimum.y, positions[index + 2]); maximum.y = Math.max(maximum.y, positions[index + 2]);
+      minimum.z = Math.min(minimum.z, positions[index + 1]); maximum.z = Math.max(maximum.z, positions[index + 1]);
+    }
+  }
+  const extend = asset.boundingBoxExtend ?? [0, 0, 0];
+  const center = { x: (minimum.x + maximum.x) / 2, y: (minimum.y + maximum.y) / 2, z: (minimum.z + maximum.z) / 2 };
+  const radius = {
+    x: (maximum.x - minimum.x) / 2 + extend[0],
+    y: (maximum.y - minimum.y) / 2 + extend[1],
+    z: (maximum.z - minimum.z) / 2 + extend[2],
+  };
+  if (asset.collisionRadius) { center.x = center.y = 0; radius.x = radius.y = asset.collisionRadius; }
+  if (asset.collisionHeight) { center.z = radius.z = asset.collisionHeight / 2; }
+  return { center, radius };
 }
 
 function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapModelAsset, entity: RegisteredMapEntity,

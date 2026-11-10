@@ -39,6 +39,17 @@ Map-parser integration tests run the controller on the real `aard3c` and `trifor
 
 The contact smoothing path follows `vec::projectxy` (`src/shared/geom.h:147-160`) and `recalcdir`/`switchfloor` (`physics.cpp:1060-1101`). This preserves tangential speed and rescales the remaining substep after projection. Stair transitions use the native synthetic diagonal directions from `trystepup` and `trystepdown` rather than snapping directly between floor elevations.
 
+## Milestone 04 sources
+
+| Browser implementation | Native source | Behavior |
+| --- | --- | --- |
+| `src/physics/simulation.ts` | `src/engine/physics.cpp:1590-1744` | lower-body volume probe, water/lava velocity rules, entry damping, liquid friction, and death/out-of-world state |
+| `src/physics/collision.ts` | `src/engine/physics.cpp:535-571,710-773,994-1057` | clip filtering by entity type, mapmodel ellipse/box collision, contact normals, and material lookup |
+| `src/render/MapModelLoader.ts` | `src/engine/model.h:44-73`, `src/engine/rendermodel.cpp:52-66,217-232` | model bounds, `mdlcollide`, `mdlellipsecollide`, `mdlbb`, and bounding-box extension definitions |
+| `src/render/MapModelLoader.ts` | `src/fpsgame/entities.cpp:396-483` | initial trigger-driven `EF_NOCOLLIDE` filtering |
+
+Mapmodels contribute physics definitions derived from their native model configuration and decoded model bounds; Babylon mesh bounds and picking are not queried by physics.
+
 ## Compatibility invariants
 
 - All authoritative positions and velocities use Sauerbraten coordinates (Z-up). Conversion to Babylon Y-up occurs only in `src/render/coordinates.ts`.

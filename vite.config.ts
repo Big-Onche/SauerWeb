@@ -377,6 +377,11 @@ function resolveMapModels(names: string[]): Array<{
   ambient?: number;
   specular?: number;
   glow?: number;
+  collide?: boolean;
+  ellipseCollide?: boolean;
+  collisionRadius?: number;
+  collisionHeight?: number;
+  boundingBoxExtend?: [number, number, number];
   reason: string;
 }> {
   const formats = [
@@ -422,6 +427,11 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     ambient: 0.3,
     specular: 1,
     glow: 0,
+    collide: true,
+    ellipseCollide: false,
+    collisionRadius: 0,
+    collisionHeight: 0,
+    boundingBoxExtend: [0, 0, 0] as [number, number, number],
   };
   let geometryPath: string | undefined;
   const skins: Array<{ mesh: string; diffusePath: string; masksPath?: string }> = [];
@@ -451,6 +461,14 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     else if (command === "mdlambient") settings.ambient = modelPercent(args[0], 0.3);
     else if (command === "mdlspec") settings.specular = modelPercent(args[0], 1);
     else if (command === "mdlglow") settings.glow = modelPercent(args[0], 3);
+    else if (command === "mdlcollide") settings.collide = numberArg(args[0], 1) !== 0;
+    else if (command === "mdlellipsecollide") settings.ellipseCollide = numberArg(args[0], 0) !== 0;
+    else if (command === "mdlbb") {
+      settings.collisionRadius = numberArg(args[0], 0);
+      settings.collisionHeight = numberArg(args[1], 0);
+    } else if (command === "mdlbbextend") {
+      settings.boundingBoxExtend = [numberArg(args[0], 0), numberArg(args[1], 0), numberArg(args[2], 0)];
+    }
   }
   geometryPath ??= findModelDefault(modelDirectory, configDirectory, format.toLowerCase());
   if (!geometryPath || !fs.existsSync(path.resolve(packagesDirectory, geometryPath))) {

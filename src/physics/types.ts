@@ -32,6 +32,15 @@ export enum CollisionType {
   EllipsePrecise,
 }
 
+/** Values and ordering match ENT_* in .Sauerbraten/src/shared/ents.h:64. */
+export enum PhysicsEntityType {
+  Player,
+  Ai,
+  Inanimate,
+  Camera,
+  Bounce,
+}
+
 export interface PhysicsEntity {
   /** Authoritative Sauerbraten eye-origin position. */
   position: Vec3;
@@ -57,6 +66,7 @@ export interface PhysicsEntity {
   physicsState: PhysicsState;
   clientState: ClientState;
   collisionType: CollisionType;
+  entityType: PhysicsEntityType;
   blocked: boolean;
 }
 
@@ -85,6 +95,7 @@ export function createPlayer(position: Vec3 = vec3()): PhysicsEntity {
     physicsState: PhysicsState.Fall,
     clientState: ClientState.Alive,
     collisionType: CollisionType.Ellipse,
+    entityType: PhysicsEntityType.Player,
     blocked: false,
   };
 }
@@ -107,4 +118,3 @@ export function resetPlayer(entity: PhysicsEntity, position: Vec3, yaw = 0): voi
   entity.clientState = ClientState.Alive;
   entity.blocked = false;
 }
-

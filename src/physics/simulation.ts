@@ -1,11 +1,13 @@
 import type { SauerMap, Vec3 } from "../map/types";
 import { FLOOR_Z, GRAVITY, JUMP_VELOCITY, SLOPE_Z } from "./constants";
 import { OctreeCollisionWorld } from "./collision";
+import type { MapModelCollision } from "./collision";
+import { MAT_DEATH, MATF_VOLUME, MAT_LAVA, MAT_WATER } from "../map/materials";
 import { GroundMover } from "./ground";
 import type { PhysicsInputState } from "./input";
 import { movementAxis } from "./input";
 import { PhysicsScheduler } from "./scheduler";
-import { type PhysicsEntity, PhysicsState, createPlayer, resetPlayer } from "./types";
+import { ClientState, type PhysicsEntity, PhysicsState, createPlayer, resetPlayer } from "./types";
 import { addScaled, copyVec3, lerpVec3, normalize, projectAgainst, scaleVec3, vec3 } from "./vector";
 
 export interface PhysicsDebugSnapshot {
@@ -28,9 +30,15 @@ export class PhysicsSimulation {
   private renderPosition = vec3();
   private lastSchedule = { steps: 0, stepMilliseconds: 5, interpolation: 1 };
   private groundMover?: GroundMover;
+  private collisionWorld?: OctreeCollisionWorld;
 
   setMap(map: SauerMap): void {
-    this.groundMover = new GroundMover(new OctreeCollisionWorld(map));
+    this.collisionWorld = new OctreeCollisionWorld(map);
+    this.groundMover = new GroundMover(this.collisionWorld);
+  }
+
+  setMapModels(mapModels: MapModelCollision[]): void {
+    this.collisionWorld?.setMapModels(mapModels);
   }
 
   spawn(position: Vec3, yaw = 0, nowMilliseconds = performance.now()): void {
@@ -77,37 +85,52 @@ export class PhysicsSimulation {
     const player = this.player;
     player.previousPosition = copyVec3(player.position);
     const seconds = milliseconds / 1000;
+    const materialPosition = {
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z + (3 * player.aboveEye - player.eyeHeight) / 4,
+    };
+    const material = this.collisionWorld?.lookupMaterial(materialPosition) ?? 0;
+    const volume = material & MATF_VOLUME;
+    const water = volume === MAT_WATER || volume === MAT_LAVA;
+    const enteredWater = water && player.inWater === 0;
     if (player.physicsState === PhysicsState.Fall) {
-      player.falling.z -= GRAVITY * seconds;
+      if (!water || (player.move === 0 && player.strafe === 0)) player.falling.z -= GRAVITY * seconds;
       player.timeInAir = Math.min(player.timeInAir + milliseconds, 1000);
     } else if (player.floor.z > 0 && player.floor.z < FLOOR_Z) {
       const slopeGravity = vec3(0, 0, -1);
       projectAgainst(slopeGravity, player.floor);
       normalize(slopeGravity);
-      addScaled(player.falling, slopeGravity, GRAVITY * seconds);
-      const coefficient = Math.min(1, Math.max(0, (player.floor.z - SLOPE_Z) / (FLOOR_Z - SLOPE_Z)));
-      scaleVec3(player.falling, Math.pow(1 - coefficient / 6, milliseconds / 20));
+      if (!water || (player.move === 0 && player.strafe === 0)) addScaled(player.falling, slopeGravity, GRAVITY * seconds);
+      if (!water) {
+        const coefficient = Math.min(1, Math.max(0, (player.floor.z - SLOPE_Z) / (FLOOR_Z - SLOPE_Z)));
+        scaleVec3(player.falling, Math.pow(1 - coefficient / 6, milliseconds / 20));
+      }
     }
-    if (player.jumping && player.physicsState >= PhysicsState.Slope) {
+    if (enteredWater) scaleVec3(player.velocity, 1 / 8);
+    if (player.jumping && (player.physicsState >= PhysicsState.Slope || water)) {
       player.jumping = false;
       player.velocity.z = Math.max(player.velocity.z, JUMP_VELOCITY);
       player.physicsState = PhysicsState.Fall;
       player.falling = vec3();
+      if (water) { player.velocity.x /= 8; player.velocity.y /= 8; }
     }
     const yaw = player.yaw * Math.PI / 180;
+    const pitch = water ? player.pitch * Math.PI / 180 : 0;
     const desired = vec3(
-      player.move * -Math.sin(yaw) + player.strafe * Math.cos(yaw),
-      player.move * Math.cos(yaw) + player.strafe * Math.sin(yaw),
-      0,
+      player.move * -Math.sin(yaw) * Math.cos(pitch) + player.strafe * Math.cos(yaw),
+      player.move * Math.cos(yaw) * Math.cos(pitch) + player.strafe * Math.sin(yaw),
+      player.move * Math.sin(pitch),
     );
     normalize(desired);
     if (player.physicsState >= PhysicsState.Slope && player.floor.z > 0 && player.floor.z < 1) {
       desired.z = -(desired.x * player.floor.x + desired.y * player.floor.y) / player.floor.z;
       normalize(desired);
     }
-    scaleVec3(desired, player.maxSpeed * (player.move !== 0 && player.strafe === 0 ? 1.3 : 1) *
-      (player.physicsState < PhysicsState.Slope ? 1.3 : 1));
-    const friction = player.physicsState >= PhysicsState.Slope ? 6 : 30;
+    const speedScale = water ? 1 : (player.move !== 0 && player.strafe === 0 ? 1.3 : 1) *
+      (player.physicsState < PhysicsState.Slope ? 1.3 : 1);
+    scaleVec3(desired, player.maxSpeed * speedScale);
+    const friction = water ? 20 : player.physicsState >= PhysicsState.Slope ? 6 : 30;
     const blend = 1 - Math.pow(1 - 1 / friction, milliseconds / 20);
     player.velocity.x += (desired.x - player.velocity.x) * blend;
     player.velocity.y += (desired.y - player.velocity.y) * blend;
@@ -116,6 +139,7 @@ export class PhysicsSimulation {
     displacement.x += player.falling.x;
     displacement.y += player.falling.y;
     displacement.z += player.falling.z;
+    if (water) scaleVec3(displacement, 0.5);
     scaleVec3(displacement, seconds / 10);
     player.blocked = false;
     if (this.groundMover) {
@@ -126,6 +150,12 @@ export class PhysicsSimulation {
     } else {
       addScaled(player.position, player.velocity, seconds);
       addScaled(player.position, player.falling, seconds);
+    }
+    if (water) scaleVec3(player.falling, Math.pow(0.5, milliseconds / 20));
+    player.inWater = water ? volume : 0;
+    if (player.clientState === ClientState.Alive && (player.position.z < 0 || (material & MAT_DEATH) !== 0)) {
+      player.clientState = ClientState.Dead;
+      player.move = player.strafe = 0;
     }
   }
 }
