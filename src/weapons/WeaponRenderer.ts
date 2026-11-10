@@ -135,17 +135,15 @@ export class WeaponRenderer {
         [source.positions[index], source.positions[index + 1], source.positions[index + 2]];
       // drawhudmodel uses yaw + 90. In camera space this maps Sauer (x, y, z) to
       // (right, up, forward) = (-y, z, x). Keep mdltrans inside mdlscale, as the native model matrix does.
-      positions[index] = -(attached[2] + translate[1]) * scale * fovCompensation;
+      positions[index] = (attached[2] + translate[1]) * scale * fovCompensation;
       positions[index + 1] = (attached[1] + translate[2]) * scale * fovCompensation;
       // Babylon's right-handed camera looks down local -Z, matching Sauerbraten/OpenGL camera-space -Z.
       positions[index + 2] = -(attached[0] + translate[0]) * scale;
     }
     data.positions = positions;
     data.uvs = source.uvs;
+    // The horizontal HUD mirror adds a second reflection, restoring the MD5 source winding.
     const indices = source.indices.slice();
-    for (let index = 0; index < indices.length; index += 3) {
-      [indices[index + 1], indices[index + 2]] = [indices[index + 2], indices[index + 1]];
-    }
     data.indices = indices;
     const normals: number[] = [];
     VertexData.ComputeNormals(positions, indices, normals);
