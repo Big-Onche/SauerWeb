@@ -9,8 +9,11 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
+import type { Particle } from "@babylonjs/core/Particles/particle";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
 import type { Scene } from "@babylonjs/core/scene";
+import "@babylonjs/core/Shaders/particles.fragment";
+import "@babylonjs/core/Shaders/particles.vertex";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import type { RegisteredMapEntity, Vec3 } from "../map/types";
 import { Gun } from "../weapons/WeaponDefinitions";
@@ -41,16 +44,31 @@ interface ParticleOptions {
   texture: ParticleTexture;
   color: number;
   size: number;
-  life: number;
+  fadeMinMs: number;
+  fadeMaxMs: number;
   rate?: number;
   count?: number;
   radius?: number;
   direction?: Vector3;
   spread?: number;
   speed?: number;
+  velocityRadius?: number;
+  velocityBox?: number;
   gravity?: number;
   additive?: boolean;
+  startPosition?: () => Vector3;
+  fadeAtIndex?: (index: number) => number;
 }
+
+interface SauerParticleState {
+  origin: Vector3;
+  velocity: Vector3;
+  gravity: number;
+  fadeMs: number;
+  ageMs: number;
+}
+
+const SAUER_EMIT_MILLIS = 17;
 
 /** Babylon presentation of Sauerbraten's renderparticles.cpp particle recipes. */
 export class ParticleRenderer {
@@ -92,13 +110,13 @@ export class ParticleRenderer {
         break;
       }
       case 1:
-        this.directionalEmitter(position, value1, "steam.png", 0x897661, 2.4, 8, 0.6, -20);
+        this.directionalEmitter(position, value1, "steam.png", 0x897661, 2.4, 1, 200, 50, -20);
         break;
       case 2:
-        this.directionalEmitter(position, value1, "base.png", value2 > 0 ? sauerParticleColor(value2) : 0x406080, 0.6, 35, 0.6, 2);
+        this.directionalEmitter(position, value1, "base.png", value2 > 0 ? sauerParticleColor(value2) : 0x406080, 0.6, 4, 200, 150, 2);
         break;
       case 3:
-        this.persistentSprite(position, "explosion.png", sauerParticleColor(value2), Math.max(1, 1 + value1) * 2, true);
+        this.persistentSprite(position, "explosion.png", sauerParticleColor(value2), Math.max(1, 5 + value1) * 2, true);
         break;
       case 4:
       case 7:
@@ -131,9 +149,16 @@ export class ParticleRenderer {
       type === 10 ? "base.png" : "snow.png";
     const color = sauerParticleColor(colorAttribute);
     const size = type === 4 ? 0.28 : type === 7 ? 1 : type === 13 ? 0.5 : type === 9 ? 2.4 : 0.6;
-    if (direction < 256 && (type === 4 || type === 7)) {
+    if (direction < 256) {
       const target = sauerParticleOffset(position, direction, Math.max(1 + length, 0));
-      this.beam(position, target, texture, color, size, Number.POSITIVE_INFINITY);
+      if (type === 4 || type === 7) this.beam(position, target, texture, color, size, Number.POSITIVE_INFINITY);
+      else if (type === 10) {
+        const trailEnd = { ...target, z: target.z - 0.5 };
+        trailEnd.x = position.x - trailEnd.x / 75;
+        trailEnd.y = position.y - trailEnd.y / 75;
+        trailEnd.z = position.z - trailEnd.z / 75;
+        this.beam(position, trailEnd, texture, color, size, Number.POSITIVE_INFINITY);
+      } else this.persistentSprite(position, texture, color, sauerParticleDiameter(size), true);
       return;
     }
     const radius = Math.max(1 + length, 1);
@@ -145,20 +170,19 @@ export class ParticleRenderer {
       }
       return;
     }
-    const destination = direction < 256 ? sauerParticleOffset(position, direction, Math.max(1 + length, 0)) : position;
-    this.particleSystem(`map-particles-${type}`, destination, {
-      texture, color, size, life: Math.max(0.05, (fade > 0 ? Math.min(fade, 10_000) : 200) / 1000), rate: type === 13 ? 12 : 8,
+    this.particleSystem(`map-particles-${type}`, position, {
+      texture, color, size, fadeMinMs: 1, fadeMaxMs: (fade > 0 ? Math.min(fade, 10_000) : 200) * 3,
+      rate: 5 * 1000 / SAUER_EMIT_MILLIS,
       radius, direction: toBabylonDirection(sauerParticleOffset({ x: 0, y: 0, z: 0 }, directed, 1)), spread: 0.5,
-      speed: type === 13 ? 2 : 20, gravity: type === 13 ? 20 : type === 9 ? -20 : 2,
+      speed: 200, gravity: type === 13 ? 20 : type === 9 ? -20 : 2,
     });
   }
 
-  private directionalEmitter(position: Vec3, direction: number, texture: ParticleTexture, color: number, size: number, rate: number,
-                             life: number, gravity: number): void {
-    const destination = sauerParticleOffset(position, direction, 5);
-    const vector = sauerParticleOffset({ x: 0, y: 0, z: 0 }, direction, 1);
-    this.particleSystem(`map-${texture}`, destination, {
-      texture, color, size, life, rate, radius: 0.5, direction: toBabylonDirection(vector), spread: 0.7, speed: 25, gravity,
+  private directionalEmitter(position: Vec3, direction: number, texture: ParticleTexture, color: number, size: number, count: number,
+                             fadeMs: number, velocityRadius: number, gravity: number): void {
+    this.particleSystem(`map-${texture}`, position, {
+      texture, color, size, fadeMinMs: 1, fadeMaxMs: fadeMs * 3, rate: count * 1000 / SAUER_EMIT_MILLIS, velocityRadius, gravity,
+      startPosition: () => toBabylonPosition(sauerParticleOffset(position, direction, Math.floor(Math.random() * 10))),
     });
   }
 
@@ -167,8 +191,9 @@ export class ParticleRenderer {
     const safeHeight = Math.max(0.01, height);
     this.particleSystem(fire ? "map-flame" : "map-smoke", position, {
       texture: fire ? "flames.png" : "smoke.png", color, size: (fire ? 2 : 4) * Math.min(safeRadius, safeHeight),
-      life: (fire ? 0.6 : 2) * safeHeight, rate: fire ? 30 : 8, radius: safeRadius, direction: new Vector3(0, 1, 0), spread: 0.12,
-      speed: fire ? 200 * Math.min(1, safeHeight) : 100 * Math.min(1, safeHeight), gravity: -20, additive: fire,
+      fadeMinMs: 1, fadeMaxMs: Math.max(1, Math.trunc((fire ? 600 : 2000) * safeHeight)),
+      rate: (fire ? 3 : 1) * 1000 / SAUER_EMIT_MILLIS, radius: safeRadius, direction: new Vector3(0, 1, 0),
+      speed: (fire ? 200 : 100) * Math.min(1, safeHeight), gravity: fire ? -15 : -20, additive: fire,
     });
   }
 
@@ -184,17 +209,17 @@ export class ParticleRenderer {
     const muzzle = this.muzzlePosition(from);
     if (gun === Gun.Shotgun) {
       endpoints.forEach((endpoint) => {
-        this.sparks(endpoint, 20, 0.25);
+        this.sparks(endpoint, 20, 250);
         this.beam(muzzle, endpoint, "flare.jpg", 0xffc864, 0.28, 300);
       });
       this.muzzleFlash(muzzle, "muzzleflash3.jpg", 2.75, 200, 30);
     } else if (gun === Gun.Chaingun || gun === Gun.Pistol) {
-      this.sparks(endpoints[0], 200, 0.25);
+      this.sparks(endpoints[0], 200, 250);
       this.beam(muzzle, endpoints[0], "flare.jpg", 0xffc864, 0.28, 600);
       this.muzzleFlash(muzzle, "muzzleflash1.jpg", gun === Gun.Chaingun ? 2.25 : 1.25, gun === Gun.Chaingun ? 100 : 200,
         gun === Gun.Chaingun ? 30 : 15);
     } else if (gun === Gun.Rifle) {
-      this.sparks(endpoints[0], 200, 0.25);
+      this.sparks(endpoints[0], 200, 250);
       this.trail(muzzle, endpoints[0], "smoke.png", 0x404040, 0.6, 500, 20);
       this.muzzleFlash(muzzle, "muzzleflash3.jpg", 1.25, 150, 25);
     } else if (gun === Gun.Rocket) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 3, 250);
@@ -206,7 +231,8 @@ export class ParticleRenderer {
     const texture = gun === Gun.Iceball ? "ball2.png" : gun === Gun.Slimeball ? "ball3.png" : "ball1.png";
     const color = gun === Gun.Iceball ? 0x80ffff : gun === Gun.Slimeball ? 0x80ff80 : gun === Gun.Grenade ? 0x80ffff : 0xffc8c8;
     const material = this.spriteMaterial(`projectile-${id}`, texture, color, true);
-    const mesh = MeshBuilder.CreatePlane(`weapon-projectile-${id}`, { size: gun === Gun.Rocket ? 2.5 : 4.8 }, this.scene);
+    const nativeSize = gun === Gun.Rocket ? 2.5 : 4.8;
+    const mesh = MeshBuilder.CreatePlane(`weapon-projectile-${id}`, { size: sauerParticleDiameter(nativeSize) }, this.scene);
     mesh.position.copyFrom(toBabylonPosition(position));
     mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
     mesh.isPickable = false;
@@ -218,11 +244,10 @@ export class ParticleRenderer {
   private moveProjectile(id: number, position: Vec3): void {
     const projectile = this.projectiles.get(id);
     if (!projectile) return;
-    const previous = projectile.position;
     projectile.position = { ...position };
     projectile.mesh?.position.copyFrom(toBabylonPosition(position));
     const magic = projectile.gun === Gun.Fireball || projectile.gun === Gun.Iceball || projectile.gun === Gun.Slimeball;
-    this.trail(previous, position, "smoke.png", 0x404040, magic ? 0.6 : 2.4, 300, -20, magic ? 2 : 1);
+    this.splash(position, "smoke.png", 0x404040, magic ? 0.6 : 2.4, 2, 300, magic ? 150 : 50, -20);
   }
 
   private explosion(gun: Gun, position: Vec3, radius: number): void {
@@ -238,11 +263,11 @@ export class ParticleRenderer {
       this.projectiles.delete(id);
     }
     const magic = gun === Gun.Fireball || gun === Gun.Iceball || gun === Gun.Slimeball;
-    this.sparks(position, magic ? 100 : 200, magic ? 0.2 : 0.3);
+    this.sparks(position, magic ? 100 : 200, magic ? 200 : 300);
     if (magic) return;
     const blue = gun === Gun.Grenade;
     const duration = blue ? Math.max(120, (radius - 4) * 15) : Math.max(300, radius * 20);
-    const effect = this.sprite(position, "explosion.png", blue ? 0x80ffff : 0xff8080, 4, duration, true, radius * 2);
+    const effect = this.sprite(position, "explosion.png", blue ? 0x80ffff : 0xff8080, 4, duration, true, radius);
     const light = new PointLight("weapon-explosion-light", toBabylonPosition(position), this.scene);
     light.diffuse = blue ? new Color3(0.25, 1, 1) : new Color3(1, 0.75, 0.5);
     light.intensity = 2;
@@ -250,10 +275,17 @@ export class ParticleRenderer {
     effect.light = light;
   }
 
-  private sparks(position: Vec3, count: number, life: number): void {
-    this.particleSystem("weapon-sparks", position, {
-      texture: "spark.png", color: 0xb49b4b, size: 0.24, life, count, radius: 0.1, direction: new Vector3(0, 1, 0), spread: 1,
-      speed: 45, gravity: 20, additive: true,
+  private sparks(position: Vec3, count: number, fadeMs: number): void {
+    this.splash(position, "spark.png", 0xb49b4b, 0.24, count, fadeMs, 150, 20, true);
+  }
+
+  private splash(position: Vec3, texture: ParticleTexture, color: number, size: number, count: number, fadeMs: number,
+                 velocityRadius: number, gravity: number, additive = false): void {
+    const maximumFade = fadeMs * 3;
+    this.particleSystem(`weapon-${texture}`, position, {
+      texture, color, size, fadeMinMs: 1, fadeMaxMs: maximumFade, count, velocityRadius, gravity, additive,
+      fadeAtIndex: (index) => count < 10 ? 1 + Math.floor(Math.random() * maximumFade) :
+        Math.trunc(maximumFade - index * (maximumFade - 1) / (count - 1)),
     });
   }
 
@@ -261,31 +293,35 @@ export class ParticleRenderer {
                 maximumCount = 500): void {
     const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
     const count = Math.min(maximumCount, Math.max(1, Math.floor(distance * 2)));
-    const system = this.particleSystem("weapon-trail", from, {
-      texture, color, size, life: fade / 1000, count, direction: Vector3.Zero(), speed: 0, gravity,
-    });
     const start = toBabylonPosition(from), end = toBabylonPosition(to);
-    system.startPositionFunction = (_matrix, target) => Vector3.LerpToRef(start, end, Math.random(), target);
+    let emitted = 0;
+    this.particleSystem("weapon-trail", from, {
+      texture, color, size, fadeMinMs: fade, fadeMaxMs: fade * 2 - 1, count, velocityBox: 5, gravity,
+      startPosition: () => Vector3.Lerp(start, end, Math.min(1, ++emitted / count)),
+    });
   }
 
   private particleSystem(name: string, position: Vec3, options: ParticleOptions): ParticleSystem {
-    const capacity = Math.max(8, options.count ?? Math.ceil((options.rate ?? 10) * options.life * 2));
+    const capacity = Math.max(8, options.count ?? Math.ceil((options.rate ?? 10) * options.fadeMaxMs / 1000 * 1.1));
     const tiled = options.texture === "flames.png" || options.texture === "snow.png";
     const system = new ParticleSystem(name, capacity, this.scene, undefined, tiled);
+    const states = new WeakMap<Particle, SauerParticleState>();
+    let particleIndex = 0;
     system.particleTexture = new Texture(particleUrl(options.texture), this.scene, false, false);
     system.emitter = toBabylonPosition(position);
     system.color1 = particleColor4(options.color, 1);
-    system.color2 = particleColor4(options.color, 0.85);
+    system.color2 = particleColor4(options.color, 1);
     system.colorDead = particleColor4(options.color, 0);
-    system.minSize = options.size * 0.8;
-    system.maxSize = options.size * 1.2;
-    system.minLifeTime = Math.max(0.01, options.life * 0.65);
-    system.maxLifeTime = Math.max(0.02, options.life * 1.35);
-    system.minEmitPower = (options.speed ?? 0) * 0.75;
-    system.maxEmitPower = (options.speed ?? 0) * 1.25;
-    system.gravity = new Vector3(0, -(options.gravity ?? 0), 0);
+    system.minSize = sauerParticleDiameter(options.size);
+    system.maxSize = sauerParticleDiameter(options.size);
+    system.minLifeTime = 1;
+    system.maxLifeTime = 1;
+    system.minEmitPower = 1;
+    system.maxEmitPower = 1;
+    system.gravity = Vector3.Zero();
     system.blendMode = options.additive ? ParticleSystem.BLENDMODE_ADD : ParticleSystem.BLENDMODE_STANDARD;
-    system.updateSpeed = 0.01;
+    // With Babylon's animation ratio, 1/60 makes scaledUpdateSpeed equal elapsed seconds.
+    system.updateSpeed = 1 / 60;
     if (tiled) {
       system.startSpriteCellID = 0;
       system.endSpriteCellID = 3;
@@ -300,6 +336,37 @@ export class ParticleRenderer {
     const high = direction.add(new Vector3(spread, spread, spread));
     system.createBoxEmitter(low, high, new Vector3(-(options.radius ?? 0), 0, -(options.radius ?? 0)),
       new Vector3(options.radius ?? 0, 0, options.radius ?? 0));
+    if (options.startPosition) system.startPositionFunction = (_matrix, target) => target.copyFrom(options.startPosition!());
+    system.startDirectionFunction = (_matrix, target, particle) => {
+      const velocity = this.nativeParticleVelocity(options, low, high);
+      const index = particleIndex++;
+      const fadeMs = options.fadeAtIndex?.(index) ?? randomInteger(options.fadeMinMs, options.fadeMaxMs);
+      states.set(particle, {
+        origin: particle.position.clone(), velocity, gravity: options.gravity ?? 0, fadeMs, ageMs: 0,
+      });
+      target.setAll(0);
+    };
+    system.updateFunction = (particles) => {
+      const elapsedMs = this.scene.getEngine().getDeltaTime();
+      for (let index = particles.length - 1; index >= 0; index--) {
+        const particle = particles[index];
+        const state = states.get(particle);
+        if (!state) continue;
+        state.ageMs += elapsedMs;
+        if (state.ageMs >= state.fadeMs) {
+          states.delete(particle);
+          particles.splice(index, 1);
+          continue;
+        }
+        const particleMillis = state.fadeMs <= 5 ? 1 : Math.min(state.ageMs, state.fadeMs);
+        particle.position.copyFrom(state.origin);
+        if (state.gravity) {
+          particle.position.addInPlace(state.velocity.scale(particleMillis / 5000));
+          particle.position.y -= particleMillis * particleMillis / (2 * 5000 * state.gravity);
+        }
+        particle.color.a = state.fadeMs <= 5 ? 1 : Math.min(1, Math.max(0, 1 - state.ageMs / state.fadeMs) * 4);
+      }
+    };
     if (options.count !== undefined) {
       system.manualEmitCount = options.count;
       system.disposeOnStop = false;
@@ -307,6 +374,17 @@ export class ParticleRenderer {
     system.start();
     this.systems.add(system);
     return system;
+  }
+
+  private nativeParticleVelocity(options: ParticleOptions, low: Vector3, high: Vector3): Vector3 {
+    if (options.velocityRadius !== undefined) return toBabylonDirection(randomSphereVector(options.velocityRadius));
+    if (options.velocityBox !== undefined) {
+      const radius = options.velocityBox;
+      return toBabylonDirection({
+        x: randomInteger(-radius, radius), y: randomInteger(-radius, radius), z: randomInteger(-radius, radius),
+      });
+    }
+    return new Vector3(randomRange(low.x, high.x), randomRange(low.y, high.y), randomRange(low.z, high.z)).scale(options.speed ?? 0);
   }
 
   private muzzlePosition(fallback: Vec3): Vec3 {
@@ -334,10 +412,13 @@ export class ParticleRenderer {
     const mesh = MeshBuilder.CreatePlane(`particle-${texture}`, { size: 1 }, this.scene);
     mesh.position.copyFrom(toBabylonPosition(position));
     mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
-    mesh.scaling.setAll(size);
+    mesh.scaling.setAll(sauerParticleDiameter(size));
     mesh.isPickable = false;
     mesh.material = material;
-    const effect = { mesh, material, started: performance.now(), duration, startScale: size, endScale };
+    const effect = {
+      mesh, material, started: performance.now(), duration, startScale: sauerParticleDiameter(size),
+      endScale: sauerParticleDiameter(endScale),
+    };
     this.effects.push(effect);
     return effect;
   }
@@ -425,7 +506,7 @@ export class ParticleRenderer {
       }
     }
     this.systems.forEach((system) => {
-      if (!system.isStarted() || system.manualEmitCount < 0 || system.getActiveCount() > 0) return;
+      if (!system.isStarted() || system.manualEmitCount !== 0 || system.getActiveCount() > 0) return;
       system.dispose();
       this.systems.delete(system);
     });
@@ -458,6 +539,21 @@ export function sauerParticleOffset(origin: Vec3, direction: number, distance: n
   return result;
 }
 
+/** Native quad vertices extend by size on both sides, while Babylon's particle size is the complete width. */
+export function sauerParticleDiameter(size: number): number {
+  return size * 2;
+}
+
+/** Exact renderparticles.cpp calc() trajectory, with elapsed time in milliseconds. */
+export function sauerParticlePosition(origin: Vec3, velocity: Vec3, gravity: number, elapsedMs: number): Vec3 {
+  if (!gravity) return { ...origin };
+  return {
+    x: origin.x + velocity.x * elapsedMs / 5000,
+    y: origin.y + velocity.y * elapsedMs / 5000,
+    z: origin.z + velocity.z * elapsedMs / 5000 - elapsedMs * elapsedMs / (2 * 5000 * gravity),
+  };
+}
+
 function shapedEndpoint(origin: Vec3, direction: number, radius: number, angle: number): Vec3 {
   const axis = direction % 3;
   const result = { ...origin };
@@ -480,4 +576,22 @@ function particleColor4(color: number, alpha: number): Color4 {
 
 function particleUrl(texture: ParticleTexture): string {
   return packageAssetUrl(`particles/${texture}`) ?? "";
+}
+
+function randomSphereVector(radius: number): Vec3 {
+  let result: Vec3;
+  do {
+    result = {
+      x: randomInteger(-radius, radius - 1), y: randomInteger(-radius, radius - 1), z: randomInteger(-radius, radius - 1),
+    };
+  } while (result.x * result.x + result.y * result.y + result.z * result.z > radius * radius);
+  return result;
+}
+
+function randomInteger(minimum: number, maximum: number): number {
+  return minimum + Math.floor(Math.random() * (maximum - minimum + 1));
+}
+
+function randomRange(minimum: number, maximum: number): number {
+  return minimum + Math.random() * (maximum - minimum);
 }
