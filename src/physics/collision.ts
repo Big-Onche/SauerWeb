@@ -28,8 +28,11 @@ const FACE_VERTICES = [
 /** Physics-only octree queries. No Babylon mesh or picking data enters this class. */
 export class OctreeCollisionWorld {
   private readonly planeCache = new WeakMap<OctreeCube, Plane[]>();
+  private readonly hiddenFaces: WeakMap<OctreeCube, number>;
 
-  constructor(private readonly map: SauerMap) {}
+  constructor(private readonly map: SauerMap) {
+    this.hiddenFaces = findCoincidentFaces(map.world);
+  }
 
   private mapModels: MapModelCollision[] = [];
 
@@ -119,7 +122,7 @@ export class OctreeCollisionWorld {
     const cached = this.planeCache.get(cube);
     if (cached) return cached;
     if (cube.kind === "solid") {
-      const planes = axisPlanes(cube);
+      const planes = axisPlanes(cube, this.hiddenFaces.get(cube) ?? 0);
       this.planeCache.set(cube, planes);
       return planes;
     }
@@ -127,9 +130,20 @@ export class OctreeCollisionWorld {
     const center = vertices.reduce((sum, vertex) => ({ x: sum.x + vertex.x / 8, y: sum.y + vertex.y / 8, z: sum.z + vertex.z / 8 }),
       { x: 0, y: 0, z: 0 });
     const planes: Plane[] = [];
-    FACE_VERTICES.forEach((face) => {
-      addTrianglePlane(planes, vertices[face[0]], vertices[face[1]], vertices[face[2]], center);
-      addTrianglePlane(planes, vertices[face[0]], vertices[face[2]], vertices[face[3]], center);
+    const hidden = this.hiddenFaces.get(cube) ?? 0;
+    FACE_VERTICES.forEach((face, orientation) => {
+      if (hidden & (1 << orientation)) return;
+      const corners = face.map((index) => vertices[index]);
+      const convexity = faceConvexity(corners);
+      const order = convexity < 0 ? 1 : 0;
+      const first = corners[order];
+      const second = corners[order + 1];
+      const third = corners[order + 2];
+      const fourth = corners[(order + 3) & 3];
+      const firstAdded = addTrianglePlane(planes, first, second, third, center);
+      if ((!firstAdded || convexity !== 0) && !samePosition(first, fourth) && !samePosition(third, fourth)) {
+        addTrianglePlane(planes, first, third, fourth, center);
+      }
     });
     this.planeCache.set(cube, planes);
     return planes;
@@ -196,11 +210,12 @@ function collideMapModel(entity: PhysicsEntity, direction: Vec3, model: MapModel
   return { normal, distance: penetration };
 }
 
-function axisPlanes(cube: OctreeCube): Plane[] {
+function axisPlanes(cube: OctreeCube, hidden = 0): Plane[] {
   const { x, y, z } = cube.origin;
   const size = cube.size;
-  return [plane(-1, 0, 0, x), plane(1, 0, 0, -(x + size)), plane(0, -1, 0, y), plane(0, 1, 0, -(y + size)),
+  const planes = [plane(-1, 0, 0, x), plane(1, 0, 0, -(x + size)), plane(0, -1, 0, y), plane(0, 1, 0, -(y + size)),
     plane(0, 0, -1, z), plane(0, 0, 1, -(z + size))];
+  return planes.filter((_, orientation) => !(hidden & (1 << orientation)));
 }
 
 function capsuleSupport(entity: PhysicsEntity, direction: Vec3): Vec3 {
@@ -236,10 +251,10 @@ function cubeVertices(cube: OctreeCube): Vec3[] {
   return result;
 }
 
-function addTrianglePlane(planes: Plane[], first: Vec3, second: Vec3, third: Vec3, center: Vec3): void {
+function addTrianglePlane(planes: Plane[], first: Vec3, second: Vec3, third: Vec3, center: Vec3): boolean {
   const ab = subtract(second, first), ac = subtract(third, first);
   const normal = { x: ab.y * ac.z - ab.z * ac.y, y: ab.z * ac.x - ab.x * ac.z, z: ab.x * ac.y - ab.y * ac.x };
-  if (magnitude(normal) < 1e-8) return;
+  if (magnitude(normal) < 1e-8) return false;
   normalize(normal);
   let offset = -dot(normal, first);
   if (dot(normal, center) + offset > 0) {
@@ -248,6 +263,52 @@ function addTrianglePlane(planes: Plane[], first: Vec3, second: Vec3, third: Vec
   if (!planes.some((candidate) => Math.abs(dot(candidate, normal) - 1) < 1e-5 && Math.abs(candidate.offset - offset) < 1e-4)) {
     planes.push({ ...normal, offset });
   }
+  return true;
+}
+
+function faceConvexity(vertices: Vec3[]): number {
+  const first = subtract(vertices[1], vertices[0]);
+  const second = subtract(vertices[2], vertices[0]);
+  const normal = {
+    x: first.y * second.z - first.z * second.y,
+    y: first.z * second.x - first.x * second.z,
+    z: first.x * second.y - first.y * second.x,
+  };
+  return dot(subtract(vertices[0], vertices[3]), normal);
+}
+
+function findCoincidentFaces(cubes: OctreeCube[]): WeakMap<OctreeCube, number> {
+  const faces = new Map<string, Array<{ cube: OctreeCube; orientation: number }>>();
+  visitLeaves(cubes, (cube) => {
+    const vertices = cubeVertices(cube);
+    FACE_VERTICES.forEach((face, orientation) => {
+      const key = face.map((index) => positionKey(vertices[index])).sort().join("|");
+      const entries = faces.get(key) ?? [];
+      entries.push({ cube, orientation });
+      faces.set(key, entries);
+    });
+  });
+  const hidden = new WeakMap<OctreeCube, number>();
+  faces.forEach((entries) => entries.forEach((entry) => {
+    if (!entries.some((candidate) => candidate !== entry && candidate.orientation === (entry.orientation ^ 1))) return;
+    hidden.set(entry.cube, (hidden.get(entry.cube) ?? 0) | (1 << entry.orientation));
+  }));
+  return hidden;
+}
+
+function visitLeaves(cubes: OctreeCube[], callback: (cube: OctreeCube) => void): void {
+  cubes.forEach((cube) => {
+    if (cube.children) visitLeaves(cube.children, callback);
+    else if (cube.kind !== "empty") callback(cube);
+  });
+}
+
+function positionKey(position: Vec3): string {
+  return `${position.x},${position.y},${position.z}`;
+}
+
+function samePosition(first: Vec3, second: Vec3): boolean {
+  return first.x === second.x && first.y === second.y && first.z === second.z;
 }
 
 function overlapsCube(cube: OctreeCube, minimum: Vec3, maximum: Vec3): boolean {

@@ -102,6 +102,21 @@ describe("advanced ground movement", () => {
     expect(player.position.z).toBeLessThanOrEqual(30 + 4.1);
     expect(player.position.x).toBeLessThan(16);
   });
+
+  it("keeps collision support across the four concave leaves at the reported flagstone seam", () => {
+    const world = new OctreeCollisionWorld(mapWith(
+      normal({ x: 0, y: 0, z: 0 }, [0, 48, 0, 64]),
+      normal({ x: 64, y: 0, z: 0 }, [48, 48, 64, 80]),
+      normal({ x: 0, y: 64, z: 0 }, [0, 64, 32, 64]),
+      normal({ x: 64, y: 64, z: 0 }, [64, 80, 64, 96]),
+    ));
+    const player = createPlayer({ x: 59.883, y: 68.101, z: 44.5 });
+    const collision = world.collide(player, { x: 0, y: 0, z: -1 }, 0.867);
+    expect(collision).toBeDefined();
+    expect(collision!.normal.x).toBeCloseTo(-0.242535625, 6);
+    expect(collision!.normal.y).toBeCloseTo(0, 6);
+    expect(collision!.normal.z).toBeCloseTo(0.9701425, 6);
+  });
 });
 
 function solid(origin: Vec3, size: number): OctreeCube {
@@ -110,6 +125,21 @@ function solid(origin: Vec3, size: number): OctreeCube {
     size,
     kind: "solid",
     edges: new Uint8Array(12).fill(0x80),
+    textures: [0, 0, 0, 0, 0, 0],
+    material: 0,
+    merged: 0,
+    surfaces: [],
+  };
+}
+
+function normal(origin: Vec3, topEdges: [number, number, number, number]): OctreeCube {
+  const edges = new Uint8Array(12).fill(0x80);
+  edges.set(topEdges, 8);
+  return {
+    origin,
+    size: 64,
+    kind: "normal",
+    edges,
     textures: [0, 0, 0, 0, 0, 0],
     material: 0,
     merged: 0,
