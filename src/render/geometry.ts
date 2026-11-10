@@ -33,6 +33,7 @@ const FACE_NORMALS: Vec3[] = [
 
 const LIGHTMAP_SIZE = 512;
 const LIGHTMAP_COORDINATE_SCALE = 65536;
+const DEFAULT_SKY = 0;
 const LAYER_TOP = 1 << 5;
 const LAYER_BOTTOM = 1 << 6;
 const LAYER_DUPLICATED = 1 << 7;
@@ -56,6 +57,10 @@ function appendCube(map: SauerMap, cube: OctreeCube, rootIndex: number, textures
                     coincidentMask: number, emittedTriangles: Set<string>): void {
   for (let orientation = 0; orientation < 6; orientation++) {
     if (coincidentMask & (1 << orientation)) continue;
+    // Slot 0 is Sauerbraten's DEFAULT_SKY portal, not an ordinary world material.
+    // Its face limits skybox rendering in the native renderer; our enclosing skybox is
+    // already available behind world geometry, so omitting the face exposes it directly.
+    if (cube.textures[orientation] === DEFAULT_SKY) continue;
     const surface = cube.surfaces[orientation];
     const layerCount = surface ? surface.vertexCount & 0x0f : 4;
     const merged = (cube.merged & (1 << orientation)) !== 0;

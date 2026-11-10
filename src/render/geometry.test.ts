@@ -19,6 +19,15 @@ describe("generateGeometry", () => {
     expect(totalFaces(batches)).toBe(5);
   });
 
+  it("treats texture slot zero as a sky portal", () => {
+    const cube = solidCube(0, 0, 0, 2);
+    cube.textures[5] = 0;
+    const batches = generateGeometry(mapWith([cube], 2));
+
+    expect(totalFaces(batches)).toBe(5);
+    expect(batches.some((batch) => batch.textureIndex === 0)).toBe(false);
+  });
+
   it("does not hide a whole face behind a smaller neighboring leaf", () => {
     const large = solidCube(0, 0, 0, 2);
     const partialNeighbor = solidCube(2, 1, 1, 1);
@@ -71,7 +80,7 @@ function solidCube(x: number, y: number, z: number, size: number): OctreeCube {
     size,
     kind: "solid",
     edges: new Uint8Array(12).fill(0x80),
-    textures: [0, 0, 0, 0, 0, 0],
+    textures: [1, 1, 1, 1, 1, 1],
     material: 0,
     merged: 0,
     surfaces: new Array(6),
