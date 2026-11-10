@@ -355,18 +355,29 @@ export class SauerMapParser {
     const plane = faceCorners(orientation).map((corner) => this.encodedCorner(cube, corner));
     const first = [plane[1].x - plane[0].x, plane[1].y - plane[0].y, plane[1].z - plane[0].z];
     const second = [plane[2].x - plane[0].x, plane[2].y - plane[0].y, plane[2].z - plane[0].z];
-    const normal = [
+    let normal = [
       first[1] * second[2] - first[2] * second[1],
       first[2] * second[0] - first[0] * second[2],
       first[0] * second[1] - first[1] * second[0],
     ];
+    // Match worldio.cpp: a deformed face can have a collapsed leading triangle while its
+    // other triangle still defines a plane. This fallback is common in terrain and arches.
+    if (normal[0] === 0 && normal[1] === 0 && normal[2] === 0) {
+      const third = [plane[3].x - plane[0].x, plane[3].y - plane[0].y, plane[3].z - plane[0].z];
+      normal = [
+        second[1] * third[2] - second[2] * third[1],
+        second[2] * third[0] - second[0] * third[2],
+        second[0] * third[1] - second[1] * third[0],
+      ];
+    }
     const bias = -(normal[0] * plane[0].x + normal[1] * plane[0].y + normal[2] * plane[0].z);
     const coordinates = [vertex.x, vertex.y, vertex.z];
     coordinates[columnDimension] = column;
     coordinates[rowDimension] = row;
     if (normal[dimension] !== 0) {
-      coordinates[dimension] = -(bias + normal[columnDimension] * column + normal[rowDimension] * row) / normal[dimension];
-    }
+      // C++ integer division truncates toward zero when rebuilding vertinfo coordinates.
+      coordinates[dimension] = Math.trunc(-(bias + normal[columnDimension] * column + normal[rowDimension] * row) / normal[dimension]);
+    } else coordinates[dimension] = ([cube.origin.x, cube.origin.y, cube.origin.z][dimension] & 0x0fff) << 3;
     [vertex.x, vertex.y, vertex.z] = coordinates;
   }
 
