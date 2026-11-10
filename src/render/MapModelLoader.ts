@@ -306,8 +306,7 @@ function parseMd5AnimationFrame(source: string, adjustments: HudGunAdjustment[])
     let position = localPosition;
     let orientation = md5Quaternion(localOrientation);
     if (adjustment) {
-      position = [position[0] + adjustment.translate[0], position[1] + adjustment.translate[1], position[2] + adjustment.translate[2]];
-      orientation = applyMd5Adjustment(orientation, adjustment);
+      ({ position, orientation } = applyMd5Adjustment(position, orientation, adjustment));
     }
     if (entry.parent >= 0) {
       const parent = joints[entry.parent];
@@ -320,12 +319,48 @@ function parseMd5AnimationFrame(source: string, adjustments: HudGunAdjustment[])
   return joints;
 }
 
-function applyMd5Adjustment(orientation: [number, number, number, number], adjustment: HudGunAdjustment): [number, number, number, number] {
-  let result = orientation;
-  if (adjustment.yaw) result = multiplyMd5Quaternions(axisAngleMd5Quaternion([0, 0, 1], adjustment.yaw), result);
-  if (adjustment.pitch) result = multiplyMd5Quaternions(axisAngleMd5Quaternion([0, -1, 0], adjustment.pitch), result);
-  if (adjustment.roll) result = multiplyMd5Quaternions(axisAngleMd5Quaternion([-1, 0, 0], adjustment.roll), result);
-  return result;
+function applyMd5Adjustment(position: [number, number, number], orientation: [number, number, number, number],
+                            adjustment: HudGunAdjustment): { position: [number, number, number]; orientation: [number, number, number, number] } {
+  let dual = positionQuaternionMd5(position, orientation);
+  let real = orientation;
+  for (const [axis, degrees] of [
+    [[0, 0, 1] as [number, number, number], adjustment.yaw],
+    [[0, -1, 0] as [number, number, number], adjustment.pitch],
+    [[-1, 0, 0] as [number, number, number], adjustment.roll],
+  ] as const) {
+    if (!degrees) continue;
+    const rotation = axisAngleMd5Quaternion(axis, degrees);
+    real = multiplyMd5Quaternions(rotation, real);
+    dual = multiplyMd5Quaternions(invertMd5Quaternion(rotation), dual);
+  }
+  const [x, y, z] = adjustment.translate;
+  dual[0] += 0.5 * (x * real[3] + y * real[2] - z * real[1]);
+  dual[1] += 0.5 * (-x * real[2] + y * real[3] + z * real[0]);
+  dual[2] += 0.5 * (x * real[1] - y * real[0] + z * real[3]);
+  dual[3] += -0.5 * (x * real[0] + y * real[1] + z * real[2]);
+  return { position: dualQuaternionTranslationMd5(real, dual), orientation: real };
+}
+
+function positionQuaternionMd5(position: [number, number, number], orientation: [number, number, number, number]): [number, number, number, number] {
+  const [x, y, z] = position;
+  return [
+    0.5 * (x * orientation[3] + y * orientation[2] - z * orientation[1]),
+    0.5 * (-x * orientation[2] + y * orientation[3] + z * orientation[0]),
+    0.5 * (x * orientation[1] - y * orientation[0] + z * orientation[3]),
+    -0.5 * (x * orientation[0] + y * orientation[1] + z * orientation[2]),
+  ];
+}
+
+function dualQuaternionTranslationMd5(real: [number, number, number, number], dual: [number, number, number, number]): [number, number, number] {
+  return [
+    2 * (real[1] * dual[2] - real[2] * dual[1] + dual[0] * real[3] - real[0] * dual[3]),
+    2 * (real[2] * dual[0] - real[0] * dual[2] + dual[1] * real[3] - real[1] * dual[3]),
+    2 * (real[0] * dual[1] - real[1] * dual[0] + dual[2] * real[3] - real[2] * dual[3]),
+  ];
+}
+
+function invertMd5Quaternion(quaternion: [number, number, number, number]): [number, number, number, number] {
+  return [-quaternion[0], -quaternion[1], -quaternion[2], quaternion[3]];
 }
 
 function axisAngleMd5Quaternion(axis: [number, number, number], degrees: number): [number, number, number, number] {

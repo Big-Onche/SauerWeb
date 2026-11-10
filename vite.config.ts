@@ -450,7 +450,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
       });
     } else if (command === "mdlscale") {
       const scale = numberArg(args[0], 100) > 0 ? numberArg(args[0], 100) / 100 : 1;
-      settings.scale = scale / (format === "MD5" ? 1 : 4);
+      settings.scale = scale / 4;
     }
     else if (command === `${format.toLowerCase()}cullface` && args[0]) {
       meshSettings.push({ mesh: args[0], cullFace: numberArg(args[1], 1) !== 0 });

@@ -160,7 +160,7 @@ export class WeaponRenderer {
   private createHudMaterial(asset: MapModelAsset, skin: MapModelSkin | undefined, key: string): StandardMaterial {
     const material = new StandardMaterial(`hudgun-material-${key}`, this.scene);
     material.backFaceCulling = asset.cullFace ?? true;
-    material.disableDepthWrite = true;
+    material.disableDepthWrite = false;
     material.specularColor = Color3.White().scale(asset.specular ?? 1);
     material.ambientColor = Color3.White().scale(asset.ambient ?? 0.3);
     const diffuseUrl = packageAssetUrl(skin?.diffusePath);
