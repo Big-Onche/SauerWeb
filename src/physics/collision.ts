@@ -8,6 +8,12 @@ export interface CollisionResult {
   distance: number;
 }
 
+export interface RaycastResult {
+  position: Vec3;
+  normal: Vec3;
+  distance: number;
+}
+
 export interface MapModelCollision {
   entityIndex: number;
   origin: Vec3;
@@ -54,6 +60,27 @@ export class OctreeCollisionWorld {
       return cube.material;
     }
     return 0;
+  }
+
+  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0): RaycastResult | undefined {
+    let best: RaycastResult | undefined;
+    const visit = (cube: OctreeCube): void => {
+      if (!rayIntersectsBounds(origin, direction, cube.origin, cube.size, best?.distance ?? maximumDistance, radius)) return;
+      if (cube.children) {
+        cube.children.forEach(visit);
+        return;
+      }
+      const clip = cube.material & MATF_CLIP;
+      if (clip === MAT_NOCLIP || cube.kind === "empty") return;
+      const result = rayIntersectsPlanes(origin, direction, this.planes(cube), best?.distance ?? maximumDistance, radius);
+      if (result) best = result;
+    };
+    this.map.world.forEach(visit);
+    for (const model of this.mapModels) {
+      const result = rayIntersectsMapModel(origin, direction, model, best?.distance ?? maximumDistance, radius);
+      if (result) best = result;
+    }
+    return best;
   }
 
   collide(entity: PhysicsEntity, direction: Vec3, cutoff = 0): CollisionResult | undefined {
@@ -148,6 +175,75 @@ export class OctreeCollisionWorld {
     this.planeCache.set(cube, planes);
     return planes;
   }
+}
+
+function rayIntersectsPlanes(origin: Vec3, direction: Vec3, planes: Plane[], maximumDistance: number,
+                             radius = 0): RaycastResult | undefined {
+  let entering = 0, leaving = maximumDistance;
+  let normal = { x: -direction.x, y: -direction.y, z: -direction.z };
+  for (const candidate of planes) {
+    const offset = dot(candidate, origin) + candidate.offset - radius;
+    const slope = dot(candidate, direction);
+    if (Math.abs(slope) < 1e-9) {
+      if (offset > 0) return undefined;
+      continue;
+    }
+    const distance = -offset / slope;
+    if (slope < 0) {
+      if (distance > entering) {
+        entering = distance;
+        normal = { x: candidate.x, y: candidate.y, z: candidate.z };
+      }
+    } else leaving = Math.min(leaving, distance);
+    if (entering > leaving) return undefined;
+  }
+  if (entering < 0 || entering > maximumDistance) return undefined;
+  return { distance: entering, normal, position: {
+    x: origin.x + direction.x * entering, y: origin.y + direction.y * entering, z: origin.z + direction.z * entering,
+  } };
+}
+
+function rayIntersectsBounds(origin: Vec3, direction: Vec3, minimum: Vec3, size: number, maximumDistance: number, radius: number): boolean {
+  let entering = 0, leaving = maximumDistance;
+  for (const axis of ["x", "y", "z"] as const) {
+    if (Math.abs(direction[axis]) < 1e-9) {
+      if (origin[axis] < minimum[axis] - radius || origin[axis] > minimum[axis] + size + radius) return false;
+      continue;
+    }
+    let first = (minimum[axis] - radius - origin[axis]) / direction[axis];
+    let second = (minimum[axis] + size + radius - origin[axis]) / direction[axis];
+    if (first > second) [first, second] = [second, first];
+    entering = Math.max(entering, first);
+    leaving = Math.min(leaving, second);
+    if (entering > leaving) return false;
+  }
+  return leaving >= 0;
+}
+
+function rayIntersectsMapModel(origin: Vec3, direction: Vec3, model: MapModelCollision,
+                               maximumDistance: number, radius: number): RaycastResult | undefined {
+  const yaw = model.yaw * Math.PI / 180;
+  const cosine = Math.cos(yaw), sine = Math.sin(yaw);
+  const relative = { x: origin.x - model.origin.x, y: origin.y - model.origin.y, z: origin.z - model.origin.z };
+  const localOrigin = {
+    x: relative.x * cosine + relative.y * sine - model.center.x,
+    y: -relative.x * sine + relative.y * cosine - model.center.y,
+    z: relative.z - model.center.z,
+  };
+  const localDirection = {
+    x: direction.x * cosine + direction.y * sine,
+    y: -direction.x * sine + direction.y * cosine,
+    z: direction.z,
+  };
+  const planes = [plane(-1, 0, 0, -model.radius.x), plane(1, 0, 0, -model.radius.x),
+    plane(0, -1, 0, -model.radius.y), plane(0, 1, 0, -model.radius.y),
+    plane(0, 0, -1, -model.radius.z), plane(0, 0, 1, -model.radius.z)];
+  const hit = rayIntersectsPlanes(localOrigin, localDirection, planes, maximumDistance, radius);
+  if (!hit) return undefined;
+  const normal = { x: hit.normal.x * cosine - hit.normal.y * sine, y: hit.normal.x * sine + hit.normal.y * cosine, z: hit.normal.z };
+  return { distance: hit.distance, normal, position: {
+    x: origin.x + direction.x * hit.distance, y: origin.y + direction.y * hit.distance, z: origin.z + direction.z * hit.distance,
+  } };
 }
 
 function collideMapModel(entity: PhysicsEntity, direction: Vec3, model: MapModelCollision): CollisionResult | undefined {

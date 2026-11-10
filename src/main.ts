@@ -310,7 +310,7 @@ function toggleCameraMode(): void {
   physicsPause.hidden = !playerMode;
   physicsReset.hidden = !playerMode;
   controls.innerHTML = playerMode
-    ? `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span><i></i><kbd>R</kbd><span>Reset</span><i></i><kbd>F2</kbd><span>Free camera</span>`
+    ? `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span><i></i><span>Mouse 1 fire · wheel/1–7 weapons</span><i></i><kbd>F2</kbd><span>Free camera</span>`
     : `<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Fly</span><i></i><kbd>F2</kbd><span>Player physics</span>`;
 }
 

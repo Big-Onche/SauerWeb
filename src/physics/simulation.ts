@@ -1,7 +1,7 @@
 import type { SauerMap, Vec3 } from "../map/types";
 import { FLOOR_Z, GRAVITY, JUMP_VELOCITY, SLOPE_Z } from "./constants";
 import { OctreeCollisionWorld } from "./collision";
-import type { MapModelCollision } from "./collision";
+import type { MapModelCollision, RaycastResult } from "./collision";
 import { MAT_DEATH, MATF_VOLUME, MAT_LAVA, MAT_WATER } from "../map/materials";
 import { GroundMover } from "./ground";
 import type { PhysicsInputState } from "./input";
@@ -41,6 +41,10 @@ export class PhysicsSimulation {
     this.collisionWorld?.setMapModels(mapModels);
   }
 
+  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0): RaycastResult | undefined {
+    return this.collisionWorld?.raycast(origin, direction, maximumDistance, radius);
+  }
+
   spawn(position: Vec3, yaw = 0, nowMilliseconds = performance.now()): void {
     this.spawnPosition = copyVec3(position);
     this.spawnYaw = yaw;
@@ -60,6 +64,7 @@ export class PhysicsSimulation {
   }
 
   update(nowMilliseconds: number, input: PhysicsInputState): Vec3 {
+    if (!this.player.alive) this.player.clientState = ClientState.Dead;
     this.applyInput(input);
     if (this.paused) return this.renderPosition;
     this.lastSchedule = this.scheduler.schedule(nowMilliseconds, this.timeScale);
@@ -73,6 +78,11 @@ export class PhysicsSimulation {
   }
 
   private applyInput(input: PhysicsInputState): void {
+    if (!this.player.alive) {
+      this.player.move = this.player.strafe = 0;
+      this.player.jumping = false;
+      return;
+    }
     this.player.move = movementAxis(input.forward, input.backward);
     // Native commands map left to +1 and right to -1 (physics.cpp:2017-2018).
     this.player.strafe = movementAxis(input.left, input.right);

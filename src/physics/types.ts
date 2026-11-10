@@ -42,6 +42,7 @@ export enum PhysicsEntityType {
 }
 
 export interface PhysicsEntity {
+  readonly id: string;
   /** Authoritative Sauerbraten eye-origin position. */
   position: Vec3;
   previousPosition: Vec3;
@@ -68,10 +69,17 @@ export interface PhysicsEntity {
   collisionType: CollisionType;
   entityType: PhysicsEntityType;
   blocked: boolean;
+  weight: number;
+  health: number;
+  maxHealth: number;
+  armour: number;
+  armourType: number;
+  alive: boolean;
 }
 
 export function createPlayer(position: Vec3 = vec3()): PhysicsEntity {
   return {
+    id: "player",
     position: copyVec3(position),
     previousPosition: copyVec3(position),
     velocity: vec3(),
@@ -97,6 +105,12 @@ export function createPlayer(position: Vec3 = vec3()): PhysicsEntity {
     collisionType: CollisionType.Ellipse,
     entityType: PhysicsEntityType.Player,
     blocked: false,
+    weight: 100,
+    health: 100,
+    maxHealth: 100,
+    armour: 25,
+    armourType: 0,
+    alive: true,
   };
 }
 
@@ -117,4 +131,8 @@ export function resetPlayer(entity: PhysicsEntity, position: Vec3, yaw = 0): voi
   entity.physicsState = PhysicsState.Fall;
   entity.clientState = ClientState.Alive;
   entity.blocked = false;
+  entity.health = entity.maxHealth = 100;
+  entity.armour = 25;
+  entity.armourType = 0;
+  entity.alive = true;
 }

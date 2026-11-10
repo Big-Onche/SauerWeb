@@ -28,6 +28,11 @@ import { loadMapModels } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { BrowserPhysicsInput } from "../physics/input";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../physics/simulation";
+import { WeaponSystem } from "../weapons/WeaponSystem";
+import { BrowserWeaponInput } from "../weapons/WeaponInput";
+import { WeaponHUD } from "../weapons/WeaponHUD";
+import { WeaponRenderer } from "../weapons/WeaponRenderer";
+import { WeaponAudio } from "../weapons/WeaponAudio";
 
 export type CameraMode = "free" | "player";
 
@@ -54,6 +59,10 @@ export class MapScene {
   private readonly playerCamera: UniversalCamera;
   private readonly physics = new PhysicsSimulation();
   private readonly physicsInput: BrowserPhysicsInput;
+  private readonly weapons: WeaponSystem;
+  private readonly weaponInput: BrowserWeaponInput;
+  private readonly weaponHUD: WeaponHUD;
+  private readonly weaponRenderer: WeaponRenderer;
   private cameraMode: CameraMode = "free";
   private materialCache: MaterialCache;
   private fallbackMaterial?: StandardMaterial;
@@ -91,6 +100,15 @@ export class MapScene {
     this.createViewportTuningPostProcess(this.playerCamera);
     this.scene.activeCamera = this.freeCamera;
     this.physicsInput = new BrowserPhysicsInput(canvas);
+    this.weapons = new WeaponSystem({ raycast: (origin, direction, distance, radius) => this.physics.raycast(origin, direction, distance, radius) },
+      this.physics.player);
+    this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
+    const viewport = canvas.parentElement;
+    if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
+    this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
+    this.weaponHUD.setVisible(false);
+    this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events);
+    new WeaponAudio(this.weapons.events);
 
     this.engine.runRenderLoop(() => {
       this.updatePhysics(performance.now());
@@ -121,6 +139,8 @@ export class MapScene {
     this.skyboxObjectUrls.forEach((url) => URL.revokeObjectURL(url));
     this.skyboxObjectUrls = [];
     this.scene.onBeforeRenderObservable.clear();
+    this.weaponRenderer.clear();
+    this.weapons.projectiles.clear();
     this.physics.setMap(map);
     const batches = generateGeometry(map, textures);
     const materialBatches = generateMaterialGeometry(map);
@@ -208,9 +228,12 @@ export class MapScene {
     this.cameraMode = mode;
     const playerMode = mode === "player";
     this.physicsInput.enabled = playerMode;
+    this.weaponInput.enabled = playerMode;
+    this.weaponHUD.setVisible(playerMode);
     if (playerMode) {
       this.freeCamera.detachControl();
       this.physics.reset(performance.now());
+      this.weapons.resetClock(performance.now());
       this.scene.activeCamera = this.playerCamera;
       this.updatePlayerCamera(this.physics.player.position);
     } else {
@@ -228,6 +251,9 @@ export class MapScene {
 
   resetPlayer(): void {
     this.physics.reset();
+    this.weapons.controller.respawn(performance.now());
+    this.weapons.projectiles.clear();
+    this.weaponHUD.render();
     this.updatePlayerCamera(this.physics.player.position);
   }
 
@@ -415,6 +441,8 @@ export class MapScene {
     const spawn = playerStart ? { ...playerStart.position, z: playerStart.position.z + 14 } : fallback;
     const spawnYaw = playerStart?.attributes[0] ?? 0;
     this.physics.spawn(spawn, spawnYaw);
+    this.weapons.controller.respawn(performance.now());
+    this.weaponHUD.render();
     this.freeCamera.position.copyFrom(toBabylonPosition(spawn));
     const target = this.geometryCenter(batches);
     const fallbackDirection = playerStart ? toBabylonYawDirection(spawnYaw) : new Vector3(0, 0, -1);
@@ -463,6 +491,13 @@ export class MapScene {
   private updatePhysics(nowMilliseconds: number): void {
     if (this.cameraMode !== "player") return;
     const renderPosition = this.physics.update(nowMilliseconds, this.physicsInput.sample());
+    const yaw = this.physics.player.yaw * Math.PI / 180;
+    const pitch = this.physics.player.pitch * Math.PI / 180;
+    this.weapons.update(nowMilliseconds, {
+      x: this.physics.player.position.x - Math.sin(yaw) * Math.cos(pitch) * 2048,
+      y: this.physics.player.position.y + Math.cos(yaw) * Math.cos(pitch) * 2048,
+      z: this.physics.player.position.z + Math.sin(pitch) * 2048,
+    });
     this.updatePlayerCamera(renderPosition);
   }
 
