@@ -39,6 +39,22 @@ export function projectAgainst(target: Vec3, normal: Vec3): void {
   target.z -= normal.z * amount;
 }
 
+/** Matches vec::projectxy in src/shared/geom.h:148-160. */
+export function projectXY(target: Vec3, normal: Vec3, threshold?: number): void {
+  const squaredLength = dot(target, target);
+  const rawDot = dot(target, normal);
+  const removed = threshold === undefined ? rawDot : Math.min(rawDot, threshold);
+  if (normal.z !== 0) target.z = -(target.x * normal.x / normal.z + target.y * normal.y / normal.z);
+  const wantedLength = Math.sqrt(Math.max(squaredLength - removed * removed, 0));
+  const currentLength = magnitude(target);
+  if (currentLength > 1e-12) scaleVec3(target, wantedLength / currentLength);
+}
+
+export function rescale(target: Vec3, length: number): void {
+  const currentLength = magnitude(target);
+  if (currentLength > 1e-12) scaleVec3(target, length / currentLength);
+}
+
 export function normalize(value: Vec3): void {
   const length = magnitude(value);
   if (length > 0) scaleVec3(value, 1 / length);

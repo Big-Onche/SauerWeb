@@ -37,6 +37,8 @@ The next implementation stage must preserve the native split between traversal a
 
 Map-parser integration tests run the controller on the real `aard3c` and `triforts` octrees to ensure their player starts settle on geometry rather than falling through the world.
 
+The contact smoothing path follows `vec::projectxy` (`src/shared/geom.h:147-160`) and `recalcdir`/`switchfloor` (`physics.cpp:1060-1101`). This preserves tangential speed and rescales the remaining substep after projection. Stair transitions use the native synthetic diagonal directions from `trystepup` and `trystepdown` rather than snapping directly between floor elevations.
+
 ## Compatibility invariants
 
 - All authoritative positions and velocities use Sauerbraten coordinates (Z-up). Conversion to Babylon Y-up occurs only in `src/render/coordinates.ts`.
