@@ -106,6 +106,7 @@ function mapWith(world: OctreeCube[], worldSize: number): SauerMap {
     entities: [],
     vslots: [],
     world,
+    materialVolumes: [],
     lightmaps: [],
     bytesConsumedThroughOctree: 0,
     bytesConsumed: 0,

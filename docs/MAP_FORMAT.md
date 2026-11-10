@@ -39,6 +39,8 @@ Node tags are `children`, `empty`, `solid`, `normal`, and `lodcube`. A non-branc
 
 The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leaves but never replaces the tree. Output is batched by root octant and VSlot. Until the complete engine `visibleface` behavior is ported, face suppression is deliberately conservative: only a solid neighbor at least as large as the current solid cube can hide a face. This retains some harmless internal faces but cannot turn partial neighbor coverage or deformed cubes into visible holes.
 
+Material-bearing leaves are additionally exposed as `SauerMap.materialVolumes`. Each record retains its raw 16-bit value, bounds, source cube kind, volume/index, clip mode, death flag, and alpha flag independently of ordinary world meshes. Water, lava, and glass are rendered as dedicated volume meshes. Clip, no-clip, game-clip, death, and alpha volumes remain hidden until the material debug toggle is enabled.
+
 Surface vertices use Sauerbraten's low-12-bit coordinate encoding. The renderer restores the high origin bits and divides by eight, matching `addcubeverts`. Explicit surface polygons are fan-triangulated with reversed winding after the centralized `(x, y, z) → (x, z, y)` conversion.
 
 Merged faces retain Sauerbraten's origin/participant distinction. The origin cube supplies the explicit merged polygon; zero-vertex participant records are coverage markers and never generate fallback cube quads.

@@ -32,6 +32,7 @@ button { color: inherit; }
 #viewport { position: absolute; inset: 0; display: block; width: 100%; height: 100%; outline: 0; touch-action: none; }
 .topbar { position: absolute; inset: 0 0 auto 0; display: flex; justify-content: space-between; align-items: center; min-height: 82px; padding: 18px 24px 18px 26px; border-bottom: 1px solid rgba(85, 96, 87, .24); background: linear-gradient(#0e120ff2, #0e120f9c, transparent); pointer-events: none; }
 .topbar h2 { margin: 2px 0 0; font-size: 19px; font-weight: 500; letter-spacing: -.025em; }.eyebrow { margin: 0; color: #819071; font: 500 9px "DM Mono"; letter-spacing: .13em; }
+.view-buttons { display: flex; gap: 8px; pointer-events: auto; }
 .icon-button { width: 36px; height: 36px; font-size: 20px; pointer-events: auto; }.icon-button[aria-pressed="true"] { color: #d6edaf; border-color: #8ba46b; }
 .empty-state { position: absolute; top: 50%; left: 50%; width: min(480px, 80%); text-align: center; transform: translate(-50%, -48%); pointer-events: none; }
 .empty-state h2 { margin: 11px 0 10px; font-size: clamp(24px, 3vw, 38px); font-weight: 500; letter-spacing: -.045em; }.empty-state > p:last-child { margin: auto; max-width: 430px; color: #7d8980; font-size: 13px; line-height: 1.7; }

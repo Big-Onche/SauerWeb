@@ -36,7 +36,10 @@ app.innerHTML = `
           <p class="eyebrow">CURRENT MAP</p>
           <h2 id="map-title">Choose a map</h2>
         </div>
-        <button id="wireframe" class="icon-button" type="button" aria-pressed="false" title="Toggle wireframe">◇</button>
+        <div class="view-buttons">
+          <button id="materials" class="icon-button" type="button" aria-pressed="false" title="Toggle material-volume debug view">◩</button>
+          <button id="wireframe" class="icon-button" type="button" aria-pressed="false" title="Toggle wireframe">◇</button>
+        </div>
       </div>
       <div id="empty-state" class="empty-state">
         <div class="octa" aria-hidden="true"><span></span></div>
@@ -63,6 +66,7 @@ const loading = required<HTMLDivElement>("#loading");
 const error = required<HTMLDivElement>("#error");
 const stats = required<HTMLDivElement>("#stats");
 const wireframe = required<HTMLButtonElement>("#wireframe");
+const materials = required<HTMLButtonElement>("#materials");
 const parser = new SauerMapParser();
 const mapScene = new MapScene(canvas);
 let maps: MapListItem[] = [];
@@ -79,6 +83,11 @@ wireframe.addEventListener("click", () => {
   const enabled = wireframe.getAttribute("aria-pressed") !== "true";
   wireframe.setAttribute("aria-pressed", String(enabled));
   mapScene.setWireframe(enabled);
+});
+materials.addEventListener("click", () => {
+  const enabled = materials.getAttribute("aria-pressed") !== "true";
+  materials.setAttribute("aria-pressed", String(enabled));
+  mapScene.setMaterialDebug(enabled);
 });
 
 async function loadMapIndex(): Promise<void> {
@@ -154,6 +163,7 @@ function showLoadedMap(map: SauerMap, sceneStats: SceneStats): void {
     <div><strong>${map.header.worldSize.toLocaleString()}</strong><span>world size</span></div>
     <div><strong>${sceneStats.triangles.toLocaleString()}</strong><span>triangles</span></div>
     <div><strong>${map.entities.length.toLocaleString()}</strong><span>entities</span></div>
+    <div><strong>${sceneStats.materialVolumes.toLocaleString()}</strong><span>material volumes</span></div>
     <div><strong>v${map.header.version}</strong><span>format</span></div>
   `;
 }

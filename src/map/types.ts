@@ -78,6 +78,22 @@ export interface OctreeCube {
   children?: OctreeCube[];
 }
 
+export type MaterialVolumeType = "air" | "water" | "lava" | "glass";
+export type MaterialClipType = "none" | "noclip" | "clip" | "gameclip";
+
+/** A physics-facing material leaf, kept independently from rendered world geometry. */
+export interface MaterialVolume {
+  origin: Vec3;
+  size: number;
+  cubeKind: CubeKind;
+  rawMaterial: number;
+  volume: MaterialVolumeType;
+  volumeIndex: number;
+  clip: MaterialClipType;
+  death: boolean;
+  alpha: boolean;
+}
+
 export interface SauerMap {
   name: string;
   header: MapHeader;
@@ -87,6 +103,7 @@ export interface SauerMap {
   entities: MapEntity[];
   vslots: VSlot[];
   world: OctreeCube[];
+  materialVolumes: MaterialVolume[];
   lightmaps: Lightmap[];
   bytesConsumedThroughOctree: number;
   bytesConsumed: number;

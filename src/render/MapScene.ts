@@ -2,6 +2,7 @@ import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { Material } from "@babylonjs/core/Materials/material";
 import { CubeTexture } from "@babylonjs/core/Materials/Textures/cubeTexture";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
@@ -14,6 +15,7 @@ import type { SauerMap } from "../map/types";
 import type { MapLightingOverrides, MapSkyOverrides, ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "./geometry";
+import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 import { toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 import { resolveMapLighting } from "./MapLighting";
@@ -24,6 +26,7 @@ export interface SceneStats {
   faces: number;
   triangles: number;
   vertices: number;
+  materialVolumes: number;
 }
 
 export class MapScene {
@@ -36,6 +39,9 @@ export class MapScene {
   private skyboxObjectUrls: string[] = [];
   private loadGeneration = 0;
   private wireframe = false;
+  private materialDebug = false;
+  private readonly volumeMeshes: Mesh[] = [];
+  private readonly volumeMaterials = new Map<MaterialRenderKind, StandardMaterial>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
@@ -67,6 +73,9 @@ export class MapScene {
     const generation = ++this.loadGeneration;
     const lighting = resolveMapLighting(map, lightingOverrides);
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
+    this.volumeMeshes.length = 0;
+    this.volumeMaterials.forEach((material) => material.dispose(true, true));
+    this.volumeMaterials.clear();
     this.materialCache.dispose();
     this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
     this.fallbackMaterial?.dispose(true, true);
@@ -77,6 +86,7 @@ export class MapScene {
     this.skyboxObjectUrls = [];
     this.scene.onBeforeRenderObservable.clear();
     const batches = generateGeometry(map, textures);
+    const materialBatches = generateMaterialGeometry(map);
     let faces = 0;
     let triangles = 0;
     let vertices = 0;
@@ -102,16 +112,91 @@ export class MapScene {
       triangles += batch.indices.length / 3;
       vertices += batch.positions.length / 3;
     });
+    materialBatches.forEach((batch) => {
+      const mesh = this.createMaterialVolumeMesh(batch);
+      mesh.setEnabled(!batch.debugOnly || this.materialDebug);
+      this.volumeMeshes.push(mesh);
+      faces += batch.faceCount;
+      triangles += batch.indices.length / 3;
+      vertices += batch.positions.length / 3;
+    });
     this.materialCache.setWireframe(this.wireframe);
     await this.createSkybox(map, resolveMapSky(map, skyOverrides), generation);
     this.placeCamera(map, batches);
-    return { meshes: batches.length, faces, triangles, vertices };
+    return { meshes: batches.length + materialBatches.length, faces, triangles, vertices, materialVolumes: map.materialVolumes.length };
   }
 
   setWireframe(enabled: boolean): void {
     this.wireframe = enabled;
     this.materialCache.setWireframe(enabled);
     if (this.fallbackMaterial) this.fallbackMaterial.wireframe = enabled;
+    this.volumeMaterials.forEach((material) => { material.wireframe = enabled; });
+  }
+
+  setMaterialDebug(enabled: boolean): void {
+    this.materialDebug = enabled;
+    this.volumeMeshes.forEach((mesh) => {
+      if (mesh.metadata?.debugOnly === true) mesh.setEnabled(enabled);
+    });
+  }
+
+  private createMaterialVolumeMesh(batch: MaterialGeometryBatch): Mesh {
+    const mesh = new Mesh(batch.name, this.scene);
+    const vertexData = new VertexData();
+    vertexData.positions = batch.positions;
+    vertexData.indices = batch.indices;
+    vertexData.colors = batch.colors;
+    vertexData.uvs = batch.uvs;
+    const normals: number[] = [];
+    VertexData.ComputeNormals(batch.positions, batch.indices, normals);
+    vertexData.normals = normals;
+    vertexData.applyToMesh(mesh, true);
+    mesh.material = this.getMaterialVolumeMaterial(batch.kind);
+    mesh.metadata = { debugOnly: batch.debugOnly, materialKind: batch.kind };
+    mesh.isPickable = false;
+    mesh.alwaysSelectAsActiveMesh = true;
+    mesh.freezeWorldMatrix();
+    return mesh;
+  }
+
+  private getMaterialVolumeMaterial(kind: MaterialRenderKind): StandardMaterial {
+    const cached = this.volumeMaterials.get(kind);
+    if (cached) return cached;
+    const colors: Record<MaterialRenderKind, Color3> = {
+      water: new Color3(0.05, 0.35, 0.55),
+      lava: new Color3(1, 0.28, 0.03),
+      glass: new Color3(0.15, 0.75, 0.82),
+      clip: new Color3(0.9, 0.12, 0.12),
+      noclip: new Color3(0.12, 0.85, 0.2),
+      gameclip: new Color3(0.95, 0.82, 0.08),
+      death: new Color3(0.25, 0.25, 0.25),
+      alpha: new Color3(0.85, 0.1, 0.78),
+    };
+    const material = new StandardMaterial(`material-volume-${kind}`, this.scene);
+    material.diffuseColor = colors[kind];
+    material.emissiveColor = colors[kind].scale(kind === "lava" ? 0.8 : 0.45);
+    material.specularColor = kind === "glass" ? new Color3(0.7, 0.9, 1) : Color3.Black();
+    material.disableLighting = true;
+    material.backFaceCulling = false;
+    material.wireframe = this.wireframe;
+    material.alpha = kind === "lava" ? 1 : kind === "water" ? 0.52 : kind === "glass" ? 0.3 : 0.24;
+    if (kind !== "lava") {
+      material.transparencyMode = Material.MATERIAL_ALPHABLEND;
+      material.needDepthPrePass = true;
+    } else {
+      const lavaUrl = packageAssetUrl("dg/floor_lava2.jpg");
+      if (lavaUrl) {
+        const texture = new Texture(lavaUrl, this.scene);
+        texture.uScale = 0.125;
+        texture.vScale = 0.125;
+        texture.wrapU = Texture.WRAP_ADDRESSMODE;
+        texture.wrapV = Texture.WRAP_ADDRESSMODE;
+        material.diffuseTexture = texture;
+        material.emissiveTexture = texture;
+      }
+    }
+    this.volumeMaterials.set(kind, material);
+    return material;
   }
 
   private createFallbackMaterial(): StandardMaterial {

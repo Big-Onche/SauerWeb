@@ -23,6 +23,7 @@ Controls: **WASD / arrows** move, the **mouse** looks around, and the diamond bu
 - Decompresses and validates native `.ogz` files in the browser.
 - Decodes v33 headers, variables, game metadata, entities, texture MRU, VSlots, octree nodes, deformed edges, materials, merged-face flags, and serialized surfaces.
 - Retains the recursive octree and generates spatially separated Babylon meshes for its eight root octants.
+- Extracts water, lava, glass, clip, no-clip, game-clip, death, and alpha leaves into physics-facing material-volume records. Water, lava, and glass use dedicated renderers; the remaining flags are available through the material debug view.
 - Starts the camera at the first player-start entity and centralizes Sauerbraten Z-up → Babylon Y-up conversion.
 - Reads a restricted declarative subset of default, package, and map `.cfg` files; resolves original image materials, VSlot UV transforms, and six-face map skyboxes from the Sauerbraten package tree.
 - Decodes the original 512×512 RGB/RGBA lightmap atlases, preserves reserved and serialized lightmap indexing, and binds the baked UV2 lighting and layer masks through Babylon materials.

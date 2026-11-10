@@ -1,5 +1,6 @@
 import type { ResolvedTexture } from "../assets/types";
 import type { OctreeCube, SauerMap, SurfaceVertex, Vec3, VSlot } from "../map/types";
+import { MAT_ALPHA } from "../map/materials";
 
 export interface GeometryBatch {
   name: string;
@@ -35,7 +36,6 @@ const LIGHTMAP_COORDINATE_SCALE = 65536;
 const LAYER_TOP = 1 << 5;
 const LAYER_BOTTOM = 1 << 6;
 const LAYER_DUPLICATED = 1 << 7;
-const MAT_ALPHA = 4 << 8;
 
 export function generateGeometry(map: SauerMap, textures: ResolvedTexture[] = []): GeometryBatch[] {
   const batches = new Map<string, GeometryBatch>();
@@ -120,13 +120,14 @@ function appendSurface(batches: Map<string, GeometryBatch>, cube: OctreeCube, ro
                        textureIndex: number, lightmapId: number, useLightmapAlpha: boolean, textures: ResolvedTexture[],
                        emittedTriangles: Set<string>): void {
   if (source.length < 3) return;
-  const key = `${rootIndex}:${textureIndex}:${cube.material}:${lightmapId}:${useLightmapAlpha ? 1 : 0}`;
+  const surfaceMaterial = cube.material & MAT_ALPHA;
+  const key = `${rootIndex}:${textureIndex}:${surfaceMaterial}:${lightmapId}:${useLightmapAlpha ? 1 : 0}`;
   let batch = batches.get(key);
   if (!batch) {
     batch = {
-      name: `octant-${rootIndex}-texture-${textureIndex}-material-${cube.material}-lightmap-${lightmapId}${useLightmapAlpha ? "-blend" : ""}`,
+      name: `octant-${rootIndex}-texture-${textureIndex}-material-${surfaceMaterial}-lightmap-${lightmapId}${useLightmapAlpha ? "-blend" : ""}`,
       textureIndex,
-      cubeMaterial: cube.material,
+      cubeMaterial: surfaceMaterial,
       lightmapId,
       useLightmapAlpha,
       positions: [],
