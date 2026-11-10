@@ -1,4 +1,5 @@
 import type { Camera } from "@babylonjs/core/Cameras/camera";
+import "@babylonjs/core/Culling/ray";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { Material } from "@babylonjs/core/Materials/material";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
