@@ -221,10 +221,11 @@ export function parseMd2(buffer: ArrayBuffer): ModelGeometry {
   const frameSize = view.getInt32(16, true);
   const vertexCount = view.getInt32(24, true);
   const frameCount = view.getInt32(40, true);
-  const commandCount = view.getInt32(44, true);
+  const commandCount = view.getInt32(36, true);
   const frameOffset = view.getInt32(56, true);
-  const commandOffset = view.getInt32(64, true);
-  if (frameCount <= 0 || vertexCount <= 0 || commandCount <= 0 || frameOffset + frameSize > view.byteLength) throw new Error("Invalid MD2 dimensions.");
+  const commandOffset = view.getInt32(60, true);
+  if (frameCount <= 0 || vertexCount <= 0 || commandCount <= 0 || frameOffset + frameSize > view.byteLength ||
+      commandOffset < 68 || commandOffset + commandCount * 4 > view.byteLength) throw new Error("Invalid MD2 dimensions.");
   const scale = [view.getFloat32(frameOffset, true), view.getFloat32(frameOffset + 4, true), view.getFloat32(frameOffset + 8, true)];
   const translate = [view.getFloat32(frameOffset + 12, true), view.getFloat32(frameOffset + 16, true), view.getFloat32(frameOffset + 20, true)];
   const frameVertices: number[][] = [];
@@ -269,6 +270,7 @@ export function parseMd2(buffer: ArrayBuffer): ModelGeometry {
       indices.push(triangle[0], triangle[1], triangle[2]);
     }
   }
+  if (!positions.length || !indices.length) throw new Error("MD2 model contains no renderable geometry.");
   return { meshes: [{ name: "mesh", positions, uvs, indices }] };
 }
 
