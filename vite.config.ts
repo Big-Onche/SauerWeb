@@ -35,6 +35,18 @@ interface ConfigState {
   sources: string[];
   visited: Set<string>;
   commands: number;
+  skyboxBase: string;
+  skyYaw: number;
+  skySpin: number;
+  skyColor: [number, number, number];
+}
+
+interface ServerSkybox {
+  basePath: string;
+  faces: [string, string, string, string, string, string];
+  yaw: number;
+  spin: number;
+  color: [number, number, number];
 }
 
 const textureKinds: Record<string, TextureKind> = {
@@ -47,11 +59,27 @@ function defaultVSlot(): ServerVSlot {
   return { changed: 0, previous: -1, scale: 1, rotation: 0, offset: [0, 0], scroll: [0, 0], layer: 0, alpha: [0.5, 0], color: [1, 1, 1] };
 }
 
-function readTextureManifest(mapName: string): Omit<ConfigState, "aliases" | "visited" | "commands"> {
-  const state: ConfigState = { slots: [], aliases: new Map(), unsupported: [], sources: [], visited: new Set(), commands: 0 };
+function readTextureManifest(mapName: string): {
+  slots: ServerTextureSlot[];
+  unsupported: ConfigState["unsupported"];
+  sources: string[];
+  skybox?: ServerSkybox;
+} {
+  const state: ConfigState = {
+    slots: [],
+    aliases: new Map(),
+    unsupported: [],
+    sources: [],
+    visited: new Set(),
+    commands: 0,
+    skyboxBase: "skyboxes/remus/sky01",
+    skyYaw: 0,
+    skySpin: 0,
+    skyColor: [1, 1, 1],
+  };
   executeConfig("data/default_map_settings.cfg", state, 0);
   executeConfig(`packages/base/${mapName}.cfg`, state, 0);
-  return { slots: state.slots, unsupported: state.unsupported, sources: state.sources };
+  return { slots: state.slots, unsupported: state.unsupported, sources: state.sources, skybox: resolveSkybox(state) };
 }
 
 function executeConfig(relativeName: string, state: ConfigState, depth: number): void {
@@ -93,6 +121,23 @@ function executeStatement(text: string, source: string, line: number, state: Con
   }
   if (command === "texture") {
     addTexture(args, state);
+    return;
+  }
+  if (command === "skybox" || command === "loadsky") {
+    if (args[0]) state.skyboxBase = normalizeTexturePath(args[0]);
+    if (command === "loadsky") state.skySpin = numberArg(args[1], 0);
+    return;
+  }
+  if (command === "yawsky") {
+    state.skyYaw = numberArg(args[0], 0);
+    return;
+  }
+  if (command === "spinsky") {
+    state.skySpin = numberArg(args[0], 0);
+    return;
+  }
+  if (command === "skyboxcolour") {
+    state.skyColor = [colorArg(args[0]), colorArg(args[1]), colorArg(args[2])];
     return;
   }
   if (["texscale", "texrotate", "texoffset", "texscroll", "texlayer", "texalpha", "texcolor"].includes(command)) {
@@ -210,6 +255,38 @@ function normalizeTexturePath(value: string): string {
   return path.posix.normalize(value.replace(/^<[^>]*>/, "").replaceAll("\\", "/").replace(/^packages\//, "").replace(/^\/+/, ""));
 }
 
+function resolveSkybox(state: ConfigState): ServerSkybox | undefined {
+  const basePath = state.skyboxBase;
+  const sourceSuffixes = ["rt", "up", "bk", "lf", "dn", "ft"];
+  const faces = sourceSuffixes.map((suffix) => resolveSkyFace(basePath, suffix));
+  if (faces.some((face) => !face)) {
+    state.unsupported.push({
+      command: "skybox",
+      source: `packages/${basePath}`,
+      line: 0,
+      reason: "One or more skybox faces could not be resolved as JPEG or PNG.",
+    });
+    return undefined;
+  }
+  return { basePath, faces: faces as ServerSkybox["faces"], yaw: state.skyYaw, spin: state.skySpin, color: state.skyColor };
+}
+
+function resolveSkyFace(basePath: string, suffix: string): string | undefined {
+  const withoutDirective = normalizeTexturePath(basePath);
+  const candidates = withoutDirective.includes("*")
+    ? [withoutDirective.replace("*", suffix)]
+    : [`${withoutDirective}_${suffix}.jpg`, `${withoutDirective}_${suffix}.png`];
+  return candidates.find((candidate) => {
+    const filePath = path.resolve(packagesDirectory, candidate);
+    return isWithin(packagesDirectory, filePath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  });
+}
+
+function colorArg(value: string | undefined): number {
+  const component = numberArg(value, 255);
+  return clamp(component > 1 ? component / 255 : component, 0, 1);
+}
+
 function numberArg(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -275,7 +352,7 @@ function sauerMapsPlugin(): Plugin {
         }
         response.setHeader("Content-Type", mimeTypes[path.extname(filePath).toLowerCase()] ?? "application/octet-stream");
         response.setHeader("Content-Length", fs.statSync(filePath).size);
-        response.setHeader("Cache-Control", "public, max-age=3600");
+        response.setHeader("Cache-Control", "no-cache");
         fs.createReadStream(filePath).pipe(response);
       });
       server.middlewares.use("/api/maps", (request, response, next) => {
@@ -292,6 +369,7 @@ function sauerMapsPlugin(): Plugin {
             })
             .sort((left, right) => left.name.localeCompare(right.name));
           response.setHeader("Content-Type", "application/json");
+          response.setHeader("Cache-Control", "no-store");
           response.end(JSON.stringify(cachedMaps));
           return;
         }
@@ -299,6 +377,7 @@ function sauerMapsPlugin(): Plugin {
         const textureMatch = /^([a-zA-Z0-9_-]+)\/textures$/.exec(requestedName);
         if (textureMatch) {
           response.setHeader("Content-Type", "application/json");
+          response.setHeader("Cache-Control", "no-store");
           response.end(JSON.stringify(readTextureManifest(textureMatch[1])));
           return;
         }
@@ -316,6 +395,7 @@ function sauerMapsPlugin(): Plugin {
         }
         response.setHeader("Content-Type", "application/gzip");
         response.setHeader("Content-Length", fs.statSync(filePath).size);
+        response.setHeader("Cache-Control", "no-cache");
         fs.createReadStream(filePath).pipe(response);
       });
     },

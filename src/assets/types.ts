@@ -25,6 +25,15 @@ export interface TextureManifest {
   slots: TextureSlot[];
   unsupported: UnsupportedConfigCommand[];
   sources: string[];
+  skybox?: SkyboxManifest;
+}
+
+export interface SkyboxManifest {
+  basePath: string;
+  faces: [string, string, string, string, string, string];
+  yaw: number;
+  spin: number;
+  color: [number, number, number];
 }
 
 export interface ResolvedTexture {

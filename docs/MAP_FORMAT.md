@@ -40,6 +40,8 @@ The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leave
 
 Surface vertices use Sauerbraten's low-12-bit coordinate encoding. The renderer restores the high origin bits and divides by eight, matching `addcubeverts`. Explicit surface polygons are fan-triangulated with reversed winding after the centralized `(x, y, z) → (x, z, y)` conversion.
 
+The restricted configuration reader resolves `skybox` and legacy `loadsky` declarations without executing CubeScript. Cubemap faces use Sauerbraten's `rt/lf/bk/ft/up/dn` package convention, reordered for the renderer's Z-up to Y-up coordinate conversion. JPEG, PNG, wildcard names, yaw, spin, and sky color metadata are retained.
+
 ## Deliberate next steps
 
 - Port historical layout branches from `loadc` for formats 6–32.

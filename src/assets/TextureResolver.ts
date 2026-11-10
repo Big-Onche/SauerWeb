@@ -6,7 +6,7 @@ const DEFAULT_VSLOT: VSlot = {
 };
 
 export async function loadTextureManifest(mapName: string): Promise<TextureManifest> {
-  const response = await fetch(`/api/maps/${encodeURIComponent(mapName)}/textures`);
+  const response = await fetch(`/api/maps/${encodeURIComponent(mapName)}/textures`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Could not resolve texture configuration for ${mapName} (${response.status}).`);
   return response.json() as Promise<TextureManifest>;
 }
@@ -26,9 +26,9 @@ export function resolveMapTextures(map: SauerMap, manifest: TextureManifest): Re
     const texture: ResolvedTexture = {
       slot,
       vslot: mergeVSlot(slot.vslot, serialized),
-      diffuseUrl: assetUrl(slot.textures.find((item) => item.kind === "diffuse")?.path),
-      normalUrl: assetUrl(slot.textures.find((item) => item.kind === "normal")?.path),
-      glowUrl: assetUrl(slot.textures.find((item) => item.kind === "glow")?.path),
+      diffuseUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "diffuse")?.path),
+      normalUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "normal")?.path),
+      glowUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "glow")?.path),
     };
     return texture;
   });
@@ -61,7 +61,7 @@ function mergeVSlot(base: VSlot, delta: VSlot): VSlot {
   };
 }
 
-function assetUrl(path: string | undefined): string | undefined {
+export function packageAssetUrl(path: string | undefined): string | undefined {
   return path ? `/api/packages/${path.split("/").map(encodeURIComponent).join("/")}` : undefined;
 }
 

@@ -83,7 +83,7 @@ wireframe.addEventListener("click", () => {
 
 async function loadMapIndex(): Promise<void> {
   try {
-    const response = await fetch("/api/maps");
+    const response = await fetch("/api/maps", { cache: "no-store" });
     if (!response.ok) throw new Error(`Map index returned ${response.status}.`);
     maps = await response.json() as MapListItem[];
     renderMapList();
@@ -125,7 +125,7 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
     const map = parser.parse(decompressed, name);
     const manifest = await loadTextureManifest(name);
     const textures = resolveMapTextures(map, manifest);
-    const sceneStats = mapScene.loadMap(map, textures);
+    const sceneStats = await mapScene.loadMap(map, textures, manifest.skybox);
     if (manifest.unsupported.length) console.warn("Unsupported Sauerbraten configuration commands", manifest.unsupported);
     showLoadedMap(map, sceneStats);
     activeMapName = name;
