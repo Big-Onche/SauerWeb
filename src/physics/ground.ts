@@ -1,226 +1,339 @@
 import type { Vec3 } from "../map/types";
 import { FLOOR_Z, SLOPE_Z, STAIR_HEIGHT, WALL_Z } from "./constants";
-import { OctreeCollisionWorld, type CollisionResult } from "./collision";
-import { type PhysicsEntity, PhysicsState } from "./types";
+import { OctreeCollisionWorld } from "./collision";
+import { PhysicsEntityType, type PhysicsEntity, PhysicsState } from "./types";
 import { copyVec3, dot, magnitude, projectAgainst, projectXY, rescale, vec3 } from "./vector";
 
-/** Ports the state machine around move/findfloor/landing/trystepup/trystepdown/slideagainst. */
+interface FloorResult {
+  floor: Vec3;
+  found: boolean;
+  slide: boolean;
+}
+
+/** Behavioral port of move/findfloor/landing/trystepup/trystepdown/slideagainst from Sauerbraten physics.cpp. */
 export class GroundMover {
   constructor(private readonly world: OctreeCollisionWorld) {}
 
-  move(entity: PhysicsEntity, displacement: Vec3): boolean {
-    const origin = copyVec3(entity.position);
-    entity.position.x += displacement.x;
-    entity.position.y += displacement.y;
-    entity.position.z += displacement.z;
-    const collision = this.world.collide(entity, displacement);
+  move(entity: PhysicsEntity, direction: Vec3): boolean {
+    const old = copyVec3(entity.position);
+    let collided = false;
+    let slideCollide = false;
+    let obstacle = vec3();
+    add(entity.position, direction);
+
+    const collision = this.world.collide(entity, direction);
     if (collision) {
-      entity.position = origin;
-      if (this.canStep(entity) && this.tryStepUp(entity, displacement, collision.normal)) return true;
-      this.slide(entity, displacement, collision);
-      entity.blocked = true;
-      return false;
+      obstacle = copyVec3(collision.normal);
+      if (entity.entityType === PhysicsEntityType.Player &&
+          ((collision.normal.z >= SLOPE_Z && direction.z < 0) || (collision.normal.z <= -SLOPE_Z && direction.z > 0)) &&
+          (direction.x !== 0 || direction.y !== 0)) {
+        const horizontalCollision = this.world.collide(entity, { x: direction.x, y: direction.y, z: 0 });
+        if (horizontalCollision) {
+          if (dot(horizontalCollision.normal, direction) >= 0) slideCollide = true;
+          obstacle = copyVec3(horizontalCollision.normal);
+        }
+      }
+
+      entity.position = { ...old, z: old.z - STAIR_HEIGHT };
+      entity.zMargin = -STAIR_HEIGHT;
+      const floorProbe = this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z);
+      const canTryStep = entity.physicsState === PhysicsState.Slope || entity.physicsState === PhysicsState.Floor ||
+        !!floorProbe && (entity.physicsState === PhysicsState.StepUp || entity.physicsState === PhysicsState.StepDown ||
+          floorProbe.normal.z >= FLOOR_Z);
+      entity.position = old;
+      entity.zMargin = 0;
+      if (canTryStep) {
+        const floor = entity.physicsState === PhysicsState.Slope || entity.physicsState === PhysicsState.Floor
+          ? entity.floor
+          : floorProbe!.normal;
+        if (this.tryStepUp(entity, direction, obstacle, STAIR_HEIGHT, floor)) return true;
+      }
+      collided = true;
+    } else if (entity.physicsState === PhysicsState.StepUp) {
+      const floorProbe = this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z);
+      if (floorProbe) {
+        entity.position = old;
+        if (this.tryStepUp(entity, direction, { x: 0, y: 0, z: 1 }, STAIR_HEIGHT, floorProbe.normal)) return true;
+        entity.position = copyVec3(old);
+        add(entity.position, direction);
+      }
+    } else if (entity.physicsState === PhysicsState.StepDown && dot(direction, entity.floor) <= 1e-6) {
+      const moved = copyVec3(entity.position);
+      entity.position = old;
+      if (this.tryStepDown(entity, direction)) return true;
+      entity.position = moved;
     }
-    if (entity.physicsState === PhysicsState.StepDown && dot(displacement, entity.floor) <= 1e-6 && this.tryStepDown(entity, displacement)) return true;
-    const floor = this.findFloor(entity, 0.1);
-    if (floor) this.land(entity, floor.normal, displacement);
-    else if (this.canStep(entity) && this.tryStepDown(entity, displacement)) return true;
-    else this.fallOrSlide(entity, vec3());
-    return true;
+
+    const floorResult = this.findFloor(entity, collided, obstacle, collided);
+    if (floorResult.slide || (!collided && floorResult.floor.z > 0 && floorResult.floor.z < WALL_Z)) {
+      this.slideAgainst(entity, direction, floorResult.slide ? obstacle : floorResult.floor, floorResult.found, slideCollide);
+      entity.blocked = true;
+    }
+    if (floorResult.found) this.land(entity, direction, floorResult.floor, collided);
+    else this.fall(entity, direction, floorResult.floor);
+    return !collided;
   }
 
   initialize(entity: PhysicsEntity): void {
-    const floor = this.findFloor(entity, STAIR_HEIGHT);
-    if (floor) this.land(entity, floor.normal);
+    const floorResult = this.findFloor(entity, false, vec3(), false);
+    if (floorResult.found) this.land(entity, vec3(), floorResult.floor, false);
   }
 
-  private canStep(entity: PhysicsEntity): boolean {
-    return entity.physicsState >= PhysicsState.Slope && entity.physicsState <= PhysicsState.StepDown;
-  }
-
-  private tryStepUp(entity: PhysicsEntity, displacement: Vec3, obstacle: Vec3): boolean {
-    const origin = copyVec3(entity.position);
+  private tryStepUp(entity: PhysicsEntity, direction: Vec3, obstacle: Vec3, maxStep: number, floor: Vec3): boolean {
+    const old = copyVec3(entity.position);
     const stairDirection = obstacle.z >= 0 && obstacle.z < SLOPE_Z
       ? { x: -obstacle.x, y: -obstacle.y, z: 0 }
-      : { x: displacement.x, y: displacement.y, z: 0 };
+      : { x: direction.x, y: direction.y, z: 0 };
     rescale(stairDirection, 1);
     let canSmooth = true;
+
     if (entity.physicsState !== PhysicsState.StepUp) {
-      entity.position = {
-        x: origin.x + stairDirection.x * 0.1,
-        y: origin.y + stairDirection.y * 0.1,
-        z: origin.z + STAIR_HEIGHT + 0.1,
-      };
+      const checkDirection = { x: stairDirection.x * 0.1, y: stairDirection.y * 0.1, z: maxStep + 0.1 };
+      entity.position = copyVec3(old);
+      add(entity.position, checkDirection);
       if (this.world.collide(entity, vec3())) {
-        entity.position = origin;
-        if (!this.findFloor(entity, 0.1)) return false;
+        entity.position = old;
+        if (!this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z)) return false;
         canSmooth = false;
       }
     }
+
     if (canSmooth) {
-      const checkDirection = { x: stairDirection.x * STAIR_HEIGHT, y: stairDirection.y * STAIR_HEIGHT, z: STAIR_HEIGHT };
-      entity.position = {
-        x: origin.x + checkDirection.x,
-        y: origin.y + checkDirection.y,
-        z: origin.z + checkDirection.z,
-      };
+      const checkDirection = { x: stairDirection.x * maxStep, y: stairDirection.y * maxStep, z: maxStep };
+      entity.position = copyVec3(old);
+      add(entity.position, checkDirection);
       let scale = 2;
       if (this.world.collide(entity, checkDirection)) {
         if (!this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z)) {
-          entity.position = origin;
+          entity.position = old;
           return false;
         }
-        entity.position.x += checkDirection.x;
-        entity.position.y += checkDirection.y;
-        entity.position.z += checkDirection.z;
+        add(entity.position, checkDirection);
         if (this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z)) scale = 1;
       }
       if (scale !== 1) {
         entity.position = {
-          x: origin.x - checkDirection.x * 2,
-          y: origin.y - checkDirection.y * 2,
-          z: origin.z - checkDirection.z,
+          x: old.x - checkDirection.x * 2,
+          y: old.y - checkDirection.y * 2,
+          z: old.z - checkDirection.z,
         };
         if (!this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z)) scale = 1;
       }
-      entity.position = origin;
-      const smoothDirection = { x: displacement.x, y: displacement.y, z: 0 };
-      const horizontalLength = magnitude(smoothDirection);
-      if (horizontalLength > 1e-9) {
-        if (horizontalLength > scale * displacement.z) {
+
+      entity.position = old;
+      const smoothDirection = { x: direction.x, y: direction.y, z: 0 };
+      const horizontalMagnitude = magnitude(smoothDirection);
+      if (horizontalMagnitude > 1e-9) {
+        if (horizontalMagnitude > scale * direction.z) {
           rescale(smoothDirection, 1);
           smoothDirection.z = 1 / scale;
-          rescale(smoothDirection, magnitude(displacement));
-        } else smoothDirection.z = displacement.z;
-        entity.position = {
-          x: origin.x + smoothDirection.x,
-          y: origin.y + smoothDirection.y,
-          z: origin.z + smoothDirection.z + STAIR_HEIGHT + 0.1,
-        };
+          rescale(smoothDirection, magnitude(direction));
+        } else smoothDirection.z = direction.z;
+        entity.position = copyVec3(old);
+        add(entity.position, smoothDirection);
+        entity.position.z += maxStep + 0.1;
         if (!this.world.collide(entity, smoothDirection)) {
-          entity.position.z -= STAIR_HEIGHT + 0.1;
-          this.switchFloor(entity, displacement, entity.floor);
+          entity.position.z -= maxStep + 0.1;
+          this.prepareStepUp(entity, direction, floor);
           entity.physicsState = PhysicsState.StepUp;
-          entity.timeInAir = 0;
           return true;
         }
       }
     }
-    entity.position = { ...origin, z: origin.z + magnitude(displacement) };
+
+    entity.position = { ...old, z: old.z + magnitude(direction) };
     if (!this.world.collide(entity, { x: 0, y: 0, z: 1 })) {
-      this.switchFloor(entity, displacement, entity.floor);
+      this.prepareStepUp(entity, direction, floor);
       if (canSmooth) entity.physicsState = PhysicsState.StepUp;
-      entity.timeInAir = 0;
       return true;
     }
-    entity.position = origin;
+    entity.position = old;
     return false;
   }
 
-  private tryStepDown(entity: PhysicsEntity, displacement: Vec3): boolean {
+  private prepareStepUp(entity: PhysicsEntity, direction: Vec3, floor: Vec3): void {
+    if (entity.physicsState === PhysicsState.Fall || !sameVector(entity.floor, floor)) {
+      entity.timeInAir = 0;
+      entity.floor = copyVec3(floor);
+      this.switchFloor(entity, direction, entity.floor);
+    }
+  }
+
+  private tryStepDown(entity: PhysicsEntity, direction: Vec3, initialize = false): boolean {
     if (entity.move === 0 && entity.strafe === 0) return false;
-    const origin = copyVec3(entity.position);
-    const stepDirection = { x: displacement.x, y: displacement.y, z: 0 };
-    stepDirection.z = -Math.hypot(stepDirection.x, stepDirection.y) / 4;
+    const old = copyVec3(entity.position);
+    entity.position.z -= STAIR_HEIGHT;
+    entity.zMargin = -STAIR_HEIGHT;
+    const floorProbe = this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z);
+    entity.position = old;
+    entity.zMargin = 0;
+    if (!floorProbe) return false;
+    return this.tryStepDownSlope(entity, direction, magnitude(direction), 4, 1, initialize);
+  }
+
+  private tryStepDownSlope(entity: PhysicsEntity, direction: Vec3, step: number, xy: number, z: number, initialize: boolean): boolean {
+    const stepDirection = { x: direction.x, y: direction.y, z: -Math.hypot(direction.x, direction.y) * z / xy };
     if (stepDirection.z === 0) return false;
     rescale(stepDirection, 1);
+    const old = copyVec3(entity.position);
     const probeScale = STAIR_HEIGHT / Math.abs(stepDirection.z);
     entity.position = {
-      x: origin.x + stepDirection.x * probeScale,
-      y: origin.y + stepDirection.y * probeScale,
-      z: origin.z + stepDirection.z * probeScale - STAIR_HEIGHT,
+      x: old.x + stepDirection.x * probeScale,
+      y: old.y + stepDirection.y * probeScale,
+      z: old.z + stepDirection.z * probeScale - STAIR_HEIGHT,
     };
+    entity.zMargin = -STAIR_HEIGHT;
     if (this.world.collide(entity, { x: 0, y: 0, z: -1 }, SLOPE_Z)) {
-      const stepLength = magnitude(displacement);
       entity.position = {
-        x: origin.x + stepDirection.x * stepLength,
-        y: origin.y + stepDirection.y * stepLength,
-        z: origin.z + stepDirection.z * stepLength,
+        x: old.x + stepDirection.x * step,
+        y: old.y + stepDirection.y * step,
+        z: old.z + stepDirection.z * step,
       };
+      entity.zMargin = 0;
       if (!this.world.collide(entity, { x: 0, y: 0, z: -1 })) {
-        const stepFloor = { x: stepDirection.x * -stepDirection.z, y: stepDirection.y * -stepDirection.z,
-          z: 1 - stepDirection.z * stepDirection.z };
+        const stepFloor = copyVec3(stepDirection);
+        const vertical = stepFloor.z;
+        stepFloor.x *= -vertical;
+        stepFloor.y *= -vertical;
+        stepFloor.z = 1 - vertical * vertical;
         rescale(stepFloor, 1);
-        this.switchFloor(entity, displacement, stepFloor);
+        if (entity.physicsState >= PhysicsState.Slope && !sameVector(entity.floor, stepFloor)) {
+          const stepped = copyVec3(entity.position);
+          entity.position.z -= 0.5;
+          entity.zMargin = -0.5;
+          const repeatedFloor = this.world.collide(entity, stepDirection);
+          if (repeatedFloor && sameVector(repeatedFloor.normal, entity.floor)) {
+            entity.position = copyVec3(old);
+            if (!initialize) {
+              entity.position.x += direction.x;
+              entity.position.y += direction.y;
+              if (direction.z <= 0 || this.world.collide(entity, direction)) entity.position.z += direction.z;
+            }
+            entity.zMargin = 0;
+            entity.physicsState = PhysicsState.StepDown;
+            entity.timeInAir = 0;
+            return true;
+          }
+          entity.position = initialize ? old : stepped;
+          entity.zMargin = 0;
+        } else if (initialize) entity.position = old;
+        this.switchFloor(entity, direction, stepFloor);
         entity.floor = stepFloor;
         entity.physicsState = PhysicsState.StepDown;
         entity.timeInAir = 0;
         return true;
       }
     }
-    entity.position = origin;
+    entity.position = old;
+    entity.zMargin = 0;
     return false;
   }
 
-  private findFloor(entity: PhysicsEntity, distance: number): CollisionResult | undefined {
-    const origin = copyVec3(entity.position);
-    entity.position.z -= distance;
-    const result = this.world.collide(entity, { x: 0, y: 0, z: -distance },
+  private findFloor(entity: PhysicsEntity, collided: boolean, obstacle: Vec3, slide: boolean): FloorResult {
+    let found = false;
+    let floor = vec3();
+    const moved = copyVec3(entity.position);
+    entity.position.z -= 0.1;
+    const directFloor = this.world.collide(entity, { x: 0, y: 0, z: -1 },
       entity.physicsState === PhysicsState.Slope || entity.physicsState === PhysicsState.StepDown ? SLOPE_Z : FLOOR_Z);
-    entity.position = origin;
-    return result && result.normal.z > 0 ? result : undefined;
-  }
-
-  private land(entity: PhysicsEntity, floor: Vec3, displacement?: Vec3): void {
-    if (displacement) this.switchFloor(entity, displacement, floor);
-    else if (floor.z >= FLOOR_Z) entity.falling = vec3();
-    entity.timeInAir = 0;
-    entity.floor = copyVec3(floor);
-    if (entity.physicsState !== PhysicsState.StepUp && entity.physicsState !== PhysicsState.StepDown) {
-      entity.physicsState = floor.z >= FLOOR_Z ? PhysicsState.Floor : PhysicsState.Slope;
-    }
-  }
-
-  private switchFloor(entity: PhysicsEntity, displacement: Vec3, floor: Vec3): void {
-    if (floor.z >= FLOOR_Z) entity.falling = vec3();
-    const oldVelocity = { x: entity.velocity.x + entity.falling.x, y: entity.velocity.y + entity.falling.y,
-      z: entity.velocity.z + entity.falling.z };
-    if (dot(displacement, floor) >= 0) {
-      if (entity.physicsState < PhysicsState.Slide || Math.abs(dot(displacement, entity.floor)) > 0.01 * magnitude(displacement)) return;
-      projectXY(entity.velocity, floor, 0);
-    } else projectXY(entity.velocity, floor);
-    projectAgainst(entity.falling, floor);
-    this.recalculateDirection(entity, oldVelocity, displacement);
-  }
-
-  private recalculateDirection(entity: PhysicsEntity, oldVelocity: Vec3, displacement: Vec3): void {
-    const speed = magnitude(oldVelocity);
-    if (speed <= 1e-6) return;
-    const step = magnitude(displacement);
-    displacement.x = entity.velocity.x + entity.falling.x;
-    displacement.y = entity.velocity.y + entity.falling.y;
-    displacement.z = entity.velocity.z + entity.falling.z;
-    rescale(displacement, step * magnitude(displacement) / speed);
-  }
-
-  private fallOrSlide(entity: PhysicsEntity, floor: Vec3): void {
-    if (floor.z > 0 && floor.z < SLOPE_Z) {
-      if (floor.z >= WALL_Z) {
-        projectAgainst(entity.velocity, floor);
-        projectAgainst(entity.falling, floor);
+    if (directFloor) {
+      floor = copyVec3(directFloor.normal);
+      found = true;
+    } else if (collided && obstacle.z >= SLOPE_Z) {
+      floor = copyVec3(obstacle);
+      found = true;
+      slide = false;
+    } else if (entity.physicsState === PhysicsState.StepUp || entity.physicsState === PhysicsState.Slide) {
+      const looseFloor = this.world.collide(entity, { x: 0, y: 0, z: -1 });
+      if (looseFloor && looseFloor.normal.z > 0) {
+        floor = copyVec3(looseFloor.normal);
+        if (floor.z >= SLOPE_Z) found = true;
       }
+    } else if (entity.physicsState >= PhysicsState.Slope && entity.floor.z < 1) {
+      const oldFloor = this.world.collide(entity, { x: -entity.floor.x, y: -entity.floor.y, z: -entity.floor.z }, 0.95) ??
+        this.world.collide(entity, { x: 0, y: 0, z: -1 });
+      if (oldFloor) {
+        floor = copyVec3(oldFloor.normal);
+        if (floor.z >= SLOPE_Z && floor.z < 1) found = true;
+      }
+    }
+    if (collided && (!found || obstacle.z > floor.z)) {
+      floor = copyVec3(obstacle);
+      slide = !found && (floor.z < WALL_Z || floor.z >= SLOPE_Z);
+    }
+    entity.position = moved;
+    return { floor, found, slide };
+  }
+
+  private fall(entity: PhysicsEntity, direction: Vec3, floor: Vec3): void {
+    if (floor.z > 0 && floor.z < SLOPE_Z) {
+      if (floor.z >= WALL_Z) this.switchFloor(entity, direction, floor);
       entity.timeInAir = 0;
       entity.physicsState = PhysicsState.Slide;
       entity.floor = copyVec3(floor);
-    } else entity.physicsState = PhysicsState.Fall;
+    } else if (entity.physicsState < PhysicsState.Slope || dot(direction, entity.floor) > 0.01 * magnitude(direction) ||
+        (floor.z !== 0 && floor.z !== 1) || !this.tryStepDown(entity, direction, true)) {
+      entity.physicsState = PhysicsState.Fall;
+    }
   }
 
-  private slide(entity: PhysicsEntity, displacement: Vec3, collision: CollisionResult): void {
-    if (collision.normal.z >= SLOPE_Z) {
-      this.land(entity, collision.normal, displacement);
-      return;
+  private land(entity: PhysicsEntity, direction: Vec3, floor: Vec3, collided: boolean): void {
+    this.switchFloor(entity, direction, floor);
+    entity.timeInAir = 0;
+    if ((entity.physicsState !== PhysicsState.StepUp && entity.physicsState !== PhysicsState.StepDown) || !collided) {
+      entity.physicsState = floor.z >= FLOOR_Z ? PhysicsState.Floor : PhysicsState.Slope;
     }
-    const normal = { ...collision.normal };
-    if (normal.z > 0) {
-      normal.z = 0;
-      const length = magnitude(normal);
-      if (length > 0) { normal.x /= length; normal.y /= length; }
-    }
-    const oldVelocity = { x: entity.velocity.x + entity.falling.x, y: entity.velocity.y + entity.falling.y,
-      z: entity.velocity.z + entity.falling.z };
-    projectAgainst(entity.velocity, normal);
-    projectAgainst(entity.falling, normal);
-    this.recalculateDirection(entity, oldVelocity, displacement);
-    this.fallOrSlide(entity, collision.normal);
+    entity.floor = copyVec3(floor);
   }
+
+  private switchFloor(entity: PhysicsEntity, direction: Vec3, floor: Vec3): void {
+    if (floor.z >= FLOOR_Z) entity.falling = vec3();
+    const oldVelocity = combinedVelocity(entity);
+    if (dot(direction, floor) >= 0) {
+      if (entity.physicsState < PhysicsState.Slide || Math.abs(dot(direction, entity.floor)) > 0.01 * magnitude(direction)) return;
+      projectXY(entity.velocity, floor, 0);
+    } else projectXY(entity.velocity, floor);
+    projectAgainst(entity.falling, floor);
+    this.recalculateDirection(entity, oldVelocity, direction);
+  }
+
+  private slideAgainst(entity: PhysicsEntity, direction: Vec3, obstacle: Vec3, foundFloor: boolean, slideCollide: boolean): void {
+    const wall = copyVec3(obstacle);
+    if (foundFloor ? wall.z > 0 : slideCollide) {
+      wall.z = 0;
+      rescale(wall, 1);
+    }
+    const oldVelocity = combinedVelocity(entity);
+    projectAgainst(entity.velocity, wall);
+    projectAgainst(entity.falling, wall);
+    this.recalculateDirection(entity, oldVelocity, direction);
+  }
+
+  private recalculateDirection(entity: PhysicsEntity, oldVelocity: Vec3, direction: Vec3): void {
+    const speed = magnitude(oldVelocity);
+    if (speed <= 1e-6) return;
+    const step = magnitude(direction);
+    const velocity = combinedVelocity(entity);
+    direction.x = velocity.x * step / speed;
+    direction.y = velocity.y * step / speed;
+    direction.z = velocity.z * step / speed;
+  }
+}
+
+function add(target: Vec3, value: Vec3): void {
+  target.x += value.x;
+  target.y += value.y;
+  target.z += value.z;
+}
+
+function combinedVelocity(entity: PhysicsEntity): Vec3 {
+  return {
+    x: entity.velocity.x + entity.falling.x,
+    y: entity.velocity.y + entity.falling.y,
+    z: entity.velocity.z + entity.falling.z,
+  };
+}
+
+function sameVector(first: Vec3, second: Vec3): boolean {
+  return first.x === second.x && first.y === second.y && first.z === second.z;
 }

@@ -34,12 +34,9 @@ describe("advanced ground movement", () => {
   });
 
   it("preserves tangential speed while projecting velocity along walls", () => {
-    const world = new OctreeCollisionWorld(mapWith(
-      solid({ x: 0, y: 0, z: 0 }, 16),
-      solid({ x: 16, y: 0, z: 8 }, 16),
-    ));
+    const world = new OctreeCollisionWorld(mapWith(solid({ x: 16, y: 0, z: 0 }, 32)));
     const mover = new GroundMover(world);
-    const player = createPlayer({ x: 11.8, y: 8, z: 30 });
+    const player = createPlayer({ x: 11.8, y: 8, z: 20 });
     player.physicsState = PhysicsState.Fall;
     player.velocity = { x: 100, y: 20, z: 0 };
     expect(mover.move(player, { x: 1, y: 0.2, z: 0 })).toBe(false);
@@ -58,7 +55,12 @@ describe("advanced ground movement", () => {
     player.physicsState = PhysicsState.Floor;
     player.floor = { x: 0, y: 0, z: 1 };
     player.move = 1;
-    expect(mover.move(player, { x: 0.1, y: 0, z: 0 })).toBe(true);
+    player.velocity = { x: 100, y: 0, z: 0 };
+    const direction = { x: 0.1, y: 0, z: 0 };
+    expect(mover.move(player, direction)).toBe(true);
+    expect(player.position.z).toBe(34);
+    expect(player.physicsState).toBe(PhysicsState.StepDown);
+    expect(mover.move(player, direction)).toBe(true);
     expect(player.position.z).toBeLessThan(34);
     expect(player.position.z).toBeGreaterThan(33.9);
     expect(player.physicsState).toBe(PhysicsState.StepDown);
@@ -79,6 +81,26 @@ describe("advanced ground movement", () => {
     expect(collision!.normal.z).toBeCloseTo(Math.SQRT1_2, 5);
     expect(collision!.normal.z).toBeGreaterThan(0.5);
     expect(collision!.normal.z).toBeLessThan(0.867);
+  });
+
+  it("does not turn a wall taller than STAIRHEIGHT into a climbable staircase", () => {
+    const world = new OctreeCollisionWorld(mapWith(
+      solid({ x: 0, y: 0, z: 0 }, 16),
+      solid({ x: 16, y: 0, z: 0 }, 32),
+    ));
+    const mover = new GroundMover(world);
+    const player = createPlayer({ x: 11.8, y: 8, z: 30 });
+    player.physicsState = PhysicsState.Floor;
+    player.floor = { x: 0, y: 0, z: 1 };
+    player.move = 1;
+    player.velocity = { x: 100, y: 0, z: 0 };
+    const direction = { x: 1, y: 0, z: 0 };
+    for (let index = 0; index < 10; index++) {
+      let retries = 0;
+      while (!mover.move(player, direction) && ++retries < 5) {}
+    }
+    expect(player.position.z).toBeLessThanOrEqual(30 + 4.1);
+    expect(player.position.x).toBeLessThan(16);
   });
 });
 

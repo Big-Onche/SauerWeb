@@ -97,13 +97,19 @@ export class OctreeCollisionWorld {
 
   private collidePlanes(entity: PhysicsEntity, direction: Vec3, cutoff: number, planes: Plane[]): CollisionResult | undefined {
     let best: CollisionResult | undefined;
+    let bestDistance = -Infinity;
     const directionLength = magnitude(direction);
     for (const plane of planes) {
       const support = capsuleSupport(entity, { x: -plane.x, y: -plane.y, z: -plane.z });
       const distance = dot(plane, support) + plane.offset;
       if (distance >= 0) return undefined;
-      if (best && distance <= best.distance) continue;
-      if (directionLength > 0 && dot(plane, direction) >= -cutoff * directionLength) continue;
+      if (distance <= bestDistance) continue;
+      bestDistance = distance;
+      best = undefined;
+      if (directionLength > 0) {
+        if (dot(plane, direction) >= -cutoff * directionLength) continue;
+        if (entity.entityType < PhysicsEntityType.Camera && distance < collisionMargin(entity, direction, plane)) continue;
+      }
       best = { normal: { x: plane.x, y: plane.y, z: plane.z }, distance };
     }
     return best;
@@ -151,7 +157,8 @@ function collideMapModel(entity: PhysicsEntity, direction: Vec3, model: MapModel
     const distance = Math.hypot(dx, dy) - entity.radius - modelRadius;
     if (distance >= 0) return undefined;
     penetration = distance;
-    if (distance > (entity.position.z < rotatedCenter.z ? below : above) && (magnitude(direction) === 0 || -dx * direction.x - dy * direction.y > 0)) {
+    if (distance > (entity.position.z < rotatedCenter.z ? below : above) &&
+        (magnitude(direction) === 0 || -dx * direction.x - dy * direction.y > 0)) {
       normal = { x: dx, y: dy, z: 0 };
       normalize(normal);
     }
@@ -204,6 +211,14 @@ function capsuleSupport(entity: PhysicsEntity, direction: Vec3): Vec3 {
     y: entity.position.y + normal.y * entity.radius,
     z: entity.position.z + (direction.z > 0 ? entity.aboveEye - entity.radius : -(entity.eyeHeight - entity.radius)) + normal.z * entity.radius,
   };
+}
+
+function collisionMargin(entity: PhysicsEntity, direction: Vec3, plane: Plane): number {
+  if (direction.z * plane.z < 0) {
+    return entity.zMargin - (entity.eyeHeight + entity.aboveEye) / (direction.z < 0 ? 3 : 4);
+  }
+  if (direction.x * plane.x < 0 || direction.y * plane.y < 0) return -entity.radius;
+  return 0;
 }
 
 function cubeVertices(cube: OctreeCube): Vec3[] {
