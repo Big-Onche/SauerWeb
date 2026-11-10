@@ -7,6 +7,7 @@ import { Color3 } from "@babylonjs/core/Maths/math.color";
 import type { Scene } from "@babylonjs/core/scene";
 import type { ResolvedTexture } from "../assets/types";
 import type { Lightmap } from "../map/types";
+import { DEFAULT_MAP_LIGHTING, sauerColorBytes } from "./MapLighting";
 
 export type SauerSurfaceMode = "opaque" | "alpha-test" | "transparent" | "special";
 export type SauerLightmapMode = "ambient" | "bright" | "dark" | "atlas";
@@ -35,7 +36,6 @@ const MAT_LAVA = 2 << 2;
 const MAT_GLASS = 3 << 2;
 const MAT_ALPHA = 4 << 8;
 const LIGHTMAP_ID_RESERVED = 6;
-const DEFAULT_AMBIENT = 0x191919;
 const DEFAULT_FULLBRIGHT_LEVEL = 128;
 
 export function describeSauerMaterial(resolved: ResolvedTexture, cubeMaterial: number, lightmapId: number,
@@ -76,7 +76,8 @@ export class MaterialCache {
   private readonly textures = new Map<string, Texture>();
   private readonly lightmapTextures = new Map<number, RawTexture>();
 
-  constructor(private readonly scene: Scene, private readonly lightmaps: Lightmap[] = [], private readonly ambient = DEFAULT_AMBIENT) {}
+  constructor(private readonly scene: Scene, private readonly lightmaps: Lightmap[] = [],
+              private readonly ambient = DEFAULT_MAP_LIGHTING.ambient) {}
 
   get(descriptor: SauerMaterialDescriptor): StandardMaterial {
     const key = stableKey(descriptor);
@@ -205,8 +206,7 @@ export class MaterialCache {
   private reservedLightmapColor(lightmapId: number): Uint8Array {
     if (lightmapId === 4 || lightmapId === 5) return new Uint8Array([0, 0, 0]);
     if (lightmapId === 2 || lightmapId === 3) return new Uint8Array([DEFAULT_FULLBRIGHT_LEVEL, DEFAULT_FULLBRIGHT_LEVEL, DEFAULT_FULLBRIGHT_LEVEL]);
-    const ambient = this.ambient <= 0xff ? this.ambient * 0x010101 : this.ambient;
-    return new Uint8Array([(ambient >> 16) & 0xff, (ambient >> 8) & 0xff, ambient & 0xff]);
+    return new Uint8Array(sauerColorBytes(this.ambient));
   }
 }
 

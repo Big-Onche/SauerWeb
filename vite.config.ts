@@ -41,6 +41,7 @@ interface ConfigState {
   skyYaw: number;
   skySpin: number;
   skyColor: [number, number, number];
+  lighting: { ambient?: number; skylight?: number };
   shaderName: string;
   shaderParameters: Record<string, number[]>;
 }
@@ -68,6 +69,7 @@ function readTextureManifest(mapName: string): {
   unsupported: ConfigState["unsupported"];
   sources: string[];
   skybox?: ServerSkybox;
+  lighting: ConfigState["lighting"];
 } {
   const state: ConfigState = {
     slots: [],
@@ -80,12 +82,19 @@ function readTextureManifest(mapName: string): {
     skyYaw: 0,
     skySpin: 0,
     skyColor: [1, 1, 1],
+    lighting: {},
     shaderName: "stdworld",
     shaderParameters: {},
   };
   executeConfig("data/default_map_settings.cfg", state, 0);
   executeConfig(`packages/base/${mapName}.cfg`, state, 0);
-  return { slots: state.slots, unsupported: state.unsupported, sources: state.sources, skybox: resolveSkybox(state) };
+  return {
+    slots: state.slots,
+    unsupported: state.unsupported,
+    sources: state.sources,
+    skybox: resolveSkybox(state),
+    lighting: state.lighting,
+  };
 }
 
 function executeConfig(relativeName: string, state: ConfigState, depth: number): void {
@@ -153,6 +162,10 @@ function executeStatement(text: string, source: string, line: number, state: Con
   }
   if (command === "skyboxcolour") {
     state.skyColor = [colorArg(args[0]), colorArg(args[1]), colorArg(args[2])];
+    return;
+  }
+  if (command === "ambient" || command === "skylight") {
+    state.lighting[command] = sauerColorArg(args, command === "ambient" ? 1 : 0);
     return;
   }
   if (["texscale", "texrotate", "texoffset", "texscroll", "texlayer", "texalpha", "texcolor"].includes(command)) {
@@ -309,6 +322,17 @@ function resolveSkyFace(basePath: string, suffix: string): string | undefined {
 function colorArg(value: string | undefined): number {
   const component = numberArg(value, 255);
   return clamp(component > 1 ? component / 255 : component, 0, 1);
+}
+
+function sauerColorArg(args: string[], minimum: number): number {
+  if (args.length > 1) {
+    const red = clampInteger(numberArg(args[0], 0), 0, 0xff);
+    const green = clampInteger(numberArg(args[1], 0), 0, 0xff);
+    const blue = clampInteger(numberArg(args[2], 0), 0, 0xff);
+    return Math.max(minimum, red << 16 | green << 8 | blue);
+  }
+  const color = clampInteger(numberArg(args[0], minimum), minimum, 0xffffff);
+  return color <= 0xff ? color * 0x010101 : color;
 }
 
 function numberArg(value: string | undefined, fallback: number): number {

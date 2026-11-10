@@ -49,7 +49,7 @@ IDs 0–5 retain Sauerbraten's ambient, directional, bright, and dark reserved m
 
 Serialized 16-bit lightmap coordinates are normalized by 65536 and shifted by half a 512-pixel lumel, matching `addcubeverts`. They are supplied as Babylon UV2 coordinates. Materials multiply the diffuse result by the baked lightmap and disable Babylon's dynamic-light contribution, so the baked illumination remains authoritative. Layered surfaces use the secondary ID and duplicated UV set for the bottom layer; an RGBA primary atlas supplies the baked blend mask for the top layer.
 
-The restricted configuration reader resolves `skybox` and legacy `loadsky` declarations without executing CubeScript. Cubemap faces use Sauerbraten's `rt/lf/bk/ft/up/dn` package convention, reordered for the renderer's Z-up to Y-up coordinate conversion. JPEG, PNG, wildcard names, yaw, spin, and sky color metadata are retained.
+The restricted configuration reader resolves `skybox`, legacy `loadsky`, `ambient`, and `skylight` declarations without executing CubeScript. Map CFG lighting values override values serialized in the OGZ, which in turn override Sauerbraten's defaults. `ambient` supplies the reserved unlit lightmap. `skylight` remains baked into serialized atlas pixels, matching Sauerbraten rather than applying a second runtime light over them. Cubemap faces use Sauerbraten's `rt/lf/bk/ft/up/dn` package convention, reordered for the renderer's Z-up to Y-up coordinate conversion. JPEG, PNG, wildcard names, yaw, spin, and sky color metadata are retained.
 
 ## Deliberate next steps
 

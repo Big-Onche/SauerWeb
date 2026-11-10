@@ -34,6 +34,12 @@ export interface TextureManifest {
   unsupported: UnsupportedConfigCommand[];
   sources: string[];
   skybox?: SkyboxManifest;
+  lighting?: MapLightingOverrides;
+}
+
+export interface MapLightingOverrides {
+  ambient?: number;
+  skylight?: number;
 }
 
 export interface SkyboxManifest {

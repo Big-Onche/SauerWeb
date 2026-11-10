@@ -1,7 +1,6 @@
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Engine } from "@babylonjs/core/Engines/engine";
-import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { CubeTexture } from "@babylonjs/core/Materials/Textures/cubeTexture";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
@@ -12,11 +11,12 @@ import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
 import type { SauerMap } from "../map/types";
-import type { ResolvedTexture, SkyboxManifest } from "../assets/types";
+import type { MapLightingOverrides, ResolvedTexture, SkyboxManifest } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "./geometry";
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 import { toBabylonPosition, toBabylonYawDirection } from "./coordinates";
+import { resolveMapLighting } from "./MapLighting";
 
 export interface SceneStats {
   meshes: number;
@@ -42,8 +42,6 @@ export class MapScene {
     this.materialCache = new MaterialCache(this.scene);
     this.scene.useRightHandedSystem = true;
     this.scene.clearColor = new Color4(0.055, 0.067, 0.06, 1);
-    this.scene.ambientColor = new Color3(0.42, 0.45, 0.4);
-    new HemisphericLight("sky", new Vector3(0.25, 1, 0.1), this.scene).intensity = 1.25;
 
     this.camera = new UniversalCamera("camera", new Vector3(0, 64, 0), this.scene);
     this.camera.minZ = 0.1;
@@ -63,11 +61,13 @@ export class MapScene {
     new ResizeObserver(() => this.engine.resize()).observe(canvas);
   }
 
-  async loadMap(map: SauerMap, textures: ResolvedTexture[], skybox?: SkyboxManifest): Promise<SceneStats> {
+  async loadMap(map: SauerMap, textures: ResolvedTexture[], skybox?: SkyboxManifest,
+                lightingOverrides?: MapLightingOverrides): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
+    const lighting = resolveMapLighting(map, lightingOverrides);
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.materialCache.dispose();
-    this.materialCache = new MaterialCache(this.scene, map.lightmaps, mapIntegerVariable(map, "ambient", 0x191919));
+    this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
     this.fallbackMaterial?.dispose(true, true);
     this.fallbackMaterial = undefined;
     this.skyboxMaterial?.dispose(true, true);
@@ -185,11 +185,6 @@ export class MapScene {
     return Number.isFinite(minimum.x) ? minimum.add(maximum).scale(0.5) : undefined;
   }
 
-}
-
-function mapIntegerVariable(map: SauerMap, name: string, fallback: number): number {
-  const variable = map.variables.find((entry) => entry.name === name && entry.type === "integer");
-  return variable?.type === "integer" ? variable.value : fallback;
 }
 
 async function rotateImageClockwise(url: string): Promise<string> {
