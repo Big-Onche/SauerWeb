@@ -107,7 +107,7 @@ export class MapScene {
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.weaponHUD.setVisible(false);
-    this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events);
+    this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
     new WeaponAudio(this.weapons.events);
 
     this.engine.runRenderLoop(() => {
@@ -186,6 +186,7 @@ export class MapScene {
     vertices += loadedMapModels.vertices;
     this.materialCache.setWireframe(this.wireframe);
     await this.createSkybox(map, resolveMapSky(map, skyOverrides), generation);
+    await this.weaponRenderer.loadHudGuns();
     this.placeCamera(map, batches);
     return {
       meshes: batches.length + materialBatches.length + loadedMapModels.meshes.length,
@@ -230,6 +231,7 @@ export class MapScene {
     this.physicsInput.enabled = playerMode;
     this.weaponInput.enabled = playerMode;
     this.weaponHUD.setVisible(playerMode);
+    this.weaponRenderer.setHudGunVisible(playerMode);
     if (playerMode) {
       this.freeCamera.detachControl();
       this.physics.reset(performance.now());

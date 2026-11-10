@@ -6,7 +6,7 @@ import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import type { Scene } from "@babylonjs/core/scene";
-import type { MapModelAsset, MapModelMeshSettings, MapModelSkin } from "../assets/types";
+import type { HudGunAdjustment, MapModelAsset, MapModelMeshSettings, MapModelSkin } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import type { RegisteredMapEntity } from "../map/types";
 import { toBabylonPosition } from "./coordinates";
@@ -14,6 +14,14 @@ import type { MapModelCollision } from "../physics/collision";
 
 export interface ModelGeometry {
   meshes: ModelGeometryMesh[];
+  joints?: ModelJointPose[];
+}
+
+export interface ModelJointPose {
+  name: string;
+  parent: number;
+  position: [number, number, number];
+  orientation: [number, number, number, number];
 }
 
 export interface ModelGeometryMesh {
@@ -202,11 +210,166 @@ async function fetchModelGeometry(asset: MapModelAsset): Promise<ModelGeometry> 
   const response = await fetch(url, { cache: "no-cache" });
   if (!response.ok) throw new Error(`Could not load ${asset.geometryPath} (${response.status}).`);
   if (asset.format === "OBJ") return parseObj(await response.text());
+  if (asset.format === "MD5") return parseMd5(await response.text());
   const bytes = await response.arrayBuffer();
   if (asset.format === "MD2") return parseMd2(bytes);
   if (asset.format === "MD3") return parseMd3(bytes);
   if (asset.format === "IQM") return parseIqm(bytes);
   throw new Error(`${asset.format ?? "Unknown"} model loading is not supported.`);
+}
+
+export function parseMd5(source: string, animationSource?: string, adjustments: HudGunAdjustment[] = []): ModelGeometry {
+  const jointBlock = source.match(/joints\s*\{([\s\S]*?)\}/i)?.[1];
+  if (!jointBlock) throw new Error("MD5 model has no joints block.");
+  const bindJoints = [...jointBlock.matchAll(/^\s*"([^"]*)"\s+(-?\d+)\s+\(\s*([^)]*?)\s*\)\s+\(\s*([^)]*?)\s*\)/gm)].map((match) => {
+    const position = parseMd5Vector(match[3]);
+    const orientation = parseMd5Vector(match[4]);
+    position[1] *= -1;
+    orientation[0] *= -1;
+    orientation[2] *= -1;
+    return { name: match[1], parent: Number(match[2]), position, orientation: md5Quaternion(orientation) };
+  });
+  if (!bindJoints.length) throw new Error("MD5 model has no readable joints.");
+  const joints = animationSource ? parseMd5AnimationFrame(animationSource, adjustments) : bindJoints;
+  if (joints.length !== bindJoints.length) throw new Error("MD5 animation does not match its mesh skeleton.");
+  const meshes: ModelGeometryMesh[] = [];
+  let meshIndex = 0;
+  for (const match of source.matchAll(/mesh\s*\{([\s\S]*?)\}/gi)) {
+    const block = match[1];
+    const name = block.match(/shader\s+"([^"]*)"/i)?.[1].split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || `mesh-${meshIndex}`;
+    const vertices = [...block.matchAll(/^\s*vert\s+(\d+)\s+\(\s*([^)]*?)\s*\)\s+(\d+)\s+(\d+)/gm)].map((vertex) => ({
+      index: Number(vertex[1]),
+      uv: vertex[2].trim().split(/\s+/).map(Number),
+      firstWeight: Number(vertex[3]),
+      weightCount: Number(vertex[4]),
+    }));
+    const triangles = [...block.matchAll(/^\s*tri\s+\d+\s+(\d+)\s+(\d+)\s+(\d+)/gm)];
+    const weights = [...block.matchAll(/^\s*weight\s+(\d+)\s+(\d+)\s+([^\s]+)\s+\(\s*([^)]*?)\s*\)/gm)].map((weight) => ({
+      index: Number(weight[1]),
+      joint: Number(weight[2]),
+      bias: Number(weight[3]),
+      position: flipMd5Weight(parseMd5Vector(weight[4])),
+    }));
+    if (!vertices.length || !triangles.length || !weights.length) continue;
+    const positions = new Array<number>(vertices.length * 3).fill(0);
+    const uvs = new Array<number>(vertices.length * 2).fill(0);
+    for (const vertex of vertices) {
+      let x = 0;
+      let y = 0;
+      let z = 0;
+      for (let offset = 0; offset < vertex.weightCount; offset++) {
+        const weight = weights[vertex.firstWeight + offset];
+        const joint = weight && joints[weight.joint];
+        if (!weight || !joint) throw new Error("MD5 vertex references an invalid weight or joint.");
+        const rotated = rotateMd5Vector(weight.position, joint.orientation);
+        x += (joint.position[0] + rotated[0]) * weight.bias;
+        y += (joint.position[1] + rotated[1]) * weight.bias;
+        z += (joint.position[2] + rotated[2]) * weight.bias;
+      }
+      positions.splice(vertex.index * 3, 3, x, z, y);
+      uvs.splice(vertex.index * 2, 2, vertex.uv[0] ?? 0, vertex.uv[1] ?? 0);
+    }
+    const indices: number[] = [];
+    for (const triangle of triangles) indices.push(Number(triangle[1]), Number(triangle[2]), Number(triangle[3]));
+    meshes.push({ name, positions, uvs, indices });
+    meshIndex++;
+  }
+  if (!meshes.length) throw new Error("MD5 model contains no renderable geometry.");
+  return { meshes, joints };
+}
+
+function parseMd5AnimationFrame(source: string, adjustments: HudGunAdjustment[]): ModelJointPose[] {
+  const hierarchyBlock = source.match(/hierarchy\s*\{([\s\S]*?)\}/i)?.[1];
+  const baseBlock = source.match(/baseframe\s*\{([\s\S]*?)\}/i)?.[1];
+  const frameBlock = source.match(/frame\s+0\s*\{([\s\S]*?)\}/i)?.[1];
+  if (!hierarchyBlock || !baseBlock || !frameBlock) throw new Error("MD5 animation has no readable first frame.");
+  const hierarchy = [...hierarchyBlock.matchAll(/^\s*"([^"]*)"\s+(-?\d+)\s+(\d+)\s+(\d+)/gm)].map((match) => ({
+    name: match[1], parent: Number(match[2]), flags: Number(match[3]), start: Number(match[4]),
+  }));
+  const base = [...baseBlock.matchAll(/^\s*\(\s*([^)]*?)\s*\)\s+\(\s*([^)]*?)\s*\)/gm)].map((match) => ({
+    position: flipMd5Weight(parseMd5Vector(match[1])), orientation: flipMd5Orientation(parseMd5Vector(match[2])),
+  }));
+  const data = frameBlock.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi)?.map(Number) ?? [];
+  const joints: ModelJointPose[] = [];
+  const adjustmentByBone = new Map(adjustments.map((adjustment) => [adjustment.bone, adjustment]));
+  hierarchy.forEach((entry, index) => {
+    const localPosition = [...base[index].position] as [number, number, number];
+    const localOrientation = [...base[index].orientation] as [number, number, number];
+    let offset = entry.start;
+    if (entry.flags & 1) localPosition[0] = data[offset++];
+    if (entry.flags & 2) localPosition[1] = -data[offset++];
+    if (entry.flags & 4) localPosition[2] = data[offset++];
+    if (entry.flags & 8) localOrientation[0] = -data[offset++];
+    if (entry.flags & 16) localOrientation[1] = data[offset++];
+    if (entry.flags & 32) localOrientation[2] = -data[offset++];
+    const adjustment = adjustmentByBone.get(entry.name);
+    let position = localPosition;
+    let orientation = md5Quaternion(localOrientation);
+    if (adjustment) {
+      position = [position[0] + adjustment.translate[0], position[1] + adjustment.translate[1], position[2] + adjustment.translate[2]];
+      orientation = applyMd5Adjustment(orientation, adjustment);
+    }
+    if (entry.parent >= 0) {
+      const parent = joints[entry.parent];
+      const rotated = rotateMd5Vector(position, parent.orientation);
+      position = [parent.position[0] + rotated[0], parent.position[1] + rotated[1], parent.position[2] + rotated[2]];
+      orientation = multiplyMd5Quaternions(parent.orientation, orientation);
+    }
+    joints.push({ name: entry.name, parent: entry.parent, position, orientation });
+  });
+  return joints;
+}
+
+function applyMd5Adjustment(orientation: [number, number, number, number], adjustment: HudGunAdjustment): [number, number, number, number] {
+  let result = orientation;
+  if (adjustment.yaw) result = multiplyMd5Quaternions(axisAngleMd5Quaternion([0, 0, 1], adjustment.yaw), result);
+  if (adjustment.pitch) result = multiplyMd5Quaternions(axisAngleMd5Quaternion([0, -1, 0], adjustment.pitch), result);
+  if (adjustment.roll) result = multiplyMd5Quaternions(axisAngleMd5Quaternion([-1, 0, 0], adjustment.roll), result);
+  return result;
+}
+
+function axisAngleMd5Quaternion(axis: [number, number, number], degrees: number): [number, number, number, number] {
+  const halfAngle = degrees * Math.PI / 360;
+  const sine = Math.sin(halfAngle);
+  return [axis[0] * sine, axis[1] * sine, axis[2] * sine, Math.cos(halfAngle)];
+}
+
+function parseMd5Vector(value: string): [number, number, number] {
+  const fields = value.trim().split(/\s+/).map(Number);
+  return [fields[0] ?? 0, fields[1] ?? 0, fields[2] ?? 0];
+}
+
+function flipMd5Weight(vector: [number, number, number]): [number, number, number] {
+  vector[1] *= -1;
+  return vector;
+}
+
+function flipMd5Orientation(vector: [number, number, number]): [number, number, number] {
+  vector[0] *= -1;
+  vector[2] *= -1;
+  return vector;
+}
+
+function md5Quaternion(vector: [number, number, number]): [number, number, number, number] {
+  return [vector[0], vector[1], vector[2], -Math.sqrt(Math.max(0, 1 - vector[0] ** 2 - vector[1] ** 2 - vector[2] ** 2))];
+}
+
+function rotateMd5Vector(vector: [number, number, number], quaternion: [number, number, number, number]): [number, number, number] {
+  const [x, y, z, w] = quaternion;
+  const tx = 2 * (y * vector[2] - z * vector[1]);
+  const ty = 2 * (z * vector[0] - x * vector[2]);
+  const tz = 2 * (x * vector[1] - y * vector[0]);
+  return [vector[0] + w * tx + y * tz - z * ty, vector[1] + w * ty + z * tx - x * tz,
+    vector[2] + w * tz + x * ty - y * tx];
+}
+
+function multiplyMd5Quaternions(left: [number, number, number, number], right: [number, number, number, number]): [number, number, number, number] {
+  return [
+    left[3] * right[0] + left[0] * right[3] + left[1] * right[2] - left[2] * right[1],
+    left[3] * right[1] - left[0] * right[2] + left[1] * right[3] + left[2] * right[0],
+    left[3] * right[2] + left[0] * right[1] - left[1] * right[0] + left[2] * right[3],
+    left[3] * right[3] - left[0] * right[0] - left[1] * right[1] - left[2] * right[2],
+  ];
 }
 
 export function parseObj(source: string): ModelGeometry {

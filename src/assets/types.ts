@@ -38,6 +38,26 @@ export interface TextureManifest {
   mapModels: MapModelAsset[];
 }
 
+export interface HudGunAsset {
+  gun: number;
+  model: string;
+  weapon: MapModelAsset;
+  hands: MapModelAsset;
+  handsAnimationPath: string;
+  weaponAnimationPath: string;
+  attachmentBone: string;
+  handsAdjustments: HudGunAdjustment[];
+  weaponAdjustments: HudGunAdjustment[];
+}
+
+export interface HudGunAdjustment {
+  bone: string;
+  yaw: number;
+  pitch: number;
+  roll: number;
+  translate: [number, number, number];
+}
+
 export interface MapModelAsset {
   index: number;
   name: string;

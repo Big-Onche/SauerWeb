@@ -21,4 +21,4 @@ Current local play spawns with the native default FFA state: 100 health, 25 blue
 
 ## Deliberate boundary
 
-This change establishes deterministic local combat and a damageable interface. Multiplayer messages, bots, item pickup respawn rules, full first-person weapon model animation, and production target-dummy placement remain separate integrations; none are approximated inside the authoritative weapon logic.
+This change establishes deterministic local combat and a damageable interface. The first-person renderer loads the original MD5 hand and weapon bind poses, switches them with the selected gun, and applies a short visual recoil without affecting authoritative combat. Native skeletal animation playback, multiplayer messages, bots, item pickup respawn rules, and production target-dummy placement remain separate integrations.

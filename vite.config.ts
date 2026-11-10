@@ -400,7 +400,7 @@ function resolveMapModels(names: string[]): Array<{
     })).find((candidate) => candidate.directory);
     if (!detected) return { index, name, status: "missing", reason: `No recognized Sauerbraten model configuration was found for ${name}.` };
     const configPath = path.join(detected.directory!, detected.config);
-    if (!["MD2", "MD3", "OBJ", "IQM"].includes(detected.format)) {
+    if (!["MD2", "MD3", "MD5", "OBJ", "IQM"].includes(detected.format)) {
       return {
         index,
         name,
@@ -448,7 +448,10 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
         diffusePath: resolveModelAssetPath(configDirectory, args[1]),
         masksPath: args[2] ? resolveModelAssetPath(configDirectory, args[2]) : undefined,
       });
-    } else if (command === "mdlscale") settings.scale = (numberArg(args[0], 100) > 0 ? numberArg(args[0], 100) / 100 : 1) / 4;
+    } else if (command === "mdlscale") {
+      const scale = numberArg(args[0], 100) > 0 ? numberArg(args[0], 100) / 100 : 1;
+      settings.scale = scale / (format === "MD5" ? 1 : 4);
+    }
     else if (command === `${format.toLowerCase()}cullface` && args[0]) {
       meshSettings.push({ mesh: args[0], cullFace: numberArg(args[1], 1) !== 0 });
     }
@@ -530,12 +533,88 @@ function modelPercent(value: string | undefined, fallback: number): number {
   return percent > 0 ? percent / 100 : percent < 0 ? 0 : fallback;
 }
 
+function resolveHudGuns() {
+  const names = ["fist", "shotg", "chaing", "rocket", "rifle", "gl", "pistol"];
+  return names.map((model, gun) => {
+    const directory = path.join(packagesDirectory, "models", "hudguns", model);
+    const configPath = path.join(directory, "md5.cfg");
+    const weapon = resolveRenderableMapModel(gun, `hudguns/${model}`, directory, configPath, "MD5");
+    const configSource = fs.readFileSync(configPath, "utf8");
+    const pose = resolveHudGunPose(configSource);
+    const linkTag = configSource.match(/md5link\s+0\s+1\s+(\S+)/i)?.[1] ?? "tag_weapon";
+    const attachmentBone = [...configSource.matchAll(/md5tag\s+(\S+)\s+(\S+)/gi)]
+      .find((match) => match[2] === linkTag)?.[1] ?? linkTag;
+    const handsDirectory = path.join(packagesDirectory, "models", "mrfixit", "hudguns");
+    const hands = {
+      index: gun,
+      name: `mrfixit/hudguns/${model}`,
+      status: fs.existsSync(path.join(handsDirectory, "fixit_hands.md5mesh")) ? "ready" as const : "missing" as const,
+      format: "MD5",
+      configPath: "models/mrfixit/hudguns/md5.cfg",
+      geometryPath: "models/mrfixit/hudguns/fixit_hands.md5mesh",
+      skins: [{ mesh: "fixit_hands", diffusePath: "models/mrfixit/hudguns/fixit_hands.png",
+        masksPath: "models/mrfixit/hudguns/fixit_hands_mask.png" }],
+      scale: "scale" in weapon ? weapon.scale : 0.75,
+      translate: "translate" in weapon ? weapon.translate : [0, 0, 0] as [number, number, number],
+      cullFace: true,
+      ambient: 0.3,
+      specular: 1,
+      reason: fs.existsSync(path.join(handsDirectory, "fixit_hands.md5mesh")) ? "" : "The HUD hands mesh was not found.",
+    };
+    return {
+      gun,
+      model,
+      weapon,
+      hands,
+      handsAnimationPath: resolveModelAssetPath(directory, pose.animations[0]),
+      weaponAnimationPath: resolveModelAssetPath(directory, pose.animations[1]),
+      attachmentBone,
+      handsAdjustments: pose.adjustments[0],
+      weaponAdjustments: pose.adjustments[1],
+    };
+  });
+}
+
+function resolveHudGunPose(source: string) {
+  type Adjustment = { bone: string; yaw: number; pitch: number; roll: number; translate: [number, number, number] };
+  const animations = ["", ""];
+  const adjustments: [Adjustment[], Adjustment[]] = [[], []];
+  let part = 0;
+  let current = new Map<string, Adjustment>();
+  for (const statement of splitStatements(source)) {
+    const tokens = tokenize(statement.text);
+    const command = tokens[0]?.toLowerCase();
+    const args = tokens.slice(1);
+    if (command === "md5load") {
+      part = 1;
+      current = new Map();
+    } else if (command === "md5adjust" && args[0]) {
+      current.set(args[0], {
+        bone: args[0],
+        yaw: numberArg(args[1], 0),
+        pitch: numberArg(args[2], 0),
+        roll: numberArg(args[3], 0),
+        translate: [numberArg(args[4], 0) / 4, numberArg(args[5], 0) / 4, numberArg(args[6], 0) / 4],
+      });
+    } else if (command === "md5anim" && args[0]?.toLowerCase() === "gun idle" && !animations[part]) {
+      animations[part] = args[1] ?? "";
+      adjustments[part] = [...current.values()];
+    }
+  }
+  return { animations, adjustments };
+}
+
 function sauerMapsPlugin(): Plugin {
   let cachedMaps: MapListItem[] | undefined;
 
   return {
     name: "sauer-maps",
     configureServer(server) {
+      server.middlewares.use("/api/hudguns", (_request, response) => {
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.end(JSON.stringify(resolveHudGuns()));
+      });
       server.middlewares.use("/api/packages", (request, response, next) => {
         let requestedPath: string;
         try {

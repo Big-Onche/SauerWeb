@@ -28,7 +28,7 @@ Controls: **WASD / arrows** move, the **mouse** looks around, and the diamond bu
 - Starts the camera at the first player-start entity and centralizes Sauerbraten Z-up → Babylon Y-up conversion.
 - Reads a restricted declarative subset of default, package, and map `.cfg` files; resolves original image materials, VSlot UV transforms, and six-face map skyboxes from the Sauerbraten package tree.
 - Decodes the original 512×512 RGB/RGBA lightmap atlases, preserves reserved and serialized lightmap indexing, and binds the baked UV2 lighting and layer masks through Babylon materials.
-- Native MD2, MD3, IQM, and OBJ mapmodels are rendered with Sauerbraten configuration transforms, skins, alpha testing, and culling. MD5 models and older map versions remain unsupported.
+- Native MD2, MD3, MD5, IQM, and OBJ models are rendered with Sauerbraten configuration transforms, skins, alpha testing, and culling. First-person MD5 HUD guns use the original weapon and Mr. Fixit hand assets. Older map versions remain unsupported.
 
 See [docs/MAP_FORMAT.md](docs/MAP_FORMAT.md) for the source mapping and format notes.
 
