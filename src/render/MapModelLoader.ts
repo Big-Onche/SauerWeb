@@ -6,7 +6,7 @@ import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import type { Scene } from "@babylonjs/core/scene";
-import type { MapModelAsset, MapModelSkin } from "../assets/types";
+import type { MapModelAsset, MapModelMeshSettings, MapModelSkin } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import type { RegisteredMapEntity } from "../map/types";
 import { toBabylonPosition } from "./coordinates";
@@ -83,10 +83,11 @@ function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapMode
   data.normals = normals;
   data.applyToMesh(mesh, true);
   const skin = selectSkin(asset.skins ?? [], source.name);
-  const materialKey = `${source.name}:${skin?.diffusePath ?? ""}`;
+  const meshSettings = selectMeshSettings(asset.meshSettings ?? [], source.name);
+  const materialKey = `${source.name}:${skin?.diffusePath ?? ""}:${meshSettings?.cullFace ?? asset.cullFace ?? true}`;
   let material = materials.get(materialKey);
   if (!material) {
-    material = createModelMaterial(scene, asset, skin, wireframe, materialKey);
+    material = createModelMaterial(scene, asset, skin, meshSettings, wireframe, materialKey);
     materials.set(materialKey, material);
   }
   mesh.material = material;
@@ -109,10 +110,10 @@ function translateAndScale(positions: number[], translate: [number, number, numb
   return result;
 }
 
-function createModelMaterial(scene: Scene, asset: MapModelAsset, skin: MapModelSkin | undefined, wireframe: boolean,
-                             key: string): StandardMaterial {
+function createModelMaterial(scene: Scene, asset: MapModelAsset, skin: MapModelSkin | undefined,
+                             meshSettings: MapModelMeshSettings | undefined, wireframe: boolean, key: string): StandardMaterial {
   const material = new StandardMaterial(`mapmodel-material-${asset.index}-${key}`, scene);
-  material.backFaceCulling = asset.cullFace ?? true;
+  material.backFaceCulling = meshSettings?.cullFace ?? asset.cullFace ?? true;
   material.wireframe = wireframe;
   material.specularColor = Color3.White().scale(asset.specular ?? 1);
   material.ambientColor = Color3.White().scale(asset.ambient ?? 0.3);
@@ -137,6 +138,10 @@ function createModelMaterial(scene: Scene, asset: MapModelAsset, skin: MapModelS
 
 function selectSkin(skins: MapModelSkin[], meshName: string): MapModelSkin | undefined {
   return skins.find((skin) => skin.mesh === meshName) ?? skins.find((skin) => skin.mesh === "*") ?? skins[0];
+}
+
+function selectMeshSettings(settings: MapModelMeshSettings[], meshName: string): MapModelMeshSettings | undefined {
+  return settings.find((item) => item.mesh === meshName) ?? settings.find((item) => item.mesh === "*");
 }
 
 function modelIssue(entity: RegisteredMapEntity, index: number, asset: MapModelAsset | undefined): string {
@@ -200,7 +205,7 @@ function buildObjGroup(name: string, faces: string[][], sourcePositions: number[
   };
   for (const face of faces) {
     const faceIndices = face.map(vertexIndex);
-    for (let index = 1; index + 1 < faceIndices.length; index++) indices.push(faceIndices[0], faceIndices[index], faceIndices[index + 1]);
+    for (let index = 1; index + 1 < faceIndices.length; index++) indices.push(faceIndices[index + 1], faceIndices[index], faceIndices[0]);
   }
   return { name, positions, uvs, indices };
 }
@@ -261,7 +266,7 @@ export function parseMd2(buffer: ArrayBuffer): ModelGeometry {
     for (let index = 0; index < count - 2; index++) {
       const triangle = fan ? [strip[0], strip[index + 1], strip[index + 2]]
         : index % 2 ? [strip[index], strip[index + 2], strip[index + 1]] : [strip[index], strip[index + 1], strip[index + 2]];
-      indices.push(triangle[2], triangle[1], triangle[0]);
+      indices.push(triangle[0], triangle[1], triangle[2]);
     }
   }
   return { meshes: [{ name: "mesh", positions, uvs, indices }] };
@@ -292,7 +297,7 @@ export function parseMd3(buffer: ArrayBuffer): ModelGeometry {
     }
     for (let index = 0; index < triangleCount; index++) {
       const offset = triangleOffset + index * 12;
-      indices.push(view.getInt32(offset + 8, true), view.getInt32(offset + 4, true), view.getInt32(offset, true));
+      indices.push(view.getInt32(offset, true), view.getInt32(offset + 4, true), view.getInt32(offset + 8, true));
     }
     meshes.push({ name, positions, uvs, indices });
     meshOffset += meshSize;

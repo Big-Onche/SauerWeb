@@ -46,6 +46,7 @@ export interface MapModelAsset {
   configPath?: string;
   geometryPath?: string;
   skins?: MapModelSkin[];
+  meshSettings?: MapModelMeshSettings[];
   scale?: number;
   translate?: [number, number, number];
   yaw?: number;
@@ -62,6 +63,11 @@ export interface MapModelSkin {
   mesh: string;
   diffusePath: string;
   masksPath?: string;
+}
+
+export interface MapModelMeshSettings {
+  mesh: string;
+  cullFace?: boolean;
 }
 
 export interface MapLightingOverrides {

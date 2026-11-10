@@ -366,6 +366,7 @@ function resolveMapModels(names: string[]): Array<{
   configPath?: string;
   geometryPath?: string;
   skins?: Array<{ mesh: string; diffusePath: string; masksPath?: string }>;
+  meshSettings?: Array<{ mesh: string; cullFace?: boolean }>;
   scale?: number;
   translate?: [number, number, number];
   yaw?: number;
@@ -422,6 +423,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
   };
   let geometryPath: string | undefined;
   const skins: Array<{ mesh: string; diffusePath: string; masksPath?: string }> = [];
+  const meshSettings: Array<{ mesh: string; cullFace?: boolean }> = [];
   const source = fs.readFileSync(configPath, "utf8");
   for (const statement of splitStatements(source)) {
     const tokens = tokenize(statement.text);
@@ -435,6 +437,9 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
         masksPath: args[2] ? resolveModelAssetPath(configDirectory, args[2]) : undefined,
       });
     } else if (command === "mdlscale") settings.scale = (numberArg(args[0], 100) > 0 ? numberArg(args[0], 100) / 100 : 1) / 4;
+    else if (command === `${format.toLowerCase()}cullface` && args[0]) {
+      meshSettings.push({ mesh: args[0], cullFace: numberArg(args[1], 1) !== 0 });
+    }
     else if (command === "mdltrans") settings.translate = [numberArg(args[0], 0), numberArg(args[1], 0), numberArg(args[2], 0)];
     else if (command === "mdlyaw") settings.yaw = numberArg(args[0], 0);
     else if (command === "mdlpitch") settings.pitch = numberArg(args[0], 0);
@@ -469,6 +474,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     configPath: packageRelativePath(configPath),
     geometryPath,
     skins,
+    meshSettings,
     ...settings,
     reason: "",
   };
