@@ -3,12 +3,14 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
 import type { SauerMap } from "../map/types";
+import type { ResolvedTexture } from "../assets/types";
 import { generateGeometry, type GeometryBatch } from "./geometry";
 import { toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 
@@ -23,7 +25,8 @@ export class MapScene {
   readonly engine: Engine;
   readonly scene: Scene;
   private readonly camera: UniversalCamera;
-  private material: StandardMaterial;
+  private materials: StandardMaterial[] = [];
+  private wireframe = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
@@ -46,15 +49,16 @@ export class MapScene {
     this.camera.keysRight = [68, 39];
     this.camera.attachControl(canvas, true);
 
-    this.material = this.createMaterial();
     this.engine.runRenderLoop(() => this.scene.render());
     window.addEventListener("resize", () => this.engine.resize());
     new ResizeObserver(() => this.engine.resize()).observe(canvas);
   }
 
-  loadMap(map: SauerMap): SceneStats {
+  loadMap(map: SauerMap, textures: ResolvedTexture[]): SceneStats {
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
-    const batches = generateGeometry(map);
+    this.materials.forEach((material) => material.dispose(true, true));
+    this.materials = textures.map((texture, index) => this.createMaterial(texture, index));
+    const batches = generateGeometry(map, textures);
     let faces = 0;
     let triangles = 0;
     let vertices = 0;
@@ -64,11 +68,12 @@ export class MapScene {
       vertexData.positions = batch.positions;
       vertexData.indices = batch.indices;
       vertexData.colors = batch.colors;
+      vertexData.uvs = batch.uvs;
       const normals: number[] = [];
       VertexData.ComputeNormals(batch.positions, batch.indices, normals);
       vertexData.normals = normals;
       vertexData.applyToMesh(mesh, true);
-      mesh.material = this.material;
+      mesh.material = this.materials[batch.textureIndex] ?? this.materials[0] ?? this.createFallbackMaterial();
       mesh.freezeWorldMatrix();
       mesh.alwaysSelectAsActiveMesh = true;
       faces += batch.faceCount;
@@ -80,17 +85,53 @@ export class MapScene {
   }
 
   setWireframe(enabled: boolean): void {
-    this.material.wireframe = enabled;
+    this.wireframe = enabled;
+    this.materials.forEach((material) => { material.wireframe = enabled; });
   }
 
-  private createMaterial(): StandardMaterial {
-    const material = new StandardMaterial("map-material", this.scene);
+  private createMaterial(resolved: ResolvedTexture, index: number): StandardMaterial {
+    const material = new StandardMaterial(`map-material-${index}`, this.scene);
     material.diffuseColor = Color3.White();
     material.specularColor = new Color3(0.08, 0.08, 0.08);
     material.ambientColor = new Color3(0.5, 0.5, 0.5);
     material.emissiveColor = Color3.White();
     material.backFaceCulling = false;
     material.disableLighting = true;
+    material.wireframe = this.wireframe;
+    material.alpha = 1;
+    if (resolved.diffuseUrl) material.diffuseTexture = this.createTexture(resolved.diffuseUrl, resolved.vslot, `diffuse-${index}`);
+    if (resolved.normalUrl) material.bumpTexture = this.createTexture(resolved.normalUrl, resolved.vslot, `normal-${index}`);
+    if (resolved.glowUrl) material.emissiveTexture = this.createTexture(resolved.glowUrl, resolved.vslot, `glow-${index}`);
+    return material;
+  }
+
+  private createTexture(url: string, vslot: ResolvedTexture["vslot"], name: string): Texture {
+    const texture = new Texture(url, this.scene, false, true, Texture.TRILINEAR_SAMPLINGMODE, () => {
+      const size = texture.getBaseSize();
+      texture.uScale = size.width > 0 ? 1 / size.width : 1;
+      texture.vScale = size.height > 0 ? 1 / size.height : 1;
+    });
+    texture.name = name;
+    texture.wrapU = Texture.WRAP_ADDRESSMODE;
+    texture.wrapV = Texture.WRAP_ADDRESSMODE;
+    if (vslot.scroll[0] !== 0 || vslot.scroll[1] !== 0) {
+      const started = performance.now();
+      this.scene.onBeforeRenderObservable.add(() => {
+        const elapsed = performance.now() - started;
+        texture.uOffset = vslot.scroll[0] * elapsed;
+        texture.vOffset = vslot.scroll[1] * elapsed;
+      });
+    }
+    return texture;
+  }
+
+  private createFallbackMaterial(): StandardMaterial {
+    const material = new StandardMaterial("missing-map-material", this.scene);
+    material.diffuseColor = new Color3(0.7, 0.2, 0.7);
+    material.emissiveColor = Color3.White();
+    material.disableLighting = true;
+    material.wireframe = this.wireframe;
+    this.materials.push(material);
     return material;
   }
 

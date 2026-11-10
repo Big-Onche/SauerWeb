@@ -1,6 +1,7 @@
 import "./style.css";
 import { SauerMapParser } from "./map/SauerMapParser";
 import type { SauerMap } from "./map/types";
+import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
 import { MapScene, type SceneStats } from "./render/MapScene";
 
 interface MapListItem {
@@ -122,7 +123,10 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
     const decompressed = await decompressGzip(compressed);
     await yieldToBrowser();
     const map = parser.parse(decompressed, name);
-    const sceneStats = mapScene.loadMap(map);
+    const manifest = await loadTextureManifest(name);
+    const textures = resolveMapTextures(map, manifest);
+    const sceneStats = mapScene.loadMap(map, textures);
+    if (manifest.unsupported.length) console.warn("Unsupported Sauerbraten configuration commands", manifest.unsupported);
     showLoadedMap(map, sceneStats);
     activeMapName = name;
     renderMapList();
