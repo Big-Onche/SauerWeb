@@ -376,6 +376,7 @@ function resolveMapModels(names: string[]): Array<{
   alphaBlend?: boolean;
   ambient?: number;
   specular?: number;
+  glow?: number;
   reason: string;
 }> {
   const formats = [
@@ -394,7 +395,7 @@ function resolveMapModels(names: string[]): Array<{
     })).find((candidate) => candidate.directory);
     if (!detected) return { index, name, status: "missing", reason: `No recognized Sauerbraten model configuration was found for ${name}.` };
     const configPath = path.join(detected.directory!, detected.config);
-    if (!["MD2", "MD3", "OBJ"].includes(detected.format)) {
+    if (!["MD2", "MD3", "OBJ", "IQM"].includes(detected.format)) {
       return {
         index,
         name,
@@ -420,6 +421,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     alphaBlend: false,
     ambient: 0.3,
     specular: 1,
+    glow: 0,
   };
   let geometryPath: string | undefined;
   const skins: Array<{ mesh: string; diffusePath: string; masksPath?: string }> = [];
@@ -448,6 +450,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     else if (command === "mdlalphablend") settings.alphaBlend = numberArg(args[0], 0) !== 0;
     else if (command === "mdlambient") settings.ambient = modelPercent(args[0], 0.3);
     else if (command === "mdlspec") settings.specular = modelPercent(args[0], 1);
+    else if (command === "mdlglow") settings.glow = modelPercent(args[0], 3);
   }
   geometryPath ??= findModelDefault(modelDirectory, configDirectory, format.toLowerCase());
   if (!geometryPath || !fs.existsSync(path.resolve(packagesDirectory, geometryPath))) {
@@ -465,7 +468,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     const masks = findInheritedModelFile(modelDirectory, configDirectory, ["masks.png", "masks.jpg", "masks.jpeg"]);
     if (diffuse) skins.push({ mesh: "*", diffusePath: diffuse, masksPath: masks });
   }
-  settings.translate[1] *= -1;
+  if (["MD2", "MD3", "OBJ"].includes(format)) settings.translate[1] *= -1;
   return {
     index,
     name,

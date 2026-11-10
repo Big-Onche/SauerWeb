@@ -56,6 +56,7 @@ export interface MapModelAsset {
   alphaBlend?: boolean;
   ambient?: number;
   specular?: number;
+  glow?: number;
   reason: string;
 }
 

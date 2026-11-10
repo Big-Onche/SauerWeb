@@ -123,7 +123,7 @@ function createModelMaterial(scene: Scene, asset: MapModelAsset, skin: MapModelS
     texture.hasAlpha = true;
     material.diffuseTexture = texture;
     material.emissiveTexture = texture;
-    material.emissiveColor = Color3.White().scale(asset.ambient ?? 0.3);
+    material.emissiveColor = Color3.White().scale(Math.max(asset.ambient ?? 0.3, Math.min(asset.glow ?? 0, 1)));
     material.useAlphaFromDiffuseTexture = true;
   }
   const masksUrl = packageAssetUrl(skin?.masksPath);
@@ -159,6 +159,7 @@ async function fetchModelGeometry(asset: MapModelAsset): Promise<ModelGeometry> 
   const bytes = await response.arrayBuffer();
   if (asset.format === "MD2") return parseMd2(bytes);
   if (asset.format === "MD3") return parseMd3(bytes);
+  if (asset.format === "IQM") return parseIqm(bytes);
   throw new Error(`${asset.format ?? "Unknown"} model loading is not supported.`);
 }
 
@@ -305,6 +306,82 @@ export function parseMd3(buffer: ArrayBuffer): ModelGeometry {
     meshOffset += meshSize;
   }
   return { meshes };
+}
+
+export function parseIqm(buffer: ArrayBuffer): ModelGeometry {
+  const view = new DataView(buffer);
+  if (view.byteLength < 124 || readAscii(view, 0, 16) !== "INTERQUAKEMODEL" || view.getUint32(16, true) !== 2) {
+    throw new Error("Invalid IQM header.");
+  }
+  const fileSize = view.getUint32(20, true);
+  const textSize = view.getUint32(28, true);
+  const textOffset = view.getUint32(32, true);
+  const meshCount = view.getUint32(36, true);
+  const meshOffset = view.getUint32(40, true);
+  const vertexArrayCount = view.getUint32(44, true);
+  const vertexCount = view.getUint32(48, true);
+  const vertexArrayOffset = view.getUint32(52, true);
+  const triangleCount = view.getUint32(56, true);
+  const triangleOffset = view.getUint32(60, true);
+  if (fileSize > view.byteLength || !rangeWithin(textOffset, textSize, fileSize) ||
+      !rangeWithin(meshOffset, meshCount * 24, fileSize) || !rangeWithin(vertexArrayOffset, vertexArrayCount * 20, fileSize) ||
+      !rangeWithin(triangleOffset, triangleCount * 12, fileSize)) throw new Error("Invalid IQM section bounds.");
+  let positionOffset: number | undefined;
+  let texCoordOffset: number | undefined;
+  for (let index = 0; index < vertexArrayCount; index++) {
+    const offset = vertexArrayOffset + index * 20;
+    const type = view.getUint32(offset, true);
+    const format = view.getUint32(offset + 8, true);
+    const size = view.getUint32(offset + 12, true);
+    const dataOffset = view.getUint32(offset + 16, true);
+    if (type === 0 && format === 7 && size === 3) positionOffset = dataOffset;
+    else if (type === 1 && format === 7 && size === 2) texCoordOffset = dataOffset;
+  }
+  if (positionOffset === undefined || !rangeWithin(positionOffset, vertexCount * 12, fileSize) ||
+      texCoordOffset !== undefined && !rangeWithin(texCoordOffset, vertexCount * 8, fileSize)) {
+    throw new Error("IQM model has invalid vertex arrays.");
+  }
+  const meshes: ModelGeometryMesh[] = [];
+  for (let meshIndex = 0; meshIndex < meshCount; meshIndex++) {
+    const offset = meshOffset + meshIndex * 24;
+    const nameOffset = view.getUint32(offset, true);
+    const firstVertex = view.getUint32(offset + 8, true);
+    const meshVertexCount = view.getUint32(offset + 12, true);
+    const firstTriangle = view.getUint32(offset + 16, true);
+    const meshTriangleCount = view.getUint32(offset + 20, true);
+    if (firstVertex + meshVertexCount > vertexCount || firstTriangle + meshTriangleCount > triangleCount) {
+      throw new Error("IQM mesh references data outside the model.");
+    }
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+    for (let index = 0; index < meshVertexCount; index++) {
+      const vertexOffset = positionOffset + (firstVertex + index) * 12;
+      positions.push(view.getFloat32(vertexOffset, true), view.getFloat32(vertexOffset + 8, true),
+        -view.getFloat32(vertexOffset + 4, true));
+      if (texCoordOffset !== undefined) {
+        const uvOffset = texCoordOffset + (firstVertex + index) * 8;
+        uvs.push(view.getFloat32(uvOffset, true), view.getFloat32(uvOffset + 4, true));
+      } else uvs.push(0, 0);
+    }
+    for (let index = 0; index < meshTriangleCount; index++) {
+      const indexOffset = triangleOffset + (firstTriangle + index) * 12;
+      indices.push(view.getUint32(indexOffset, true) - firstVertex, view.getUint32(indexOffset + 4, true) - firstVertex,
+        view.getUint32(indexOffset + 8, true) - firstVertex);
+    }
+    if (positions.length && indices.length) meshes.push({
+      name: readAscii(view, textOffset + nameOffset, Math.max(0, textSize - nameOffset)) || `mesh-${meshIndex}`,
+      positions,
+      uvs,
+      indices,
+    });
+  }
+  if (!meshes.length) throw new Error("IQM model contains no renderable geometry.");
+  return { meshes };
+}
+
+function rangeWithin(offset: number, length: number, limit: number): boolean {
+  return Number.isSafeInteger(offset) && Number.isSafeInteger(length) && offset >= 0 && length >= 0 && offset <= limit - length;
 }
 
 function readAscii(view: DataView, offset: number, length: number): string {
