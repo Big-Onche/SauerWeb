@@ -17,6 +17,7 @@ The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27
 | `src/engine/octa.h` — `cube`, `surfaceinfo`, `vertinfo` | Typed octree, 12 nibble-packed edges, six textures, surface layers and vertices | `src/map/types.ts` |
 | `src/engine/octa.cpp` — `genfaceverts` | Face vertex order reconstructed from edge nibbles | `generatedVertex` / `encodedCorner` |
 | `src/engine/octarender.cpp` — `addcubeverts` | Low 12-bit vertex origin restoration and 1/8 world-unit conversion | `geometry.decodeVertex` |
+| `src/engine/worldio.cpp` / `lightmap.h` | 512×512 RGB/RGBA atlas records and reserved lightmap IDs | `SauerMapParser.readLightmaps` / `MaterialCache` |
 | `src/shared/ents.h` — `entity` | 24-byte entity record | `SauerMapParser.readEntities` |
 
 ## Version 33 serialized order
@@ -30,7 +31,7 @@ All multi-byte fields are little-endian.
 5. Entities: position as three floats, five signed 16-bit attributes, one-byte type and reserved byte. FPS maps have no extra entity payload.
 6. VSlots: signed change masks. Negative masks encode blank runs; changed slots carry a predecessor and mask-selected fields.
 7. Eight root octree cubes, recursively serialized.
-8. Lightmap, PVS and blendmap sections follow the octree. The current geometry viewer stops after a validated octree because it does not render those resources yet; their header counts remain preserved in decoded state.
+8. Lightmaps follow the octree. Each record has a type byte, optional unlit coordinates, and a 512×512 RGB or RGBA pixel payload. PVS and blendmap data follow the atlases.
 
 ## Octree and geometry
 
@@ -40,6 +41,14 @@ The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leave
 
 Surface vertices use Sauerbraten's low-12-bit coordinate encoding. The renderer restores the high origin bits and divides by eight, matching `addcubeverts`. Explicit surface polygons are fan-triangulated with reversed winding after the centralized `(x, y, z) → (x, z, y)` conversion.
 
+Merged faces retain Sauerbraten's origin/participant distinction. The origin cube supplies the explicit merged polygon; zero-vertex participant records are coverage markers and never generate fallback cube quads.
+
+## Lightmaps
+
+IDs 0–5 retain Sauerbraten's ambient, directional, bright, and dark reserved meanings. An ID of 6 addresses serialized atlas 0, ID 7 addresses atlas 1, and so on. The renderer preserves that offset instead of treating surface IDs as direct array indices. Atlas pixels remain byte-exact RGB/RGBA data in their original 512×512 dimensions and are uploaded as linear, clamped Babylon raw textures.
+
+Serialized 16-bit lightmap coordinates are normalized by 65536 and shifted by half a 512-pixel lumel, matching `addcubeverts`. They are supplied as Babylon UV2 coordinates. Materials multiply the diffuse result by the baked lightmap and disable Babylon's dynamic-light contribution, so the baked illumination remains authoritative. Layered surfaces use the secondary ID and duplicated UV set for the bottom layer; an RGBA primary atlas supplies the baked blend mask for the top layer.
+
 The restricted configuration reader resolves `skybox` and legacy `loadsky` declarations without executing CubeScript. Cubemap faces use Sauerbraten's `rt/lf/bk/ft/up/dn` package convention, reordered for the renderer's Z-up to Y-up coordinate conversion. JPEG, PNG, wildcard names, yaw, spin, and sky color metadata are retained.
 
 ## Deliberate next steps
@@ -47,6 +56,5 @@ The restricted configuration reader resolves `skybox` and legacy `loadsky` decla
 - Port historical layout branches from `loadc` for formats 6–32.
 - Replace conservative solid-neighbor face suppression with the complete `visibleface` / merged-face behavior from `octarender.cpp`.
 - Execute the safe texture subset of default and map `.cfg` files, resolve Slots/VSlots to package images, and generate texture UVs.
-- Decode lightmap atlases and bind serialized lightmap UVs.
 - Decode PVS and blendmap payloads rather than stopping at the octree boundary.
 - Render material surfaces, mapmodels, lights, and remaining entity types.

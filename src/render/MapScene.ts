@@ -67,7 +67,7 @@ export class MapScene {
     const generation = ++this.loadGeneration;
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.materialCache.dispose();
-    this.materialCache = new MaterialCache(this.scene);
+    this.materialCache = new MaterialCache(this.scene, map.lightmaps, mapIntegerVariable(map, "ambient", 0x191919));
     this.fallbackMaterial?.dispose(true, true);
     this.fallbackMaterial = undefined;
     this.skyboxMaterial?.dispose(true, true);
@@ -92,7 +92,9 @@ export class MapScene {
       vertexData.normals = normals;
       vertexData.applyToMesh(mesh, true);
       const texture = textures[batch.textureIndex];
-      mesh.material = texture ? this.materialCache.get(describeSauerMaterial(texture, batch.cubeMaterial, batch.lightmapId)) : this.createFallbackMaterial();
+      mesh.material = texture
+        ? this.materialCache.get(describeSauerMaterial(texture, batch.cubeMaterial, batch.lightmapId, batch.useLightmapAlpha))
+        : this.createFallbackMaterial();
       mesh.freezeWorldMatrix();
       mesh.alwaysSelectAsActiveMesh = true;
       faces += batch.faceCount;
@@ -185,6 +187,11 @@ export class MapScene {
 
 }
 
+function mapIntegerVariable(map: SauerMap, name: string, fallback: number): number {
+  const variable = map.variables.find((entry) => entry.name === name && entry.type === "integer");
+  return variable?.type === "integer" ? variable.value : fallback;
+}
+
 async function rotateImageClockwise(url: string): Promise<string> {
   const response = await fetch(url, { cache: "no-cache" });
   if (!response.ok) throw new Error(`Could not load skybox face ${url} (${response.status}).`);
@@ -198,7 +205,9 @@ async function rotateImageClockwise(url: string): Promise<string> {
     context.translate(canvas.width / 2, canvas.height / 2);
     context.rotate(-Math.PI / 2);
     context.drawImage(image, -image.width / 2, -image.height / 2);
-    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not encode a skybox face.")), "image/png"));
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not encode a skybox face.")), "image/png");
+    });
     return URL.createObjectURL(blob);
   } finally {
     image.close();

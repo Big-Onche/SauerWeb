@@ -16,7 +16,13 @@ describe("SauerMapParser", () => {
     expect(map.header.worldSize).toBeGreaterThan(0);
     expect(map.world).toHaveLength(8);
     expect(map.bytesConsumedThroughOctree).toBeLessThanOrEqual(bytes.length);
+    expect(map.lightmaps).toHaveLength(map.header.lightmapCount);
+    expect(map.lightmaps.every((lightmap) => lightmap.width === 512 && lightmap.height === 512)).toBe(true);
+    expect(map.bytesConsumed).toBeGreaterThanOrEqual(map.bytesConsumedThroughOctree);
     expect(map.entities.length).toBe(map.header.entityCount);
+    visitSurfaces(map.world, (lightmapId) => {
+      expect(lightmapId < 6 || lightmapId - 6 < map.lightmaps.length).toBe(true);
+    });
 
     if (mapName === "aard3c") {
       const positions = generateGeometry(map).flatMap((batch) => batch.positions);
@@ -36,3 +42,10 @@ describe("SauerMapParser", () => {
     expect(() => new SauerMapParser().parse(bytes.buffer)).toThrow(/Unexpected end|Not a Sauerbraten map/);
   });
 });
+
+function visitSurfaces(cubes: import("./types").OctreeCube[], callback: (lightmapId: number) => void): void {
+  cubes.forEach((cube) => {
+    cube.surfaces.forEach((surface) => surface?.lightmapIds.forEach(callback));
+    if (cube.children) visitSurfaces(cube.children, callback);
+  });
+}

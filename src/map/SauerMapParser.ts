@@ -1,5 +1,5 @@
 import { BinaryReader } from "./BinaryReader";
-import type { MapEntity, MapHeader, MapVariable, OctreeCube, SauerMap, Surface, SurfaceVertex, Vec3, VSlot } from "./types";
+import type { Lightmap, MapEntity, MapHeader, MapVariable, OctreeCube, SauerMap, Surface, SurfaceVertex, Vec3, VSlot } from "./types";
 
 const CURRENT_MAP_VERSION = 33;
 const OCTSAV_CHILDREN = 0;
@@ -9,6 +9,11 @@ const OCTSAV_NORMAL = 3;
 const OCTSAV_LOD_CUBE = 4;
 const SOLID_EDGES = new Uint8Array(12).fill(0x80);
 const EMPTY_EDGES = new Uint8Array(12);
+const LIGHTMAP_WIDTH = 512;
+const LIGHTMAP_HEIGHT = 512;
+const LIGHTMAP_TYPE_MASK = 0x0f;
+const LIGHTMAP_ALPHA = 1 << 4;
+const LIGHTMAP_BUMPMAP_DIRECTION = 2;
 
 export class SauerMapParser {
   parse(buffer: ArrayBuffer, name = "map"): SauerMap {
@@ -20,8 +25,26 @@ export class SauerMapParser {
     const entities = this.readEntities(reader, header.entityCount, gameType);
     const vslots = this.readVSlots(reader, header.vslotCount);
     const world = this.readChildren(reader, { x: 0, y: 0, z: 0 }, header.worldSize / 2);
+    const bytesConsumedThroughOctree = reader.offset;
+    const lightmaps = this.readLightmaps(reader, header.lightmapCount);
 
-    return { name, header, variables, gameType, textureMru, entities, vslots, world, bytesConsumedThroughOctree: reader.offset };
+    return {
+      name, header, variables, gameType, textureMru, entities, vslots, world, lightmaps, bytesConsumedThroughOctree, bytesConsumed: reader.offset,
+    };
+  }
+
+  private readLightmaps(reader: BinaryReader, count: number): Lightmap[] {
+    if (count < 0 || count > 1_000_000) throw new Error(`Invalid lightmap count ${count}.`);
+    return Array.from({ length: count }, (_, index) => {
+      const serializedType = reader.uint8(`lightmap ${index} type`);
+      const type = serializedType & 0x7f;
+      const unlit: [number, number] | undefined = serializedType & 0x80
+        ? [reader.uint16(`lightmap ${index} unlit x`), reader.uint16(`lightmap ${index} unlit y`)]
+        : undefined;
+      const bytesPerPixel: 3 | 4 = type & LIGHTMAP_ALPHA && (type & LIGHTMAP_TYPE_MASK) !== LIGHTMAP_BUMPMAP_DIRECTION ? 4 : 3;
+      const data = reader.byteArray(LIGHTMAP_WIDTH * LIGHTMAP_HEIGHT * bytesPerPixel, `lightmap ${index} pixels`);
+      return { type, bytesPerPixel, width: LIGHTMAP_WIDTH, height: LIGHTMAP_HEIGHT, unlit, data };
+    });
   }
 
   private readHeader(reader: BinaryReader): MapHeader {
@@ -184,7 +207,9 @@ export class SauerMapParser {
     }
 
     const kind = nodeType === OCTSAV_EMPTY ? "empty" : nodeType === OCTSAV_SOLID ? "solid" : "normal";
-    const edges = nodeType === OCTSAV_EMPTY ? EMPTY_EDGES.slice() : nodeType === OCTSAV_SOLID ? SOLID_EDGES.slice() : reader.byteArray(12, "cube edges");
+    const edges = nodeType === OCTSAV_EMPTY
+      ? EMPTY_EDGES.slice()
+      : nodeType === OCTSAV_SOLID ? SOLID_EDGES.slice() : reader.byteArray(12, "cube edges");
     const textures = Array.from({ length: 6 }, (_, index) => reader.uint16(`face ${index} texture`)) as OctreeCube["textures"];
     const material = octsav & 0x40 ? reader.uint16("cube material") : 0;
     const merged = octsav & 0x80 ? reader.uint8("merged-face mask") : 0;

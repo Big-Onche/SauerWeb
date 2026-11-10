@@ -55,6 +55,15 @@ export interface Surface {
   vertices: SurfaceVertex[];
 }
 
+export interface Lightmap {
+  type: number;
+  bytesPerPixel: 3 | 4;
+  width: 512;
+  height: 512;
+  unlit?: [number, number];
+  data: Uint8Array;
+}
+
 export type CubeKind = "empty" | "solid" | "normal";
 
 export interface OctreeCube {
@@ -78,5 +87,7 @@ export interface SauerMap {
   entities: MapEntity[];
   vslots: VSlot[];
   world: OctreeCube[];
+  lightmaps: Lightmap[];
   bytesConsumedThroughOctree: number;
+  bytesConsumed: number;
 }

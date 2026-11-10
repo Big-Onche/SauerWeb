@@ -1,9 +1,12 @@
 import { Material } from "@babylonjs/core/Materials/material";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
+import { RawTexture } from "@babylonjs/core/Materials/Textures/rawTexture";
+import { Constants } from "@babylonjs/core/Engines/constants";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import type { Scene } from "@babylonjs/core/scene";
 import type { ResolvedTexture } from "../assets/types";
+import type { Lightmap } from "../map/types";
 
 export type SauerSurfaceMode = "opaque" | "alpha-test" | "transparent" | "special";
 export type SauerLightmapMode = "ambient" | "bright" | "dark" | "atlas";
@@ -12,6 +15,7 @@ export interface SauerMaterialDescriptor {
   surfaceMode: SauerSurfaceMode;
   lightmapMode: SauerLightmapMode;
   lightmapId: number;
+  useLightmapAlpha: boolean;
   shaderName: string;
   shaderParameters: Record<string, number[]>;
   diffuseUrl?: string;
@@ -30,8 +34,12 @@ const MAT_WATER = 1 << 2;
 const MAT_LAVA = 2 << 2;
 const MAT_GLASS = 3 << 2;
 const MAT_ALPHA = 4 << 8;
+const LIGHTMAP_ID_RESERVED = 6;
+const DEFAULT_AMBIENT = 0x191919;
+const DEFAULT_FULLBRIGHT_LEVEL = 128;
 
-export function describeSauerMaterial(resolved: ResolvedTexture, cubeMaterial: number, lightmapId: number): SauerMaterialDescriptor {
+export function describeSauerMaterial(resolved: ResolvedTexture, cubeMaterial: number, lightmapId: number,
+                                      useLightmapAlpha = false): SauerMaterialDescriptor {
   const shaderName = resolved.slot.shader?.name.toLowerCase() || "stdworld";
   const shaderParameters = resolved.slot.shader?.parameters ?? {};
   const volume = cubeMaterial & MATF_VOLUME;
@@ -44,8 +52,11 @@ export function describeSauerMaterial(resolved: ResolvedTexture, cubeMaterial: n
   else if (specialShader || volume === MAT_LAVA) surfaceMode = "special";
   return {
     surfaceMode,
-    lightmapMode: lightmapId >= 6 ? "atlas" : lightmapId === 2 || lightmapId === 3 ? "bright" : lightmapId === 4 || lightmapId === 5 ? "dark" : "ambient",
+    lightmapMode: lightmapId >= 6
+      ? "atlas"
+      : lightmapId === 2 || lightmapId === 3 ? "bright" : lightmapId === 4 || lightmapId === 5 ? "dark" : "ambient",
     lightmapId,
+    useLightmapAlpha,
     shaderName,
     shaderParameters,
     diffuseUrl: resolved.diffuseUrl,
@@ -63,8 +74,9 @@ export function describeSauerMaterial(resolved: ResolvedTexture, cubeMaterial: n
 export class MaterialCache {
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly textures = new Map<string, Texture>();
+  private readonly lightmapTextures = new Map<number, RawTexture>();
 
-  constructor(private readonly scene: Scene) {}
+  constructor(private readonly scene: Scene, private readonly lightmaps: Lightmap[] = [], private readonly ambient = DEFAULT_AMBIENT) {}
 
   get(descriptor: SauerMaterialDescriptor): StandardMaterial {
     const key = stableKey(descriptor);
@@ -82,21 +94,37 @@ export class MaterialCache {
   dispose(): void {
     this.materials.forEach((material) => material.dispose(false, false));
     this.textures.forEach((texture) => texture.dispose());
+    this.lightmapTextures.forEach((texture) => texture.dispose());
     this.materials.clear();
     this.textures.clear();
+    this.lightmapTextures.clear();
   }
 
   private createMaterial(descriptor: SauerMaterialDescriptor, index: number): StandardMaterial {
     const material = new StandardMaterial(`map-material-${index}`, this.scene);
     material.diffuseColor = Color3.White();
-    material.ambientColor = descriptor.lightmapMode === "dark" ? new Color3(0.2, 0.2, 0.2) : new Color3(0.5, 0.5, 0.5);
-    material.emissiveColor = descriptor.lightmapMode === "bright" ? Color3.White() : new Color3(0.15, 0.15, 0.15);
-    material.specularColor = new Color3(0.08, 0.08, 0.08);
+    material.ambientColor = Color3.Black();
+    material.emissiveColor = Color3.White();
+    material.specularColor = Color3.Black();
     material.backFaceCulling = false;
-    material.disableLighting = false;
+    material.disableLighting = true;
     material.alpha = descriptor.alpha;
 
-    if (descriptor.diffuseUrl) material.diffuseTexture = this.getTexture(descriptor.diffuseUrl, descriptor.scroll, descriptor.surfaceMode !== "opaque");
+    const lightmap = this.getLightmapTexture(descriptor.lightmapId);
+    if (lightmap) {
+      lightmap.coordinatesIndex = 1;
+      material.lightmapTexture = lightmap;
+      material.useLightmapAsShadowmap = true;
+      if (descriptor.useLightmapAlpha) {
+        lightmap.hasAlpha = true;
+        material.opacityTexture = lightmap;
+        material.transparencyMode = Material.MATERIAL_ALPHABLEND;
+      }
+    }
+
+    if (descriptor.diffuseUrl) {
+      material.diffuseTexture = this.getTexture(descriptor.diffuseUrl, descriptor.scroll, descriptor.surfaceMode !== "opaque");
+    }
     if (descriptor.normalUrl) {
       const bump = this.getTexture(descriptor.normalUrl, descriptor.scroll);
       bump.level = 1;
@@ -115,13 +143,13 @@ export class MaterialCache {
       material.specularTexture = this.getTexture(descriptor.specularUrl, descriptor.scroll);
       material.specularColor = parameterColor(descriptor.shaderParameters.specscale, Color3.White());
     }
-    if (descriptor.alphaUrl) material.opacityTexture = this.getTexture(descriptor.alphaUrl, descriptor.scroll, true);
+    if (descriptor.alphaUrl && !descriptor.useLightmapAlpha) material.opacityTexture = this.getTexture(descriptor.alphaUrl, descriptor.scroll, true);
 
-    if (descriptor.surfaceMode === "alpha-test") {
+    if (descriptor.surfaceMode === "alpha-test" && !descriptor.useLightmapAlpha) {
       material.transparencyMode = Material.MATERIAL_ALPHATEST;
       material.alphaCutOff = 0.5;
       material.useAlphaFromDiffuseTexture = true;
-    } else if (descriptor.surfaceMode === "transparent") {
+    } else if (descriptor.surfaceMode === "transparent" && !descriptor.useLightmapAlpha) {
       material.transparencyMode = Material.MATERIAL_ALPHABLEND;
       material.useAlphaFromDiffuseTexture = true;
       material.needDepthPrePass = true;
@@ -153,6 +181,33 @@ export class MaterialCache {
     this.textures.set(key, texture);
     return texture;
   }
+
+  private getLightmapTexture(lightmapId: number): RawTexture | undefined {
+    const cached = this.lightmapTextures.get(lightmapId);
+    if (cached) return cached;
+    const serialized = lightmapId >= LIGHTMAP_ID_RESERVED ? this.lightmaps[lightmapId - LIGHTMAP_ID_RESERVED] : undefined;
+    const width = serialized?.width ?? 1;
+    const height = serialized?.height ?? 1;
+    const bytesPerPixel = serialized?.bytesPerPixel ?? 3;
+    const data = serialized?.data ?? this.reservedLightmapColor(lightmapId);
+    if (!serialized && lightmapId >= LIGHTMAP_ID_RESERVED) return undefined;
+    const format = bytesPerPixel === 4 ? Constants.TEXTUREFORMAT_RGBA : Constants.TEXTUREFORMAT_RGB;
+    const texture = new RawTexture(data, width, height, format, this.scene, true, false, Texture.TRILINEAR_SAMPLINGMODE,
+      Constants.TEXTURETYPE_UNSIGNED_BYTE, 0, false);
+    texture.name = serialized ? `sauer-lightmap-${lightmapId - LIGHTMAP_ID_RESERVED}` : `sauer-reserved-lightmap-${lightmapId}`;
+    texture.wrapU = Texture.CLAMP_ADDRESSMODE;
+    texture.wrapV = Texture.CLAMP_ADDRESSMODE;
+    texture.gammaSpace = false;
+    this.lightmapTextures.set(lightmapId, texture);
+    return texture;
+  }
+
+  private reservedLightmapColor(lightmapId: number): Uint8Array {
+    if (lightmapId === 4 || lightmapId === 5) return new Uint8Array([0, 0, 0]);
+    if (lightmapId === 2 || lightmapId === 3) return new Uint8Array([DEFAULT_FULLBRIGHT_LEVEL, DEFAULT_FULLBRIGHT_LEVEL, DEFAULT_FULLBRIGHT_LEVEL]);
+    const ambient = this.ambient <= 0xff ? this.ambient * 0x010101 : this.ambient;
+    return new Uint8Array([(ambient >> 16) & 0xff, (ambient >> 8) & 0xff, ambient & 0xff]);
+  }
 }
 
 function parameterColor(parameter: number[] | undefined, fallback: Color3): Color3 {
@@ -160,5 +215,8 @@ function parameterColor(parameter: number[] | undefined, fallback: Color3): Colo
 }
 
 function stableKey(descriptor: SauerMaterialDescriptor): string {
-  return JSON.stringify({ ...descriptor, shaderParameters: Object.entries(descriptor.shaderParameters).sort(([left], [right]) => left.localeCompare(right)) });
+  return JSON.stringify({
+    ...descriptor,
+    shaderParameters: Object.entries(descriptor.shaderParameters).sort(([left], [right]) => left.localeCompare(right)),
+  });
 }

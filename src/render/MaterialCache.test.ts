@@ -2,6 +2,7 @@ import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTexture } from "../assets/types";
+import type { Lightmap } from "../map/types";
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 
 describe("MaterialCache", () => {
@@ -30,6 +31,27 @@ describe("MaterialCache", () => {
     expect(describeSauerMaterial(texture, 0, 2).lightmapMode).toBe("bright");
     expect(describeSauerMaterial(texture, 0, 4).lightmapMode).toBe("dark");
     expect(describeSauerMaterial(texture, 0, 6).lightmapMode).toBe("atlas");
+  });
+
+  it("binds serialized atlases to UV2 and uses atlas alpha for layer blends", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const lightmap: Lightmap = {
+      type: 1 << 4,
+      bytesPerPixel: 4,
+      width: 512,
+      height: 512,
+      data: new Uint8Array(512 * 512 * 4),
+    };
+    const cache = new MaterialCache(scene, [lightmap]);
+    const material = cache.get(describeSauerMaterial(resolvedTexture(), 0, 6, true));
+
+    expect(material.lightmapTexture?.coordinatesIndex).toBe(1);
+    expect(material.opacityTexture).toBe(material.lightmapTexture);
+    expect(material.useLightmapAsShadowmap).toBe(true);
+
+    cache.dispose();
+    engine.dispose();
   });
 
   it("falls back safely when a running dev server returns a legacy manifest", () => {
