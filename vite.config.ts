@@ -37,21 +37,20 @@ interface ConfigState {
   sources: string[];
   visited: Set<string>;
   commands: number;
-  skyboxBase: string;
-  skyYaw: number;
-  skySpin: number;
-  skyColor: [number, number, number];
+  skyboxBase?: string;
+  skyYaw?: number;
+  skySpin?: number;
+  skyColor?: number;
   lighting: { ambient?: number; skylight?: number };
   shaderName: string;
   shaderParameters: Record<string, number[]>;
 }
 
 interface ServerSkybox {
-  basePath: string;
-  faces: [string, string, string, string, string, string];
-  yaw: number;
-  spin: number;
-  color: [number, number, number];
+  basePath?: string;
+  yaw?: number;
+  spin?: number;
+  color?: number;
 }
 
 const textureKinds: Record<string, TextureKind> = {
@@ -78,10 +77,6 @@ function readTextureManifest(mapName: string): {
     sources: [],
     visited: new Set(),
     commands: 0,
-    skyboxBase: "skyboxes/remus/sky01",
-    skyYaw: 0,
-    skySpin: 0,
-    skyColor: [1, 1, 1],
     lighting: {},
     shaderName: "stdworld",
     shaderParameters: {},
@@ -92,7 +87,7 @@ function readTextureManifest(mapName: string): {
     slots: state.slots,
     unsupported: state.unsupported,
     sources: state.sources,
-    skybox: resolveSkybox(state),
+    skybox: resolveSkyOverrides(state),
     lighting: state.lighting,
   };
 }
@@ -161,7 +156,7 @@ function executeStatement(text: string, source: string, line: number, state: Con
     return;
   }
   if (command === "skyboxcolour") {
-    state.skyColor = [colorArg(args[0]), colorArg(args[1]), colorArg(args[2])];
+    state.skyColor = sauerColorArg(args, 0);
     return;
   }
   if (command === "ambient" || command === "skylight") {
@@ -292,36 +287,9 @@ function normalizeTexturePath(value: string): string {
   return path.posix.normalize(value.replace(/^<[^>]*>/, "").replaceAll("\\", "/").replace(/^packages\//, "").replace(/^\/+/, ""));
 }
 
-function resolveSkybox(state: ConfigState): ServerSkybox | undefined {
-  const basePath = state.skyboxBase;
-  const sourceSuffixes = ["rt", "up", "bk", "lf", "dn", "ft"];
-  const faces = sourceSuffixes.map((suffix) => resolveSkyFace(basePath, suffix));
-  if (faces.some((face) => !face)) {
-    state.unsupported.push({
-      command: "skybox",
-      source: `packages/${basePath}`,
-      line: 0,
-      reason: "One or more skybox faces could not be resolved as JPEG or PNG.",
-    });
-    return undefined;
-  }
-  return { basePath, faces: faces as ServerSkybox["faces"], yaw: state.skyYaw, spin: state.skySpin, color: state.skyColor };
-}
-
-function resolveSkyFace(basePath: string, suffix: string): string | undefined {
-  const withoutDirective = normalizeTexturePath(basePath);
-  const candidates = withoutDirective.includes("*")
-    ? [withoutDirective.replace("*", suffix)]
-    : [`${withoutDirective}_${suffix}.jpg`, `${withoutDirective}_${suffix}.png`];
-  return candidates.find((candidate) => {
-    const filePath = path.resolve(packagesDirectory, candidate);
-    return isWithin(packagesDirectory, filePath) && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  });
-}
-
-function colorArg(value: string | undefined): number {
-  const component = numberArg(value, 255);
-  return clamp(component > 1 ? component / 255 : component, 0, 1);
+function resolveSkyOverrides(state: ConfigState): ServerSkybox | undefined {
+  if (state.skyboxBase === undefined && state.skyYaw === undefined && state.skySpin === undefined && state.skyColor === undefined) return undefined;
+  return { basePath: state.skyboxBase, yaw: state.skyYaw, spin: state.skySpin, color: state.skyColor };
 }
 
 function sauerColorArg(args: string[], minimum: number): number {

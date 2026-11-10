@@ -33,7 +33,7 @@ export interface TextureManifest {
   slots: TextureSlot[];
   unsupported: UnsupportedConfigCommand[];
   sources: string[];
-  skybox?: SkyboxManifest;
+  skybox?: MapSkyOverrides;
   lighting?: MapLightingOverrides;
 }
 
@@ -42,12 +42,11 @@ export interface MapLightingOverrides {
   skylight?: number;
 }
 
-export interface SkyboxManifest {
-  basePath: string;
-  faces: [string, string, string, string, string, string];
-  yaw: number;
-  spin: number;
-  color: [number, number, number];
+export interface MapSkyOverrides {
+  basePath?: string;
+  yaw?: number;
+  spin?: number;
+  color?: number;
 }
 
 export interface ResolvedTexture {
