@@ -2,7 +2,7 @@ import "./style.css";
 import { SauerMapParser } from "./map/SauerMapParser";
 import type { SauerMap } from "./map/types";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
-import { MapScene, type SceneStats } from "./render/MapScene";
+import { MapScene, type SceneStats, type ViewportTuning } from "./render/MapScene";
 import { PhysicsState } from "./physics/types";
 
 interface MapListItem {
@@ -45,8 +45,31 @@ app.innerHTML = `
             title="Toggle entity debug markers">◎</button>
           <button id="materials" class="icon-button" type="button" aria-pressed="false" title="Toggle material-volume debug view">◩</button>
           <button id="wireframe" class="icon-button" type="button" aria-pressed="false" title="Toggle wireframe">◇</button>
+          <button id="settings-toggle" class="icon-button settings-toggle" type="button" aria-expanded="false" aria-controls="viewport-settings"
+            title="Viewport settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" /></svg>
+          </button>
         </div>
       </div>
+      <section id="viewport-settings" class="viewport-settings" aria-labelledby="settings-title" hidden>
+        <header>
+          <div><p class="eyebrow">DISPLAY</p><h3 id="settings-title">Viewport settings</h3></div>
+          <button id="settings-reset" type="button">Reset</button>
+        </header>
+        <label class="setting-row" for="contrast">
+          <span><strong>Contrast</strong><output id="contrast-value" for="contrast">100%</output></span>
+          <input id="contrast" type="range" min="0.5" max="1.5" value="1" step="0.01" />
+        </label>
+        <label class="setting-row" for="gamma">
+          <span><strong>Gamma</strong><output id="gamma-value" for="gamma">1.00</output></span>
+          <input id="gamma" type="range" min="0.5" max="2" value="1" step="0.01" />
+        </label>
+        <label class="setting-row" for="vibrance">
+          <span><strong>Vibrance</strong><output id="vibrance-value" for="vibrance">100%</output></span>
+          <input id="vibrance" type="range" min="0" max="2" value="1" step="0.01" />
+        </label>
+        <p class="settings-hint">Adjustments are saved on this device.</p>
+      </section>
       <div id="empty-state" class="empty-state">
         <div class="octa" aria-hidden="true"><span></span></div>
         <p class="eyebrow">READY TO EXPLORE</p>
@@ -82,12 +105,24 @@ const physicsReset = required<HTMLButtonElement>("#physics-reset");
 const physicsDebug = required<HTMLDivElement>("#physics-debug");
 const controls = required<HTMLDivElement>("#controls");
 const modelReport = required<HTMLDetailsElement>("#model-report");
+const settingsToggle = required<HTMLButtonElement>("#settings-toggle");
+const settingsPanel = required<HTMLElement>("#viewport-settings");
+const settingsReset = required<HTMLButtonElement>("#settings-reset");
+const contrastInput = required<HTMLInputElement>("#contrast");
+const gammaInput = required<HTMLInputElement>("#gamma");
+const vibranceInput = required<HTMLInputElement>("#vibrance");
+const contrastValue = required<HTMLOutputElement>("#contrast-value");
+const gammaValue = required<HTMLOutputElement>("#gamma-value");
+const vibranceValue = required<HTMLOutputElement>("#vibrance-value");
 const parser = new SauerMapParser();
 const mapScene = new MapScene(canvas);
 let maps: MapListItem[] = [];
 let activeMapName = "";
+const viewportSettingsStorageKey = "sauerweb.viewport-settings";
+const defaultViewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
 
 void loadMapIndex();
+setViewportTuning(readViewportTuning());
 
 search.addEventListener("input", () => renderMapList());
 fileInput.addEventListener("change", () => {
@@ -112,14 +147,70 @@ entities.addEventListener("click", () => {
 cameraMode.addEventListener("click", () => toggleCameraMode());
 physicsPause.addEventListener("click", () => togglePhysicsPause());
 physicsReset.addEventListener("click", () => mapScene.resetPlayer());
+settingsToggle.addEventListener("click", () => setSettingsOpen(settingsPanel.hidden));
+settingsReset.addEventListener("click", () => setViewportTuning(defaultViewportTuning));
+[contrastInput, gammaInput, vibranceInput].forEach((input) => input.addEventListener("input", updateViewportTuning));
+document.addEventListener("pointerdown", (event) => {
+  if (!settingsPanel.hidden && event.target instanceof Node && !settingsPanel.contains(event.target) && !settingsToggle.contains(event.target)) {
+    setSettingsOpen(false);
+  }
+});
 window.addEventListener("keydown", (event) => {
-  if (event.code === "F2") {
+  if (event.code === "Escape" && !settingsPanel.hidden) setSettingsOpen(false);
+  else if (event.code === "F2") {
     event.preventDefault();
     toggleCameraMode();
   } else if (mapScene.currentCameraMode() === "player" && event.code === "KeyP") togglePhysicsPause();
   else if (mapScene.currentCameraMode() === "player" && event.code === "KeyR") mapScene.resetPlayer();
 });
 window.setInterval(() => updatePhysicsDebug(), 100);
+
+function setSettingsOpen(open: boolean): void {
+  settingsPanel.hidden = !open;
+  settingsToggle.setAttribute("aria-expanded", String(open));
+  settingsToggle.classList.toggle("active", open);
+  if (open) contrastInput.focus();
+}
+
+function updateViewportTuning(): void {
+  setViewportTuning({
+    contrast: Number(contrastInput.value),
+    gamma: Number(gammaInput.value),
+    vibrance: Number(vibranceInput.value),
+  });
+}
+
+function setViewportTuning(tuning: ViewportTuning): void {
+  contrastInput.value = String(tuning.contrast);
+  gammaInput.value = String(tuning.gamma);
+  vibranceInput.value = String(tuning.vibrance);
+  contrastValue.value = `${Math.round(tuning.contrast * 100)}%`;
+  gammaValue.value = tuning.gamma.toFixed(2);
+  vibranceValue.value = `${Math.round(tuning.vibrance * 100)}%`;
+  mapScene.setViewportTuning(tuning);
+  try {
+    localStorage.setItem(viewportSettingsStorageKey, JSON.stringify(tuning));
+  } catch {
+    // The viewport remains adjustable when storage is unavailable.
+  }
+}
+
+function readViewportTuning(): ViewportTuning {
+  try {
+    const stored = JSON.parse(localStorage.getItem(viewportSettingsStorageKey) ?? "null") as Partial<ViewportTuning> | null;
+    return {
+      contrast: settingValue(stored?.contrast, 0.5, 1.5),
+      gamma: settingValue(stored?.gamma, 0.5, 2),
+      vibrance: settingValue(stored?.vibrance, 0, 2),
+    };
+  } catch {
+    return { ...defaultViewportTuning };
+  }
+}
+
+function settingValue(value: unknown, minimum: number, maximum: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : 1;
+}
 
 async function loadMapIndex(): Promise<void> {
   try {

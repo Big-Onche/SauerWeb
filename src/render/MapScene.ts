@@ -11,6 +11,11 @@ import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
+import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
+import { PostProcess } from "@babylonjs/core/PostProcesses/postProcess";
+import "@babylonjs/core/Shaders/default.vertex";
+import "@babylonjs/core/Shaders/default.fragment";
+import "@babylonjs/core/Shaders/postprocess.vertex";
 import type { RegisteredMapEntity, SauerMap } from "../map/types";
 import type { MapLightingOverrides, MapModelAsset, MapSkyOverrides, ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
@@ -35,6 +40,12 @@ export interface SceneStats {
   mapModelIssues: string[];
 }
 
+export interface ViewportTuning {
+  contrast: number;
+  gamma: number;
+  vibrance: number;
+}
+
 export class MapScene {
   readonly engine: Engine;
   readonly scene: Scene;
@@ -57,6 +68,7 @@ export class MapScene {
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
+  private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -75,6 +87,8 @@ export class MapScene {
     this.freeCamera.keysRight = [68, 39];
     this.freeCamera.attachControl(canvas, true);
     this.playerCamera = this.createCamera("player-camera");
+    this.createViewportTuningPostProcess(this.freeCamera);
+    this.createViewportTuningPostProcess(this.playerCamera);
     this.scene.activeCamera = this.freeCamera;
     this.physicsInput = new BrowserPhysicsInput(canvas);
 
@@ -181,6 +195,10 @@ export class MapScene {
   setEntityDebug(enabled: boolean): void {
     this.entityDebug = enabled;
     this.entityMeshes.forEach((mesh) => mesh.setEnabled(enabled));
+  }
+
+  setViewportTuning(tuning: ViewportTuning): void {
+    this.viewportTuning = { ...tuning };
   }
 
   setCameraMode(mode: CameraMode): void {
@@ -411,6 +429,34 @@ export class MapScene {
     camera.fovMode = Camera.FOVMODE_VERTICAL_FIXED;
     camera.fov = 70 * Math.PI / 180;
     return camera;
+  }
+
+  private createViewportTuningPostProcess(camera: Camera): void {
+    ShaderStore.ShadersStore.viewportTuningFragmentShader = `
+      precision highp float;
+      varying vec2 vUV;
+      uniform sampler2D textureSampler;
+      uniform float contrast;
+      uniform float gamma;
+      uniform float vibrance;
+
+      void main(void) {
+        vec4 source = texture2D(textureSampler, vUV);
+        vec3 color = pow(max(source.rgb, vec3(0.0)), vec3(1.0 / gamma));
+        color = (color - 0.5) * contrast + 0.5;
+        float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        float chroma = max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b));
+        float saturation = 1.0 + (vibrance - 1.0) * (1.0 - clamp(chroma, 0.0, 1.0));
+        color = mix(vec3(luminance), color, saturation);
+        gl_FragColor = vec4(clamp(color, 0.0, 1.0), source.a);
+      }
+    `;
+    const postProcess = new PostProcess("viewport-tuning", "viewportTuning", ["contrast", "gamma", "vibrance"], null, 1, camera);
+    postProcess.onApply = (effect) => {
+      effect.setFloat("contrast", this.viewportTuning.contrast);
+      effect.setFloat("gamma", this.viewportTuning.gamma);
+      effect.setFloat("vibrance", this.viewportTuning.vibrance);
+    };
   }
 
   private updatePhysics(nowMilliseconds: number): void {
