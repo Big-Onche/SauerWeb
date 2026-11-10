@@ -27,6 +27,23 @@ export interface MapEntity {
   type: number;
 }
 
+export type EntityCategory = "empty" | "light" | "mapmodel" | "spawn" | "effect" | "sound" | "pickup" | "teleport" | "movement" |
+  "gameplay" | "unknown";
+
+export interface EntityOrientation {
+  yawDegrees?: number;
+  direction?: Vec3;
+}
+
+export interface RegisteredMapEntity extends MapEntity {
+  index: number;
+  typeName: string;
+  category: EntityCategory;
+  namedAttributes: Record<string, number>;
+  orientation?: EntityOrientation;
+  mapModelIndex?: number;
+}
+
 export interface VSlot {
   changed: number;
   previous: number;
@@ -101,6 +118,7 @@ export interface SauerMap {
   gameType: string;
   textureMru: number[];
   entities: MapEntity[];
+  entityRegistry: RegisteredMapEntity[];
   vslots: VSlot[];
   world: OctreeCube[];
   materialVolumes: MaterialVolume[];

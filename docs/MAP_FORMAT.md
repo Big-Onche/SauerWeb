@@ -41,6 +41,8 @@ The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leave
 
 Material-bearing leaves are additionally exposed as `SauerMap.materialVolumes`. Each record retains its raw 16-bit value, bounds, source cube kind, volume/index, clip mode, death flag, and alpha flag independently of ordinary world meshes. Water, lava, and glass are rendered as dedicated volume meshes. Clip, no-clip, game-clip, death, and alpha volumes remain hidden until the material debug toggle is enabled.
 
+FPS entities are decoded into `SauerMap.entityRegistry` while the serialized records remain available in `SauerMap.entities`. The registry covers the engine entity types and all FPS game types through flags, retains all five raw attributes, names type-specific attributes, and exposes yaw or jumppad direction where applicable. Mapmodel indices are matched against the `mapmodelreset`/`mmodel` configuration stream. The asset manifest reports missing models and recognized-but-unsupported MD2, MD3, MD5, IQM, and OBJ formats explicitly; entity debug markers remain available even when the model itself cannot be loaded.
+
 Surface vertices use Sauerbraten's low-12-bit coordinate encoding. The renderer restores the high origin bits and divides by eight, matching `addcubeverts`. Explicit surface polygons are fan-triangulated with reversed winding after the centralized `(x, y, z) → (x, z, y)` conversion.
 
 Merged faces retain Sauerbraten's origin/participant distinction. The origin cube supplies the explicit merged polygon; zero-vertex participant records are coverage markers and never generate fallback cube quads.
@@ -59,4 +61,4 @@ The restricted configuration reader resolves `skybox`, legacy `loadsky`, `yawsky
 - Replace conservative solid-neighbor face suppression with the complete `visibleface` / merged-face behavior from `octarender.cpp`.
 - Execute the safe texture subset of default and map `.cfg` files, resolve Slots/VSlots to package images, and generate texture UVs.
 - Decode PVS and blendmap payloads rather than stopping at the octree boundary.
-- Render material surfaces, mapmodels, lights, and remaining entity types.
+- Add native model loaders and full gameplay rendering for the entity records currently shown as debug markers.

@@ -11,8 +11,8 @@ import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
-import type { SauerMap } from "../map/types";
-import type { MapLightingOverrides, MapSkyOverrides, ResolvedTexture } from "../assets/types";
+import type { RegisteredMapEntity, SauerMap } from "../map/types";
+import type { MapLightingOverrides, MapModelAsset, MapSkyOverrides, ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "./geometry";
 import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
@@ -27,6 +27,7 @@ export interface SceneStats {
   triangles: number;
   vertices: number;
   materialVolumes: number;
+  mapModelIssues: string[];
 }
 
 export class MapScene {
@@ -42,6 +43,9 @@ export class MapScene {
   private materialDebug = false;
   private readonly volumeMeshes: Mesh[] = [];
   private readonly volumeMaterials = new Map<MaterialRenderKind, StandardMaterial>();
+  private entityDebug = false;
+  private readonly entityMeshes: Mesh[] = [];
+  private readonly entityMaterials = new Map<string, StandardMaterial>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
@@ -69,13 +73,16 @@ export class MapScene {
   }
 
   async loadMap(map: SauerMap, textures: ResolvedTexture[], skyOverrides?: MapSkyOverrides,
-                lightingOverrides?: MapLightingOverrides): Promise<SceneStats> {
+                lightingOverrides?: MapLightingOverrides, mapModels: MapModelAsset[] = []): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
     const lighting = resolveMapLighting(map, lightingOverrides);
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.volumeMeshes.length = 0;
     this.volumeMaterials.forEach((material) => material.dispose(true, true));
     this.volumeMaterials.clear();
+    this.entityMeshes.length = 0;
+    this.entityMaterials.forEach((material) => material.dispose());
+    this.entityMaterials.clear();
     this.materialCache.dispose();
     this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
     this.fallbackMaterial?.dispose(true, true);
@@ -120,10 +127,19 @@ export class MapScene {
       triangles += batch.indices.length / 3;
       vertices += batch.positions.length / 3;
     });
+    map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
+    const mapModelIssues = this.resolveMapModelIssues(map.entityRegistry, mapModels);
     this.materialCache.setWireframe(this.wireframe);
     await this.createSkybox(map, resolveMapSky(map, skyOverrides), generation);
     this.placeCamera(map, batches);
-    return { meshes: batches.length + materialBatches.length, faces, triangles, vertices, materialVolumes: map.materialVolumes.length };
+    return {
+      meshes: batches.length + materialBatches.length,
+      faces,
+      triangles,
+      vertices,
+      materialVolumes: map.materialVolumes.length,
+      mapModelIssues,
+    };
   }
 
   setWireframe(enabled: boolean): void {
@@ -138,6 +154,79 @@ export class MapScene {
     this.volumeMeshes.forEach((mesh) => {
       if (mesh.metadata?.debugOnly === true) mesh.setEnabled(enabled);
     });
+  }
+
+  setEntityDebug(enabled: boolean): void {
+    this.entityDebug = enabled;
+    this.entityMeshes.forEach((mesh) => mesh.setEnabled(enabled));
+  }
+
+  private createEntityMarker(entity: RegisteredMapEntity): void {
+    if (entity.category === "empty") return;
+    const position = toBabylonPosition(entity.position);
+    const marker = entity.category === "mapmodel"
+      ? MeshBuilder.CreateBox(`entity-${entity.index}-${entity.typeName}`, { size: 3 }, this.scene)
+      : MeshBuilder.CreateSphere(`entity-${entity.index}-${entity.typeName}`,
+        { diameter: entity.category === "spawn" ? 4 : 2.5, segments: 6 }, this.scene);
+    marker.position.copyFrom(position);
+    marker.material = this.getEntityMaterial(entity.category);
+    marker.metadata = { entityIndex: entity.index, entityType: entity.typeName, attributes: entity.namedAttributes };
+    marker.isPickable = true;
+    marker.setEnabled(this.entityDebug);
+    this.entityMeshes.push(marker);
+    const direction = entity.orientation?.direction
+      ? new Vector3(entity.orientation.direction.x, entity.orientation.direction.z, entity.orientation.direction.y)
+      : entity.orientation?.yawDegrees === undefined ? undefined : toBabylonYawDirection(entity.orientation.yawDegrees);
+    if (!direction) return;
+    const line = MeshBuilder.CreateLines(`entity-${entity.index}-orientation`, { points: [position, position.add(direction.scale(7))] }, this.scene);
+    line.color = this.entityColor(entity.category);
+    line.isPickable = false;
+    line.setEnabled(this.entityDebug);
+    this.entityMeshes.push(line);
+  }
+
+  private getEntityMaterial(category: string): StandardMaterial {
+    const cached = this.entityMaterials.get(category);
+    if (cached) return cached;
+    const color = this.entityColor(category);
+    const material = new StandardMaterial(`entity-marker-${category}`, this.scene);
+    material.diffuseColor = color;
+    material.emissiveColor = color;
+    material.disableLighting = true;
+    material.alpha = 0.75;
+    material.transparencyMode = Material.MATERIAL_ALPHABLEND;
+    this.entityMaterials.set(category, material);
+    return material;
+  }
+
+  private entityColor(category: string): Color3 {
+    const colors: Record<string, Color3> = {
+      light: new Color3(1, 0.9, 0.25),
+      mapmodel: new Color3(0.45, 0.75, 1),
+      spawn: new Color3(0.25, 1, 0.45),
+      effect: new Color3(0.8, 0.4, 1),
+      sound: new Color3(0.2, 0.9, 0.9),
+      pickup: new Color3(1, 0.55, 0.15),
+      teleport: new Color3(0.85, 0.25, 1),
+      movement: new Color3(0.25, 0.65, 1),
+      gameplay: new Color3(1, 0.25, 0.3),
+      unknown: new Color3(0.8, 0.8, 0.8),
+    };
+    return colors[category] ?? colors.unknown;
+  }
+
+  private resolveMapModelIssues(entities: RegisteredMapEntity[], mapModels: MapModelAsset[]): string[] {
+    const issues: string[] = [];
+    entities.filter((entity) => entity.typeName === "mapmodel").forEach((entity) => {
+      const index = entity.mapModelIndex ?? -1;
+      const asset = mapModels[index];
+      const issue = asset
+        ? `${entity.typeName} entity ${entity.index}: mapmodel ${index} (${asset.name}) — ${asset.reason}`
+        : `${entity.typeName} entity ${entity.index}: mapmodel index ${index} is not defined by the map configuration.`;
+      issues.push(issue);
+      console.warn(issue);
+    });
+    return issues;
   }
 
   private createMaterialVolumeMesh(batch: MaterialGeometryBatch): Mesh {

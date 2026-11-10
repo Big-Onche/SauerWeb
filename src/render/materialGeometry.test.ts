@@ -53,6 +53,7 @@ function mapWith(materialVolumes: MaterialVolume[]): SauerMap {
     gameType: "fps",
     textureMru: [],
     entities: [],
+    entityRegistry: [],
     vslots: [],
     world: [],
     materialVolumes,

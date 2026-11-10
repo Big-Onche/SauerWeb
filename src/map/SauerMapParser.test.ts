@@ -20,6 +20,13 @@ describe("SauerMapParser", () => {
     expect(map.lightmaps.every((lightmap) => lightmap.width === 512 && lightmap.height === 512)).toBe(true);
     expect(map.bytesConsumed).toBeGreaterThanOrEqual(map.bytesConsumedThroughOctree);
     expect(map.entities.length).toBe(map.header.entityCount);
+    expect(map.entityRegistry).toHaveLength(map.entities.length);
+    map.entityRegistry.forEach((entity, index) => {
+      expect(entity.index).toBe(index);
+      expect(entity.position).toEqual(map.entities[index].position);
+      expect(entity.attributes).toEqual(map.entities[index].attributes);
+      expect(entity.typeName).not.toMatch(/^unknown-/);
+    });
     visitSurfaces(map.world, (lightmapId) => {
       expect(lightmapId < 6 || lightmapId - 6 < map.lightmaps.length).toBe(true);
     });

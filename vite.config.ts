@@ -44,6 +44,7 @@ interface ConfigState {
   lighting: { ambient?: number; skylight?: number };
   shaderName: string;
   shaderParameters: Record<string, number[]>;
+  mapModels: string[];
 }
 
 interface ServerSkybox {
@@ -56,7 +57,7 @@ interface ServerSkybox {
 const textureKinds: Record<string, TextureKind> = {
   "0": "diffuse", c: "diffuse", n: "normal", g: "glow", s: "specular", z: "depth", a: "alpha", d: "decal", e: "environment", u: "unknown",
 };
-const ignoredConfigCommands = new Set(["setshader", "setshaderparam", "setshaderparamf", "autograss", "materialreset", "mapmodelreset", "mmodel"]);
+const ignoredConfigCommands = new Set(["setshader", "setshaderparam", "setshaderparamf", "autograss", "materialreset"]);
 const mimeTypes: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".dds": "image/vnd-ms.dds", ".tga": "image/x-tga" };
 
 function defaultVSlot(): ServerVSlot {
@@ -69,6 +70,7 @@ function readTextureManifest(mapName: string): {
   sources: string[];
   skybox?: ServerSkybox;
   lighting: ConfigState["lighting"];
+  mapModels: ReturnType<typeof resolveMapModels>;
 } {
   const state: ConfigState = {
     slots: [],
@@ -80,6 +82,7 @@ function readTextureManifest(mapName: string): {
     lighting: {},
     shaderName: "stdworld",
     shaderParameters: {},
+    mapModels: [],
   };
   executeConfig("data/default_map_settings.cfg", state, 0);
   executeConfig(`packages/base/${mapName}.cfg`, state, 0);
@@ -89,6 +92,7 @@ function readTextureManifest(mapName: string): {
     sources: state.sources,
     skybox: resolveSkyOverrides(state),
     lighting: state.lighting,
+    mapModels: resolveMapModels(state.mapModels),
   };
 }
 
@@ -131,6 +135,14 @@ function executeStatement(text: string, source: string, line: number, state: Con
   }
   if (command === "texture") {
     addTexture(args, state);
+    return;
+  }
+  if (command === "mapmodelreset") {
+    state.mapModels = [];
+    return;
+  }
+  if (command === "mmodel") {
+    if (args[0]) state.mapModels.push(args[0].replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""));
     return;
   }
   if (command === "setshader") {
@@ -344,6 +356,36 @@ function readMapVersion(filePath: string): number | null {
   } catch {
     return null;
   }
+}
+
+function resolveMapModels(names: string[]): Array<{
+  index: number;
+  name: string;
+  status: "unsupported" | "missing";
+  format?: string;
+  configPath?: string;
+  reason: string;
+}> {
+  const formats = [
+    ["iqm.cfg", "IQM"], ["md5.cfg", "MD5"], ["obj.cfg", "OBJ"], ["md3.cfg", "MD3"], ["md2.cfg", "MD2"],
+  ] as const;
+  return names.map((name, index) => {
+    const directory = path.resolve(packagesDirectory, "models", name);
+    if (!isWithin(packagesDirectory, directory) || !fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
+      return { index, name, status: "missing", reason: `Mapmodel directory packages/models/${name} was not found.` };
+    }
+    const detected = formats.find(([config]) => fs.existsSync(path.join(directory, config)));
+    if (!detected) return { index, name, status: "missing", reason: `No recognized Sauerbraten model configuration was found for ${name}.` };
+    const [config, format] = detected;
+    return {
+      index,
+      name,
+      status: "unsupported",
+      format,
+      configPath: `models/${name}/${config}`,
+      reason: `${format} mapmodel loading is not supported by the Babylon asset pipeline yet.`,
+    };
+  });
 }
 
 function sauerMapsPlugin(): Plugin {

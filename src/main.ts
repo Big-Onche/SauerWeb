@@ -37,6 +37,8 @@ app.innerHTML = `
           <h2 id="map-title">Choose a map</h2>
         </div>
         <div class="view-buttons">
+          <button id="entities" class="icon-button" type="button" aria-pressed="false"
+            title="Toggle entity debug markers">◎</button>
           <button id="materials" class="icon-button" type="button" aria-pressed="false" title="Toggle material-volume debug view">◩</button>
           <button id="wireframe" class="icon-button" type="button" aria-pressed="false" title="Toggle wireframe">◇</button>
         </div>
@@ -50,6 +52,7 @@ app.innerHTML = `
       <div id="loading" class="loading" hidden><span></span><p>Reading octree…</p></div>
       <div id="error" class="error" hidden></div>
       <div id="stats" class="stats" hidden></div>
+      <details id="model-report" class="model-report" hidden><summary></summary><ul></ul></details>
       <div class="controls"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span><i></i><span>Mouse to look</span></div>
     </section>
   </main>
@@ -67,6 +70,8 @@ const error = required<HTMLDivElement>("#error");
 const stats = required<HTMLDivElement>("#stats");
 const wireframe = required<HTMLButtonElement>("#wireframe");
 const materials = required<HTMLButtonElement>("#materials");
+const entities = required<HTMLButtonElement>("#entities");
+const modelReport = required<HTMLDetailsElement>("#model-report");
 const parser = new SauerMapParser();
 const mapScene = new MapScene(canvas);
 let maps: MapListItem[] = [];
@@ -88,6 +93,11 @@ materials.addEventListener("click", () => {
   const enabled = materials.getAttribute("aria-pressed") !== "true";
   materials.setAttribute("aria-pressed", String(enabled));
   mapScene.setMaterialDebug(enabled);
+});
+entities.addEventListener("click", () => {
+  const enabled = entities.getAttribute("aria-pressed") !== "true";
+  entities.setAttribute("aria-pressed", String(enabled));
+  mapScene.setEntityDebug(enabled);
 });
 
 async function loadMapIndex(): Promise<void> {
@@ -134,7 +144,7 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
     const map = parser.parse(decompressed, name);
     const manifest = await loadTextureManifest(name);
     const textures = resolveMapTextures(map, manifest);
-    const sceneStats = await mapScene.loadMap(map, textures, manifest.skybox, manifest.lighting);
+    const sceneStats = await mapScene.loadMap(map, textures, manifest.skybox, manifest.lighting, manifest.mapModels ?? []);
     if (manifest.unsupported.length) console.warn("Unsupported Sauerbraten configuration commands", manifest.unsupported);
     showLoadedMap(map, sceneStats);
     activeMapName = name;
@@ -166,11 +176,17 @@ function showLoadedMap(map: SauerMap, sceneStats: SceneStats): void {
     <div><strong>${sceneStats.materialVolumes.toLocaleString()}</strong><span>material volumes</span></div>
     <div><strong>v${map.header.version}</strong><span>format</span></div>
   `;
+  modelReport.hidden = sceneStats.mapModelIssues.length === 0;
+  const summary = modelReport.querySelector("summary");
+  const list = modelReport.querySelector("ul");
+  if (summary) summary.textContent = `${sceneStats.mapModelIssues.length} mapmodel asset issue${sceneStats.mapModelIssues.length === 1 ? "" : "s"}`;
+  if (list) list.innerHTML = sceneStats.mapModelIssues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("");
 }
 
 function setBusy(busy: boolean): void {
   loading.hidden = !busy;
   error.hidden = true;
+  if (busy) modelReport.hidden = true;
 }
 
 function required<ElementType extends Element>(selector: string): ElementType {

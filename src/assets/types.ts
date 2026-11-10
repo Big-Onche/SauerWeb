@@ -35,6 +35,16 @@ export interface TextureManifest {
   sources: string[];
   skybox?: MapSkyOverrides;
   lighting?: MapLightingOverrides;
+  mapModels: MapModelAsset[];
+}
+
+export interface MapModelAsset {
+  index: number;
+  name: string;
+  status: "unsupported" | "missing";
+  format?: string;
+  configPath?: string;
+  reason: string;
 }
 
 export interface MapLightingOverrides {

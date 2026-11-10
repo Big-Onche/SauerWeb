@@ -104,6 +104,7 @@ function mapWith(world: OctreeCube[], worldSize: number): SauerMap {
     gameType: "fps",
     textureMru: [],
     entities: [],
+    entityRegistry: [],
     vslots: [],
     world,
     materialVolumes: [],

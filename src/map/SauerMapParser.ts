@@ -1,5 +1,6 @@
 import { BinaryReader } from "./BinaryReader";
 import { collectMaterialVolumes } from "./materials";
+import { createFpsEntityRegistry } from "./entities";
 import type { Lightmap, MapEntity, MapHeader, MapVariable, OctreeCube, SauerMap, Surface, SurfaceVertex, Vec3, VSlot } from "./types";
 
 const CURRENT_MAP_VERSION = 33;
@@ -24,6 +25,7 @@ export class SauerMapParser {
     const gameType = this.readGameData(reader);
     const textureMru = this.readTextureMru(reader);
     const entities = this.readEntities(reader, header.entityCount, gameType);
+    const entityRegistry = createFpsEntityRegistry(entities);
     const vslots = this.readVSlots(reader, header.vslotCount);
     const world = this.readChildren(reader, { x: 0, y: 0, z: 0 }, header.worldSize / 2);
     const materialVolumes = collectMaterialVolumes(world);
@@ -31,7 +33,7 @@ export class SauerMapParser {
     const lightmaps = this.readLightmaps(reader, header.lightmapCount);
 
     return {
-      name, header, variables, gameType, textureMru, entities, vslots, world, materialVolumes, lightmaps, bytesConsumedThroughOctree,
+      name, header, variables, gameType, textureMru, entities, entityRegistry, vslots, world, materialVolumes, lightmaps, bytesConsumedThroughOctree,
       bytesConsumed: reader.offset,
     };
   }
