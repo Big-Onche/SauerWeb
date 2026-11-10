@@ -1,0 +1,4 @@
+.Sauerbraten/
+node_modules/
+dist/
+*.tsbuildinfo
