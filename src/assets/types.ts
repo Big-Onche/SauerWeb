@@ -41,10 +41,27 @@ export interface TextureManifest {
 export interface MapModelAsset {
   index: number;
   name: string;
-  status: "unsupported" | "missing";
+  status: "ready" | "unsupported" | "missing";
   format?: string;
   configPath?: string;
+  geometryPath?: string;
+  skins?: MapModelSkin[];
+  scale?: number;
+  translate?: [number, number, number];
+  yaw?: number;
+  pitch?: number;
+  cullFace?: boolean;
+  alphaTest?: number;
+  alphaBlend?: boolean;
+  ambient?: number;
+  specular?: number;
   reason: string;
+}
+
+export interface MapModelSkin {
+  mesh: string;
+  diffusePath: string;
+  masksPath?: string;
 }
 
 export interface MapLightingOverrides {

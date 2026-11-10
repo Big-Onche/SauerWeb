@@ -361,9 +361,20 @@ function readMapVersion(filePath: string): number | null {
 function resolveMapModels(names: string[]): Array<{
   index: number;
   name: string;
-  status: "unsupported" | "missing";
+  status: "ready" | "unsupported" | "missing";
   format?: string;
   configPath?: string;
+  geometryPath?: string;
+  skins?: Array<{ mesh: string; diffusePath: string; masksPath?: string }>;
+  scale?: number;
+  translate?: [number, number, number];
+  yaw?: number;
+  pitch?: number;
+  cullFace?: boolean;
+  alphaTest?: number;
+  alphaBlend?: boolean;
+  ambient?: number;
+  specular?: number;
   reason: string;
 }> {
   const formats = [
@@ -374,18 +385,122 @@ function resolveMapModels(names: string[]): Array<{
     if (!isWithin(packagesDirectory, directory) || !fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
       return { index, name, status: "missing", reason: `Mapmodel directory packages/models/${name} was not found.` };
     }
-    const detected = formats.find(([config]) => fs.existsSync(path.join(directory, config)));
+    const parentDirectory = path.dirname(directory);
+    const detected = formats.map(([config, format]) => ({
+      config,
+      format,
+      directory: fs.existsSync(path.join(directory, config)) ? directory : fs.existsSync(path.join(parentDirectory, config)) ? parentDirectory : undefined,
+    })).find((candidate) => candidate.directory);
     if (!detected) return { index, name, status: "missing", reason: `No recognized Sauerbraten model configuration was found for ${name}.` };
-    const [config, format] = detected;
+    const configPath = path.join(detected.directory!, detected.config);
+    if (!["MD2", "MD3", "OBJ"].includes(detected.format)) {
+      return {
+        index,
+        name,
+        status: "unsupported",
+        format: detected.format,
+        configPath: packageRelativePath(configPath),
+        reason: `${detected.format} mapmodel loading is not supported by the Babylon asset pipeline yet.`,
+      };
+    }
+    return resolveRenderableMapModel(index, name, directory, configPath, detected.format);
+  });
+}
+
+function resolveRenderableMapModel(index: number, name: string, modelDirectory: string, configPath: string, format: string) {
+  const configDirectory = path.dirname(configPath);
+  const settings = {
+    scale: 0.25,
+    translate: [0, 0, 0] as [number, number, number],
+    yaw: 0,
+    pitch: 0,
+    cullFace: true,
+    alphaTest: 0.9,
+    alphaBlend: false,
+    ambient: 0.3,
+    specular: 1,
+  };
+  let geometryPath: string | undefined;
+  const skins: Array<{ mesh: string; diffusePath: string; masksPath?: string }> = [];
+  const source = fs.readFileSync(configPath, "utf8");
+  for (const statement of splitStatements(source)) {
+    const tokens = tokenize(statement.text);
+    const command = tokens[0]?.toLowerCase();
+    const args = tokens.slice(1);
+    if (command === `${format.toLowerCase()}load` && args[0]) geometryPath = resolveModelAssetPath(configDirectory, args[0]);
+    else if (command === `${format.toLowerCase()}skin` && args[0] && args[1]) {
+      skins.push({
+        mesh: args[0],
+        diffusePath: resolveModelAssetPath(configDirectory, args[1]),
+        masksPath: args[2] ? resolveModelAssetPath(configDirectory, args[2]) : undefined,
+      });
+    } else if (command === "mdlscale") settings.scale = (numberArg(args[0], 100) > 0 ? numberArg(args[0], 100) / 100 : 1) / 4;
+    else if (command === "mdltrans") settings.translate = [numberArg(args[0], 0), numberArg(args[1], 0), numberArg(args[2], 0)];
+    else if (command === "mdlyaw") settings.yaw = numberArg(args[0], 0);
+    else if (command === "mdlpitch") settings.pitch = numberArg(args[0], 0);
+    else if (command === "mdlcullface") settings.cullFace = numberArg(args[0], 1) !== 0;
+    else if (command === "mdlalphatest") settings.alphaTest = clamp(numberArg(args[0], 0.9), 0, 1);
+    else if (command === "mdlalphablend") settings.alphaBlend = numberArg(args[0], 0) !== 0;
+    else if (command === "mdlambient") settings.ambient = modelPercent(args[0], 0.3);
+    else if (command === "mdlspec") settings.specular = modelPercent(args[0], 1);
+  }
+  geometryPath ??= findModelDefault(modelDirectory, configDirectory, format.toLowerCase());
+  if (!geometryPath || !fs.existsSync(path.resolve(packagesDirectory, geometryPath))) {
     return {
       index,
       name,
-      status: "unsupported",
+      status: "missing" as const,
       format,
-      configPath: `models/${name}/${config}`,
-      reason: `${format} mapmodel loading is not supported by the Babylon asset pipeline yet.`,
+      configPath: packageRelativePath(configPath),
+      reason: `${format} geometry for ${name} was not found.`,
     };
-  });
+  }
+  if (!skins.length) {
+    const diffuse = findInheritedModelFile(modelDirectory, configDirectory, ["skin.png", "skin.jpg", "skin.jpeg"]);
+    const masks = findInheritedModelFile(modelDirectory, configDirectory, ["masks.png", "masks.jpg", "masks.jpeg"]);
+    if (diffuse) skins.push({ mesh: "*", diffusePath: diffuse, masksPath: masks });
+  }
+  settings.translate[1] *= -1;
+  return {
+    index,
+    name,
+    status: "ready" as const,
+    format,
+    configPath: packageRelativePath(configPath),
+    geometryPath,
+    skins,
+    ...settings,
+    reason: "",
+  };
+}
+
+function findModelDefault(modelDirectory: string, configDirectory: string, extension: string): string | undefined {
+  const names = extension === "obj" ? ["tris.obj", "model.obj"] : [`tris.${extension}`];
+  return findInheritedModelFile(modelDirectory, configDirectory, names);
+}
+
+function findInheritedModelFile(modelDirectory: string, parentDirectory: string, names: string[]): string | undefined {
+  for (const directory of [modelDirectory, parentDirectory]) {
+    for (const name of names) {
+      const candidate = path.join(directory, name);
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return packageRelativePath(candidate);
+    }
+  }
+  return undefined;
+}
+
+function resolveModelAssetPath(directory: string, requested: string): string {
+  const clean = requested.replace(/^<[^>]*>/, "").replaceAll("\\", "/");
+  return packageRelativePath(path.resolve(directory, clean));
+}
+
+function packageRelativePath(filePath: string): string {
+  return path.relative(packagesDirectory, filePath).replaceAll("\\", "/");
+}
+
+function modelPercent(value: string | undefined, fallback: number): number {
+  const percent = numberArg(value, fallback * 100);
+  return percent > 0 ? percent / 100 : percent < 0 ? 0 : fallback;
 }
 
 function sauerMapsPlugin(): Plugin {

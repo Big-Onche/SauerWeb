@@ -19,6 +19,7 @@ import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRend
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 import { toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 import { resolveMapLighting } from "./MapLighting";
+import { loadMapModels } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 
 export interface SceneStats {
@@ -46,6 +47,7 @@ export class MapScene {
   private entityDebug = false;
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
+  private readonly mapModelMeshes: Mesh[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
@@ -83,6 +85,7 @@ export class MapScene {
     this.entityMeshes.length = 0;
     this.entityMaterials.forEach((material) => material.dispose());
     this.entityMaterials.clear();
+    this.mapModelMeshes.length = 0;
     this.materialCache.dispose();
     this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
     this.fallbackMaterial?.dispose(true, true);
@@ -128,17 +131,21 @@ export class MapScene {
       vertices += batch.positions.length / 3;
     });
     map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
-    const mapModelIssues = this.resolveMapModelIssues(map.entityRegistry, mapModels);
+    const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
+      () => generation === this.loadGeneration);
+    this.mapModelMeshes.push(...loadedMapModels.meshes);
+    triangles += loadedMapModels.triangles;
+    vertices += loadedMapModels.vertices;
     this.materialCache.setWireframe(this.wireframe);
     await this.createSkybox(map, resolveMapSky(map, skyOverrides), generation);
     this.placeCamera(map, batches);
     return {
-      meshes: batches.length + materialBatches.length,
+      meshes: batches.length + materialBatches.length + loadedMapModels.meshes.length,
       faces,
       triangles,
       vertices,
       materialVolumes: map.materialVolumes.length,
-      mapModelIssues,
+      mapModelIssues: loadedMapModels.issues,
     };
   }
 
@@ -147,6 +154,9 @@ export class MapScene {
     this.materialCache.setWireframe(enabled);
     if (this.fallbackMaterial) this.fallbackMaterial.wireframe = enabled;
     this.volumeMaterials.forEach((material) => { material.wireframe = enabled; });
+    this.mapModelMeshes.forEach((mesh) => {
+      if (mesh.material) mesh.material.wireframe = enabled;
+    });
   }
 
   setMaterialDebug(enabled: boolean): void {
@@ -213,20 +223,6 @@ export class MapScene {
       unknown: new Color3(0.8, 0.8, 0.8),
     };
     return colors[category] ?? colors.unknown;
-  }
-
-  private resolveMapModelIssues(entities: RegisteredMapEntity[], mapModels: MapModelAsset[]): string[] {
-    const issues: string[] = [];
-    entities.filter((entity) => entity.typeName === "mapmodel").forEach((entity) => {
-      const index = entity.mapModelIndex ?? -1;
-      const asset = mapModels[index];
-      const issue = asset
-        ? `${entity.typeName} entity ${entity.index}: mapmodel ${index} (${asset.name}) — ${asset.reason}`
-        : `${entity.typeName} entity ${entity.index}: mapmodel index ${index} is not defined by the map configuration.`;
-      issues.push(issue);
-      console.warn(issue);
-    });
-    return issues;
   }
 
   private createMaterialVolumeMesh(batch: MaterialGeometryBatch): Mesh {
