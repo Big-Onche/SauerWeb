@@ -7,10 +7,18 @@ export interface SlotTexture {
   path: string;
 }
 
+export interface SauerShaderMetadata {
+  name: string;
+  parameters: Record<string, number[]>;
+}
+
 export interface TextureSlot {
   index: number;
   textures: SlotTexture[];
   vslot: VSlot;
+  /** Optional while connecting to a dev server that predates shader-aware manifests. */
+  shader?: SauerShaderMetadata;
+  alphaConfigured?: boolean;
   layerMask?: { path: string; mode: number; scale: number };
 }
 
@@ -42,5 +50,9 @@ export interface ResolvedTexture {
   diffuseUrl?: string;
   normalUrl?: string;
   glowUrl?: string;
+  specularUrl?: string;
+  depthUrl?: string;
+  alphaUrl?: string;
+  environmentUrl?: string;
   layer?: ResolvedTexture;
 }

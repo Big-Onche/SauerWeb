@@ -4,9 +4,12 @@ import type { OctreeCube, SauerMap, SurfaceVertex, Vec3, VSlot } from "../map/ty
 export interface GeometryBatch {
   name: string;
   textureIndex: number;
+  cubeMaterial: number;
+  lightmapId: number;
   positions: number[];
   indices: number[];
   uvs: number[];
+  uv2s: number[];
   colors: number[];
   faceCount: number;
 }
@@ -45,13 +48,25 @@ function appendCube(map: SauerMap, cube: OctreeCube, rootIndex: number, textures
     const source = surface && layerCount > 0 ? surface.vertices.slice(0, layerCount) : FACE_CORNERS[orientation].map((corner) => generatedVertex(cube, corner));
     if (source.length < 3) continue;
     const textureIndex = cube.textures[orientation];
-    const key = `${rootIndex}:${textureIndex}`;
+    const lightmapId = surface?.lightmapIds[0] ?? 0;
+    const key = `${rootIndex}:${textureIndex}:${cube.material}:${lightmapId}`;
     let batch = batches.get(key);
     if (!batch) {
-      batch = { name: `octant-${rootIndex}-texture-${textureIndex}`, textureIndex, positions: [], indices: [], uvs: [], colors: [], faceCount: 0 };
+      batch = {
+        name: `octant-${rootIndex}-texture-${textureIndex}-material-${cube.material}-lightmap-${lightmapId}`,
+        textureIndex,
+        cubeMaterial: cube.material,
+        lightmapId,
+        positions: [],
+        indices: [],
+        uvs: [],
+        uv2s: [],
+        colors: [],
+        faceCount: 0,
+      };
       batches.set(key, batch);
     }
-    appendFace(batch, source.map((vertex) => decodeVertex(cube, vertex)), orientation, textures[textureIndex]?.vslot);
+    appendFace(batch, source, source.map((vertex) => decodeVertex(cube, vertex)), orientation, textures[textureIndex]?.vslot);
   }
 }
 
@@ -95,13 +110,15 @@ function decodeVertex(cube: OctreeCube, vertex: SurfaceVertex): Vec3 {
   };
 }
 
-function appendFace(batch: GeometryBatch, vertices: Vec3[], orientation: number, vslot?: VSlot): void {
+function appendFace(batch: GeometryBatch, source: SurfaceVertex[], vertices: Vec3[], orientation: number, vslot?: VSlot): void {
   const effective = vslot ?? { scale: 1, rotation: 0, offset: [0, 0] as [number, number], color: [1, 1, 1] as [number, number, number] };
   const baseIndex = batch.positions.length / 3;
-  for (const vertex of vertices) {
+  for (let index = 0; index < vertices.length; index++) {
+    const vertex = vertices[index];
     batch.positions.push(vertex.x, vertex.z, vertex.y);
     batch.colors.push(effective.color[0], effective.color[1], effective.color[2], 1);
     batch.uvs.push(...projectUv(vertex, orientation, effective.scale, effective.rotation, effective.offset));
+    batch.uv2s.push(source[index].u / 65536, source[index].v / 65536);
   }
   for (let index = 1; index < vertices.length - 1; index++) batch.indices.push(baseIndex, baseIndex + index, baseIndex + index + 1);
   batch.faceCount++;

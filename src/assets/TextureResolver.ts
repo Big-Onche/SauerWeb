@@ -29,6 +29,10 @@ export function resolveMapTextures(map: SauerMap, manifest: TextureManifest): Re
       diffuseUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "diffuse")?.path),
       normalUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "normal")?.path),
       glowUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "glow")?.path),
+      specularUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "specular")?.path),
+      depthUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "depth")?.path),
+      alphaUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "alpha")?.path),
+      environmentUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "environment")?.path),
     };
     return texture;
   });
@@ -66,5 +70,11 @@ export function packageAssetUrl(path: string | undefined): string | undefined {
 }
 
 function emptySlot(): TextureSlot {
-  return { index: 0, textures: [], vslot: { ...DEFAULT_VSLOT, offset: [0, 0], scroll: [0, 0], alpha: [0.5, 0], color: [1, 1, 1] } };
+  return {
+    index: 0,
+    textures: [],
+    vslot: { ...DEFAULT_VSLOT, offset: [0, 0], scroll: [0, 0], alpha: [0.5, 0], color: [1, 1, 1] },
+    shader: { name: "stdworld", parameters: {} },
+    alphaConfigured: false,
+  };
 }

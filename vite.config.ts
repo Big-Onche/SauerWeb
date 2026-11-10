@@ -25,6 +25,8 @@ interface ServerTextureSlot {
   index: number;
   textures: Array<{ kind: TextureKind; path: string }>;
   vslot: ServerVSlot;
+  shader: { name: string; parameters: Record<string, number[]> };
+  alphaConfigured: boolean;
   layerMask?: { path: string; mode: number; scale: number };
 }
 
@@ -39,6 +41,8 @@ interface ConfigState {
   skyYaw: number;
   skySpin: number;
   skyColor: [number, number, number];
+  shaderName: string;
+  shaderParameters: Record<string, number[]>;
 }
 
 interface ServerSkybox {
@@ -76,6 +80,8 @@ function readTextureManifest(mapName: string): {
     skyYaw: 0,
     skySpin: 0,
     skyColor: [1, 1, 1],
+    shaderName: "stdworld",
+    shaderParameters: {},
   };
   executeConfig("data/default_map_settings.cfg", state, 0);
   executeConfig(`packages/base/${mapName}.cfg`, state, 0);
@@ -123,6 +129,15 @@ function executeStatement(text: string, source: string, line: number, state: Con
     addTexture(args, state);
     return;
   }
+  if (command === "setshader") {
+    state.shaderName = args[0]?.toLowerCase() || "stdworld";
+    state.shaderParameters = {};
+    return;
+  }
+  if (command === "setshaderparam" || command === "setshaderparamf") {
+    if (args[0]) state.shaderParameters[args[0].toLowerCase()] = args.slice(1).map((value) => numberArg(value, 0));
+    return;
+  }
   if (command === "skybox" || command === "loadsky") {
     if (args[0]) state.skyboxBase = normalizeTexturePath(args[0]);
     if (command === "loadsky") state.skySpin = numberArg(args[1], 0);
@@ -153,7 +168,13 @@ function addTexture(args: string[], state: ConfigState): void {
   if (!kind || !args[1]) return;
   let slot = state.slots.at(-1);
   if (kind === "diffuse") {
-    slot = { index: state.slots.length, textures: [], vslot: defaultVSlot() };
+    slot = {
+      index: state.slots.length,
+      textures: [],
+      vslot: defaultVSlot(),
+      shader: { name: state.shaderName, parameters: structuredClone(state.shaderParameters) },
+      alphaConfigured: false,
+    };
     slot.vslot.rotation = clampInteger(numberArg(args[2], 0), 0, 7);
     slot.vslot.offset = [Math.max(0, numberArg(args[3], 0)), Math.max(0, numberArg(args[4], 0))];
     slot.vslot.scale = positiveArg(args[5], 1);
@@ -170,7 +191,10 @@ function modifyTexture(command: string, args: string[], state: ConfigState): voi
   else if (command === "texrotate") slot.vslot.rotation = clampInteger(numberArg(args[0], 0), 0, 7);
   else if (command === "texoffset") slot.vslot.offset = [Math.max(0, numberArg(args[0], 0)), Math.max(0, numberArg(args[1], 0))];
   else if (command === "texscroll") slot.vslot.scroll = [numberArg(args[0], 0) / 1000, numberArg(args[1], 0) / 1000];
-  else if (command === "texalpha") slot.vslot.alpha = [clamp(numberArg(args[0], 0.5), 0, 1), clamp(numberArg(args[1], 0), 0, 1)];
+  else if (command === "texalpha") {
+    slot.vslot.alpha = [clamp(numberArg(args[0], 0.5), 0, 1), clamp(numberArg(args[1], 0), 0, 1)];
+    slot.alphaConfigured = true;
+  }
   else if (command === "texcolor") slot.vslot.color = [clamp(numberArg(args[0], 1), 0, 1), clamp(numberArg(args[1], 1), 0, 1), clamp(numberArg(args[2], 1), 0, 1)];
   else if (command === "texlayer") {
     const requested = numberArg(args[0], 0);
