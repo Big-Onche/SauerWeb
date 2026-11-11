@@ -1,5 +1,8 @@
-import type { MultiplayerClient, MultiplayerEvent } from "../../fpsgame/client";
-import { gameModeName } from "../../fpsgame/game";
+import { ClientState } from "../../engine/physics/types";
+import type { MultiplayerClient, MultiplayerEvent, NetworkPlayer } from "../../fpsgame/client";
+import { GameModeFlag, gameModeHas, gameModeName } from "../../fpsgame/game";
+
+const MODEL_ICONS = ["mrfixit", "snoutx10k", "ogro", "inky", "captaincannon"];
 
 export class MultiplayerHUD {
   private readonly root: HTMLDivElement;
@@ -43,12 +46,51 @@ export class MultiplayerHUD {
         `<strong>${escapeHtml(gameModeName(this.client.gameMode))}</strong><span>${escapeHtml(this.client.mapName)}</span>` +
         `<b>${player?.health ?? 0} HP</b><span>${formatTime(this.client.timeLeftSeconds)}</span>`;
     }
-    this.scoreboard.innerHTML = `<header><span>${escapeHtml(this.client.serverDescription || "scoreboard")}</span>` +
-      `<small>${escapeHtml(gameModeName(this.client.gameMode))} · ${escapeHtml(this.client.mapName)}</small></header>` +
-      `<div class="score-heading"><span>player</span><span>frags</span><span>deaths</span><span>ping</span></div>` +
-      this.client.scoreboard.map((entry) => `<div class="score-row${entry.clientNumber === this.client.clientNumber ? " local" : ""}">` +
-        `<span>${escapeHtml(entry.name)}${entry.team ? ` <i>${escapeHtml(entry.team)}</i>` : ""}</span><b>${entry.frags}</b>` +
-        `<span>${entry.deaths}</span><span>${entry.ping}</span></div>`).join("");
+    this.scoreboard.innerHTML = this.renderScoreboard(player?.team ?? "");
+  }
+
+  private renderScoreboard(localTeam: string): string {
+    const players = this.client.scoreboard;
+    const spectators = players.filter((player) => player.state === ClientState.Spectator);
+    const playing = players.filter((player) => player.state !== ClientState.Spectator);
+    const teamMode = gameModeHas(this.client.gameMode, GameModeFlag.Team);
+    const groups = new Map<string, NetworkPlayer[]>();
+    for (const player of playing) {
+      const team = teamMode ? player.team : "";
+      const group = groups.get(team) ?? [];
+      group.push(player);
+      groups.set(team, group);
+    }
+    const sortedGroups = [...groups].sort(([leftTeam, left], [rightTeam, right]) =>
+      this.client.getTeamScore(rightTeam) - this.client.getTeamScore(leftTeam) || right.length - left.length || leftTeam.localeCompare(rightTeam));
+    const groupMarkup = sortedGroups.map(([team, entries]) => this.renderGroup(team, entries, localTeam)).join("");
+    const title = escapeHtml(this.client.serverDescription || "scoreboard");
+    const details = `${escapeHtml(gameModeName(this.client.gameMode))} · ${escapeHtml(this.client.mapName)} · ` +
+      formatTime(this.client.timeLeftSeconds);
+    return `<div class="score-guiskin" aria-hidden="true"></div><header><span>${title}</span>` +
+      `<small>${details}</small></header><div class="score-groups ${teamMode ? "team-groups" : ""}">${groupMarkup}</div>` +
+      (spectators.length ? `<div class="score-spectators"><strong>spectators</strong>${spectators.map((entry) =>
+        `<span>${escapeHtml(entry.name)} <small>${entry.ping} ping · cn ${entry.clientNumber}</small></span>`).join("")}</div>` : "");
+  }
+
+  private renderGroup(team: string, players: NetworkPlayer[], localTeam: string): string {
+    const friendly = Boolean(team && team === localTeam);
+    const ctf = gameModeHas(this.client.gameMode, GameModeFlag.Ctf);
+    const heading = team ? `${escapeHtml(team)}: ${this.client.getTeamScore(team)}` : "players";
+    return `<section class="score-team ${team ? friendly ? "friendly" : "enemy" : "free-for-all"}${ctf ? " ctf" : ""}">` +
+      `<h2>${heading}</h2><div class="score-heading"><span></span>${ctf ? "<span>flags</span>" : ""}<span>frags</span><span>deaths</span>` +
+      `<span>name</span><span>ping</span><span>cn</span></div>` +
+      players.map((entry) => this.renderPlayer(entry, friendly, ctf)).join("") + `</section>`;
+  }
+
+  private renderPlayer(entry: NetworkPlayer, friendly: boolean, ctf: boolean): string {
+    const icon = MODEL_ICONS[entry.model] ?? MODEL_ICONS[0];
+    const iconName = `${icon}${entry.team ? friendly ? "_blue" : "_red" : ""}`;
+    const classes = `score-row${entry.clientNumber === this.client.clientNumber ? " local" : ""}` +
+      `${entry.state === ClientState.Dead ? " dead" : ""}`;
+    return `<div class="${classes}">` +
+      `<img src="/api/packages/icons/${iconName}.jpg" alt="" />${ctf ? `<b>${entry.flags}</b>` : ""}<span>${entry.frags}</span>` +
+      `<span>${entry.deaths}</span><strong>${escapeHtml(entry.name)}</strong><span>${entry.ping}</span><span>${entry.clientNumber}</span></div>`;
   }
 
   private handle(event: MultiplayerEvent): void {

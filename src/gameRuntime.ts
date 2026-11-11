@@ -27,8 +27,10 @@ app.innerHTML = `
         <small>press any key to respawn</small>
       </section>
       <section id="pause-menu" class="game-pause" hidden aria-label="Pause menu">
+        <div class="pause-guiskin" aria-hidden="true"></div>
         <h1>paused</h1>
         <button type="button" data-action="resume">resume game</button>
+        <button type="button" data-action="switch-team" ${server ? "" : "hidden"}>switch team</button>
         <button type="button" data-action="menu">main menu</button>
       </section>
     </section>
@@ -56,6 +58,7 @@ scene.onMultiplayer((event) => {
 });
 respawnButton.addEventListener("click", requestRespawn);
 required<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => setPaused(false));
+required<HTMLButtonElement>("[data-action='switch-team']").addEventListener("click", () => { scene.switchTeam(); setPaused(false); });
 required<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => location.assign("/"));
 chat.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -109,6 +112,8 @@ function onKeyDown(event: KeyboardEvent): void {
     if (document.pointerLockElement === canvas) void document.exitPointerLock();
     chat.hidden = false;
     chatInput.focus();
+  } else if (server && event.code === "KeyG" && chat.hidden && pauseMenu.hidden) {
+    scene.tryDropFlag();
   }
 }
 

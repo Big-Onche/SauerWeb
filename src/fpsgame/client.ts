@@ -4,7 +4,8 @@ import { copyVec3, magnitude } from "../engine/physics/vector";
 import type { Vec3 } from "../engine/octa";
 import { EnetClient, type EnetEvent, ENET_PACKET_FLAG_UNSEQUENCED } from "../network/enet";
 import { PacketReader, PacketWriter } from "../network/protocol";
-import { DMF, DNF, DVELF, gameModeName, NetworkMessage, PROTOCOL_VERSION } from "./game";
+import { CtfClientMode, ctfTeamFlag } from "./ctf";
+import { DMF, DNF, DVELF, GameModeFlag, gameModeHas, gameModeName, NetworkMessage, PROTOCOL_VERSION } from "./game";
 import { WeaponSystem } from "./weapon";
 import { createDamageable, hitpush, type Damageable } from "./weapon/DamageSystem";
 import { Gun, WEAPONS } from "./weapon/WeaponDefinitions";
@@ -69,6 +70,8 @@ export function createClient(physics = new PhysicsSimulation()): FpsClient {
 export class MultiplayerClient extends EventTarget {
   readonly players = new Map<number, NetworkPlayer>();
   readonly transport = new EnetClient();
+  readonly ctfMode = new CtfClientMode();
+  readonly teamScores = new Map<string, number>();
   connected = false;
   clientNumber = -1;
   sessionId = 0;
@@ -82,7 +85,7 @@ export class MultiplayerClient extends EventTarget {
   private mapStarted = performance.now();
   private lastSpawnAttempt = Number.NEGATIVE_INFINITY;
   private respawnRequested = false;
-  private mapEntityTypes: number[] = [];
+  private mapEntities: Array<{ index: number; type: number; typeName: string; position: Vec3; attributes: number[] }> = [];
   private loadedMapName = "";
   private loadedMapCrc = 0;
   private mapInfoPending = false;
@@ -135,6 +138,18 @@ export class MultiplayerClient extends EventTarget {
     if (this.mapInfoPending && this.mapName.toLocaleLowerCase() === this.loadedMapName.toLocaleLowerCase()) {
       this.transport.send(1, new PacketWriter().putInt(NetworkMessage.MapCrc).putString(this.loadedMapName)
         .putInt(this.loadedMapCrc).finish(), true);
+      const items = new PacketWriter();
+      if (!gameModeHas(this.gameMode, GameModeFlag.NoItems)) {
+        items.putInt(NetworkMessage.ItemList);
+        for (const entity of this.mapEntities) {
+          if (entity.type < 8 || entity.type > 18) continue;
+          items.putInt(entity.index).putInt(entity.type);
+        }
+        items.putInt(-1);
+      }
+      if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) this.ctfMode.putInitFlags(items, this.gameMode);
+      const itemBytes = items.finish();
+      if (itemBytes.length) this.transport.send(1, itemBytes, true);
       this.mapInfoPending = false;
     }
     if (!this.physics.player.alive && (this.respawnRequested || this.weapons.controller.attacking) &&
@@ -142,13 +157,30 @@ export class MultiplayerClient extends EventTarget {
       this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TrySpawn).finish(), true);
       this.lastSpawnAttempt = nowMilliseconds;
     }
+    if (this.physics.player.alive && gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
+      const feet = { ...this.physics.player.position, z: this.physics.player.position.z - this.physics.player.eyeHeight };
+      this.ctfMode.checkItems(this.players.get(this.clientNumber), feet, this.gameMode, (flag, version) => {
+        this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TakeFlag).putInt(flag).putInt(version).finish(), true);
+      });
+    }
     const bytes = messages.finish();
     if (bytes.length) this.transport.send(1, bytes);
     this.transport.flush();
   }
 
   get scoreboard(): readonly NetworkPlayer[] {
-    return [...this.players.values()].sort((left, right) => right.frags - left.frags || left.name.localeCompare(right.name));
+    return [...this.players.values()].sort((left, right) => {
+      if (left.state === ClientState.Spectator || right.state === ClientState.Spectator) {
+        if (left.state !== right.state) return left.state === ClientState.Spectator ? 1 : -1;
+      }
+      return gameModeHas(this.gameMode, GameModeFlag.Ctf) && right.flags !== left.flags ? right.flags - left.flags
+        : right.frags - left.frags || left.name.localeCompare(right.name);
+    });
+  }
+
+  getTeamScore(team: string): number {
+    if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) return this.ctfMode.scores[ctfTeamFlag(team) - 1] ?? 0;
+    return this.teamScores.get(team) ?? 0;
   }
 
   sendChat(text: string): void {
@@ -177,8 +209,24 @@ export class MultiplayerClient extends EventTarget {
     this.mapInfoPending = true;
   }
 
-  setMapEntities(entities: readonly { type: number }[]): void {
-    this.mapEntityTypes = entities.map((entity) => entity.type);
+  setMapEntities(entities: readonly { index: number; type: number; typeName: string; position: Vec3; attributes: number[] }[]): void {
+    this.mapEntities = entities.map((entity) => ({ ...entity, position: { ...entity.position }, attributes: [...entity.attributes] }));
+    this.ctfMode.setup(entities, this.gameMode);
+  }
+
+  switchTeam(): void {
+    if (!this.connected) return;
+    const player = this.players.get(this.clientNumber);
+    const team = player?.team === "good" ? "evil" : "good";
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.SwitchTeam).putString(team).finish(), true);
+    this.transport.flush();
+  }
+
+  tryDropFlag(): void {
+    if (!this.connected || !gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
+    if (!this.ctfMode.flags.some((flag) => flag.owner === this.clientNumber)) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TryDropFlag).finish(), true);
+    this.transport.flush();
   }
 
   private handleEnet(event: EnetEvent): void {
@@ -273,6 +321,8 @@ export class MultiplayerClient extends EventTarget {
           packet.getInt();
           this.mapInfoPending = this.loadedMapName.toLocaleLowerCase() === this.mapName.toLocaleLowerCase();
           this.mapStarted = performance.now();
+          this.teamScores.clear();
+          this.ctfMode.reset();
           this.emit({ type: "map-change", map: this.mapName, mode: this.gameMode });
           break;
         case NetworkMessage.InitClient: this.parseInitClient(packet); break;
@@ -292,7 +342,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.HitPush: this.parseHitPush(packet); break;
         case NetworkMessage.Died: this.parseDied(packet); break;
         case NetworkMessage.Resume: this.parseResume(packet); break;
-        case NetworkMessage.TeamInfo: this.skipTeamInfo(packet); break;
+        case NetworkMessage.TeamInfo: this.parseTeamInfo(packet); break;
         case NetworkMessage.ItemList: while (packet.getInt() >= 0) packet.getInt(); break;
         case NetworkMessage.ItemSpawn: packet.getInt(); break;
         case NetworkMessage.ItemAccept: this.parseItemAccept(packet); break;
@@ -311,6 +361,13 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.ReplenishAmmo: this.parseReplenishAmmo(packet); break;
         case NetworkMessage.BaseRegen: this.parseBaseRegen(packet); break;
+        case NetworkMessage.InitFlags: this.ctfMode.parseInitFlags(packet, this.gameMode); this.emit({ type: "players" }); break;
+        case NetworkMessage.DropFlag: this.parseDropFlag(packet); break;
+        case NetworkMessage.TakeFlag: this.parseTakeFlag(packet); break;
+        case NetworkMessage.ReturnFlag: this.parseReturnFlag(packet); break;
+        case NetworkMessage.ResetFlag: this.parseResetFlag(packet); break;
+        case NetworkMessage.InvisibleFlag: this.ctfMode.setInvisible(packet.getInt(), packet.getInt() > 0); break;
+        case NetworkMessage.ScoreFlag: this.parseScoreFlag(packet); break;
         case NetworkMessage.ClientPing: {
           const player = this.players.get(sender), ping = packet.getInt();
           if (player) player.ping = ping;
@@ -328,7 +385,7 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.SetTeam: {
           const player = this.players.get(packet.getInt()), team = packet.getString();
-          packet.getInt(); if (player) player.team = team; break;
+          packet.getInt(); if (player) player.team = team; this.emit({ type: "players" }); break;
         }
         case NetworkMessage.PauseGame: packet.getInt(); packet.getInt(); break;
         case NetworkMessage.GameSpeed: packet.getInt(); packet.getInt(); break;
@@ -504,7 +561,7 @@ export class MultiplayerClient extends EventTarget {
   private parseItemAccept(packet: PacketReader): void {
     const entityIndex = packet.getInt(), clientNumber = packet.getInt();
     if (clientNumber < 0) return;
-    const entityType = this.mapEntityTypes[entityIndex];
+    const entityType = this.mapEntities[entityIndex]?.type;
     if (!Number.isInteger(entityType) || entityType < 8 || entityType > 13) return;
     const gun = entityType - 8 + Gun.Shotgun;
     const player = this.players.get(clientNumber);
@@ -538,7 +595,10 @@ export class MultiplayerClient extends EventTarget {
   // Sauerbraten reference: SVN r6488
   private parseDied(packet: PacketReader): void {
     const victimNumber = packet.getInt(), actor = this.playerFor(packet.getInt());
-    actor.frags = packet.getInt(); packet.getInt(); this.setDead(victimNumber);
+    actor.frags = packet.getInt();
+    const teamFrags = packet.getInt();
+    if (actor.team) this.teamScores.set(actor.team, teamFrags);
+    this.setDead(victimNumber);
   }
 
   private setDead(clientNumber: number, countDeath = true): void {
@@ -555,7 +615,46 @@ export class MultiplayerClient extends EventTarget {
     this.emit({ type: "players" });
   }
 
-  private skipTeamInfo(packet: PacketReader): void { for (let team = packet.getString(); team; team = packet.getString()) packet.getInt(); }
+  private parseTeamInfo(packet: PacketReader): void {
+    this.teamScores.clear();
+    for (let team = packet.getString(); team; team = packet.getString()) this.teamScores.set(team, packet.getInt());
+  }
+
+  private parseDropFlag(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
+    const location = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
+    const player = this.playerFor(clientNumber);
+    this.ctfMode.dropFlag(flag, version, location, player.yaw);
+    this.emit({ type: "message", text: `${player.name} dropped the flag` });
+  }
+
+  private parseTakeFlag(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
+    this.ctfMode.takeFlag(clientNumber, flag, version);
+    this.emit({ type: "message", text: `${this.playerFor(clientNumber).name} took the flag` });
+  }
+
+  private parseReturnFlag(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
+    this.ctfMode.returnFlag(flag, version);
+    this.emit({ type: "message", text: `${this.playerFor(clientNumber).name} returned the flag` });
+  }
+
+  private parseResetFlag(packet: PacketReader): void {
+    const flag = packet.getInt(), version = packet.getInt(), spawnIndex = packet.getInt(), team = packet.getInt(), score = packet.getInt();
+    this.ctfMode.resetFlag(flag, version, spawnIndex, team, score, this.gameMode);
+    this.emit({ type: "players" });
+  }
+
+  private parseScoreFlag(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), relay = packet.getInt(), relayVersion = packet.getInt(), goal = packet.getInt(),
+      goalVersion = packet.getInt(), goalSpawn = packet.getInt(), team = packet.getInt(), score = packet.getInt(), flags = packet.getInt();
+    const player = this.playerFor(clientNumber);
+    this.ctfMode.scoreFlag(player, relay, relayVersion, goal, goalVersion, goalSpawn, team, score, flags, this.gameMode);
+    const localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? "");
+    this.emit({ type: "message", text: `${player.name} scored for ${team === localTeam ? "your" : "the enemy"} team` });
+    this.emit({ type: "players" });
+  }
 
   private buildPosition(): Uint8Array {
     const player = this.physics.player, networkPlayer = this.playerFor(this.clientNumber);

@@ -40,7 +40,9 @@ import { WeaponAudio } from "../platform/browser/WeaponAudio";
 import { ParticleRenderer } from "./ParticleRenderer";
 import { MultiplayerHUD } from "../platform/browser/MultiplayerHUD";
 import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platform/browser/PlayerRenderer";
+import { CtfRenderer } from "../platform/browser/CtfRenderer";
 import { ClientState } from "../engine/physics/types";
+import { ctfTeamFlag } from "../fpsgame/ctf";
 import type { RuntimeMode } from "../runtime";
 
 export type CameraMode = "free" | "player";
@@ -76,6 +78,7 @@ export class MapScene {
   private readonly particleRenderer: ParticleRenderer;
   private readonly multiplayerHUD: MultiplayerHUD;
   private readonly playerRenderer: PlayerRenderer;
+  private readonly ctfRenderer: CtfRenderer;
   private cameraMode: CameraMode = "free";
   private thirdperson = false;
   private teamskins = false;
@@ -130,6 +133,7 @@ export class MapScene {
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
     this.playerRenderer = new PlayerRenderer(this.scene);
+    this.ctfRenderer = new CtfRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
     this.weaponInput.enabled = runtimeMode === "game";
     this.weaponHUD.setVisible(runtimeMode === "game");
@@ -156,6 +160,7 @@ export class MapScene {
     this.currentMap = map;
     const lighting = resolveMapLighting(map, lightingOverrides);
     this.playerRenderer.clear();
+    this.ctfRenderer.clear();
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.volumeMeshes.length = 0;
     this.volumeMaterials.forEach((material) => material.dispose(true, true));
@@ -362,6 +367,7 @@ export class MapScene {
     if (document.pointerLockElement === this.canvas) void document.exitPointerLock();
     this.engine.stopRenderLoop();
     this.playerRenderer.clear();
+    this.ctfRenderer.clear();
     this.particleRenderer.clear();
     this.weaponRenderer.clear();
     this.engine.dispose();
@@ -375,6 +381,14 @@ export class MapScene {
 
   sendChat(text: string): void {
     this.fpsClient.multiplayer.sendChat(text);
+  }
+
+  switchTeam(): void {
+    this.fpsClient.multiplayer.switchTeam();
+  }
+
+  tryDropFlag(): void {
+    this.fpsClient.multiplayer.tryDropFlag();
   }
 
   isLocalPlayerDead(): boolean {
@@ -709,7 +723,11 @@ export class MapScene {
   }
 
   private spawnNetworkPlayer(): void {
-    const starts = this.currentMap?.entities.filter((entity) => entity.type === 3) ?? [];
+    const player = this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
+    const team = ctfTeamFlag(player?.team ?? "");
+    const allStarts = this.currentMap?.entities.filter((entity) => entity.type === 3) ?? [];
+    const teamStarts = team ? allStarts.filter((entity) => (entity.attributes[1] ?? 0) === team) : [];
+    const starts = teamStarts.length ? teamStarts : allStarts;
     const start = starts[Math.floor(Math.random() * starts.length)];
     if (start) {
       this.physics.spawn({ ...start.position, z: start.position.z + this.physics.player.eyeHeight }, start.attributes[0] ?? 0,
@@ -770,6 +788,9 @@ export class MapScene {
       });
     }
     this.playerRenderer.rendergame(players, multiplayer.gameMode, this.teamskins, localNetworkPlayer?.team ?? "", performance.now());
+    this.ctfRenderer.render(multiplayer.ctfMode.flags, multiplayer.players, multiplayer.clientNumber, localNetworkPlayer?.team ?? "",
+      this.physics.player.position, this.physics.player.aboveEye, this.physics.player.yaw, multiplayer.gameMode,
+      (clientNumber) => this.playerRenderer.flagAttachmentPosition(clientNumber));
   }
 
   private updatePlayerCamera(position: RegisteredMapEntity["position"]): void {

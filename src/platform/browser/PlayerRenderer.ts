@@ -68,6 +68,14 @@ export class PlayerRenderer {
     this.materials.clear();
   }
 
+  flagAttachmentPosition(playerId: number, eyeHeight = 14, aboveEye = 1): Vector3 | undefined {
+    const instance = this.instances.get(playerId);
+    if (!instance || !instance.root.isEnabled()) return undefined;
+    const position = instance.root.position.clone();
+    position.y += eyeHeight + aboveEye + 5;
+    return position;
+  }
+
   private renderplayer(player: RenderPlayer, gameMode: number, teamskins: boolean, localTeam: string, nowMilliseconds: number): void {
     let instance = this.instances.get(player.id);
     if (!instance) {
