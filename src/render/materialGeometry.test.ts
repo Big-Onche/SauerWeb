@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MaterialVolume, SauerMap } from "../map/types";
+import type { MaterialVolume, SauerMap } from "../engine/octa";
 import { generateMaterialGeometry } from "./materialGeometry";
 
 describe("generateMaterialGeometry", () => {

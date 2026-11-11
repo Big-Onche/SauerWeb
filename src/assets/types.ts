@@ -1,4 +1,4 @@
-import type { VSlot } from "../map/types";
+import type { VSlot } from "../engine/octa";
 
 export type TextureKind = "diffuse" | "normal" | "glow" | "specular" | "depth" | "alpha" | "decal" | "environment" | "unknown";
 

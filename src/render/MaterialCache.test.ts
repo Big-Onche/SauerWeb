@@ -4,7 +4,7 @@ import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTexture } from "../assets/types";
-import type { Lightmap } from "../map/types";
+import type { Lightmap } from "../engine/octa";
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 
 describe("MaterialCache", () => {

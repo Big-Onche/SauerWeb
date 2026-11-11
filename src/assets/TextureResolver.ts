@@ -1,4 +1,4 @@
-import type { SauerMap, VSlot } from "../map/types";
+import type { SauerMap, VSlot } from "../engine/octa";
 import type { ResolvedTexture, TextureManifest, TextureSlot } from "./types";
 
 const DEFAULT_VSLOT: VSlot = {

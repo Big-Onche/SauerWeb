@@ -1,5 +1,5 @@
 import type { MapFogOverrides } from "../assets/types";
-import type { SauerMap } from "../map/types";
+import type { SauerMap } from "../engine/octa";
 import { expandSauerColor, sauerColorBytes } from "./MapLighting";
 
 export interface MapFog {

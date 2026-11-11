@@ -17,6 +17,29 @@ The Vite development server indexes maps directly from `.Sauerbraten/packages/ba
 
 Controls: **WASD / arrows** move, the **mouse** looks around, and the diamond button toggles wireframe.
 
+## Source layout
+
+The TypeScript core follows the native Sauerbraten tree. Engine code is renderer-independent and keeps Sauerbraten's Z-up coordinates; Babylon conversion and browser APIs stay at the boundary.
+
+```text
+src/
+├── engine/
+│   ├── physics.ts
+│   ├── sound.ts
+│   ├── renderva.ts
+│   ├── worldio.ts
+│   ├── octa.ts
+│   └── rendermodel.ts
+├── fpsgame/
+│   ├── client.ts
+│   ├── weapon.ts
+│   └── entities.ts
+├── platform/browser/
+└── render/
+```
+
+Large systems retain focused implementation modules beneath their native entry point, such as `engine/physics/` and `fpsgame/weapon/`. Correspondence comments identify the original C++ file, function, and verified reference revision.
+
 ## Current milestone
 
 - Discovers all 331 bundled maps and reports their real format versions.

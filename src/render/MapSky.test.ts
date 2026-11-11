@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SauerMap } from "../map/types";
+import type { SauerMap } from "../engine/octa";
 import { DEFAULT_MAP_SKY, resolveMapSky, skyFaceCandidates, skyTextureRotationRadians } from "./MapSky";
 
 describe("map sky", () => {

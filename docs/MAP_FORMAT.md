@@ -10,15 +10,15 @@ The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27
 
 | C++ reference | Relevant behavior | TypeScript equivalent |
 | --- | --- | --- |
-| `src/engine/world.h` — `octaheader` | 40-byte v33 header and `MAPVERSION` | `SauerMapParser.readHeader` |
-| `src/engine/worldio.cpp` — `load_world` | Section order: variables, game data, MRU, entities, VSlots, octree, lightmaps/PVS/blendmap | `SauerMapParser.parse` |
-| `src/engine/worldio.cpp` — `loadvslots` / `loadvslot` | Negative blank runs and bit-mask-controlled VSlot fields | `SauerMapParser.readVSlots` |
-| `src/engine/worldio.cpp` — `loadchildren` / `loadc` | Eight-child recursion, leaf tags, edges, textures, material, merge and surface payloads | `SauerMapParser.readChildren` / `readCube` |
-| `src/engine/octa.h` — `cube`, `surfaceinfo`, `vertinfo` | Typed octree, 12 nibble-packed edges, six textures, surface layers and vertices | `src/map/types.ts` |
-| `src/engine/octa.cpp` — `genfaceverts` | Face vertex order reconstructed from edge nibbles | `generatedVertex` / `encodedCorner` |
-| `src/engine/octarender.cpp` — `addcubeverts` | Low 12-bit vertex origin restoration and 1/8 world-unit conversion | `geometry.decodeVertex` |
+| `src/engine/world.h` — `octaheader` | 40-byte v33 header and `MAPVERSION` | `src/engine/worldio.ts` — `SauerMapParser.readHeader` |
+| `src/engine/worldio.cpp` — `load_world` | Section order: variables, game data, MRU, entities, VSlots, octree, lightmaps/PVS/blendmap | `src/engine/worldio.ts` — `SauerMapParser.parse` |
+| `src/engine/worldio.cpp` — `loadvslots` / `loadvslot` | Negative blank runs and bit-mask-controlled VSlot fields | `src/engine/worldio.ts` — `SauerMapParser.loadvslots` |
+| `src/engine/worldio.cpp` — `loadchildren` / `loadc` | Eight-child recursion, leaf tags, edges, textures, material, merge and surface payloads | `src/engine/worldio.ts` — `loadchildren` / `loadc` |
+| `src/engine/octa.h` — `cube`, `surfaceinfo`, `vertinfo` | Typed octree, 12 nibble-packed edges, six textures, surface layers and vertices | `src/engine/octa.ts` |
+| `src/engine/octa.cpp` — `genfaceverts` | Face vertex order reconstructed from edge nibbles | `src/engine/worldio.ts` — `generatedVertex` / `encodedCorner` |
+| `src/engine/octarender.cpp` — `addcubeverts` | Low 12-bit vertex origin restoration and 1/8 world-unit conversion | `src/engine/renderva.ts` — `decodeVertex` |
 | `src/engine/worldio.cpp` / `lightmap.h` | 512×512 RGB/RGBA atlas records and reserved lightmap IDs | `SauerMapParser.readLightmaps` / `MaterialCache` |
-| `src/shared/ents.h` — `entity` | 24-byte entity record | `SauerMapParser.readEntities` |
+| `src/shared/ents.h` — `entity` | 24-byte entity record | `src/engine/worldio.ts` — `SauerMapParser.readEntities` |
 
 ## Version 33 serialized order
 

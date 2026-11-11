@@ -15,9 +15,9 @@ import type { Scene } from "@babylonjs/core/scene";
 import "@babylonjs/core/Shaders/particles.fragment";
 import "@babylonjs/core/Shaders/particles.vertex";
 import { packageAssetUrl } from "../assets/TextureResolver";
-import type { RegisteredMapEntity, Vec3 } from "../map/types";
-import { Gun } from "../weapons/WeaponDefinitions";
-import type { WeaponEvent, WeaponEvents } from "../weapons/WeaponEvents";
+import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
+import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
+import type { WeaponEvent, WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { toBabylonDirection, toBabylonPosition } from "./coordinates";
 
 type ParticleTexture = "ball1.png" | "ball2.png" | "ball3.png" | "base.png" | "explosion.png" | "flames.png" | "flare.jpg" |

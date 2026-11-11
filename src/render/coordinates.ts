@@ -1,5 +1,5 @@
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import type { Vec3 } from "../map/types";
+import type { Vec3 } from "../engine/octa";
 
 /** Sauerbraten is Z-up; Babylon is Y-up. This is the only axis conversion used by the renderer. */
 export function toBabylonPosition(position: Vec3): Vector3 {

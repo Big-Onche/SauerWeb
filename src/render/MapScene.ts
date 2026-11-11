@@ -18,10 +18,10 @@ import { PostProcess } from "@babylonjs/core/PostProcesses/postProcess";
 import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import "@babylonjs/core/Shaders/postprocess.vertex";
-import type { RegisteredMapEntity, SauerMap } from "../map/types";
+import type { RegisteredMapEntity, SauerMap } from "../engine/octa";
 import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverrides, ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
-import { generateGeometry, type GeometryBatch } from "./geometry";
+import { generateGeometry, type GeometryBatch } from "../engine/renderva";
 import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 import { toBabylonDirection, toBabylonPosition, toBabylonYawDirection } from "./coordinates";
@@ -30,13 +30,13 @@ import { loadMapModels } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { installSauerFogDistance } from "./SauerFogShader";
-import { BrowserPhysicsInput } from "../physics/input";
-import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../physics/simulation";
-import { WeaponSystem } from "../weapons/WeaponSystem";
-import { BrowserWeaponInput } from "../weapons/WeaponInput";
-import { WeaponHUD } from "../weapons/WeaponHUD";
-import { WeaponRenderer } from "../weapons/WeaponRenderer";
-import { WeaponAudio } from "../weapons/WeaponAudio";
+import { BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
+import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics";
+import { createClient } from "../fpsgame/client";
+import { BrowserWeaponInput } from "../platform/browser/WeaponInput";
+import { WeaponHUD } from "../platform/browser/WeaponHUD";
+import { WeaponRenderer } from "../platform/browser/WeaponRenderer";
+import { WeaponAudio } from "../platform/browser/WeaponAudio";
 import { ParticleRenderer } from "./ParticleRenderer";
 
 export type CameraMode = "free" | "player";
@@ -64,7 +64,7 @@ export class MapScene {
   private readonly playerCamera: UniversalCamera;
   private readonly physics = new PhysicsSimulation();
   private readonly physicsInput: BrowserPhysicsInput;
-  private readonly weapons: WeaponSystem;
+  private readonly weapons = createClient(this.physics).weapons;
   private readonly weaponInput: BrowserWeaponInput;
   private readonly weaponHUD: WeaponHUD;
   private readonly weaponRenderer: WeaponRenderer;
@@ -108,8 +108,6 @@ export class MapScene {
     this.createViewportTuningPostProcess(this.playerCamera);
     this.scene.activeCamera = this.freeCamera;
     this.physicsInput = new BrowserPhysicsInput(canvas);
-    this.weapons = new WeaponSystem({ raycast: (origin, direction, distance, radius) => this.physics.raycast(origin, direction, distance, radius) },
-      this.physics.player);
     this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
@@ -267,11 +265,11 @@ export class MapScene {
   }
 
   setPhysicsPaused(paused: boolean): void {
-    this.physics.setPaused(paused);
+    this.physics.setPaused(paused, performance.now());
   }
 
   resetPlayer(): void {
-    this.physics.reset();
+    this.physics.reset(performance.now());
     this.weapons.controller.respawn(performance.now());
     this.weapons.projectiles.clear();
     this.weaponHUD.render();
@@ -529,7 +527,7 @@ export class MapScene {
     const fallback = { x: map.header.worldSize / 2, y: map.header.worldSize / 2, z: map.header.worldSize * 0.65 };
     const spawn = playerStart ? { ...playerStart.position, z: playerStart.position.z + 14 } : fallback;
     const spawnYaw = playerStart?.attributes[0] ?? 0;
-    this.physics.spawn(spawn, spawnYaw);
+    this.physics.spawn(spawn, spawnYaw, performance.now());
     this.weapons.controller.respawn(performance.now());
     this.weaponHUD.render();
     this.freeCamera.position.copyFrom(toBabylonPosition(spawn));

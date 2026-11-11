@@ -1,5 +1,5 @@
 import type { MapLightingOverrides } from "../assets/types";
-import type { SauerMap } from "../map/types";
+import type { SauerMap } from "../engine/octa";
 
 export interface MapLighting {
   ambient: number;

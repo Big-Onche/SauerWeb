@@ -7,13 +7,13 @@ The inspected native revision is `77dab9772147fc8e6861578e0f767204d9daca5a`.
 
 | Browser implementation | Native source | Behavior |
 | --- | --- | --- |
-| `src/physics/types.ts` | `src/shared/ents.h:60-118` | `CS_*`, `PHYS_*`, `COLLIDE_*`, `physent` fields, defaults, and reset state |
-| `src/physics/constants.ts` | `src/engine/physics.cpp:473-478,1583` | stair/floor/slope/wall thresholds, jump velocity, gravity, and 5 ms frame time |
-| `src/physics/scheduler.ts` | `src/engine/physics.cpp:1748-1775` | ceil-to-frame scheduling and render interpolation |
-| `src/physics/simulation.ts` | `src/engine/physics.cpp:1549-1571,1590-1675,1682-1723` | input direction, initial velocity/friction/gravity integration, and movement frame structure |
+| `src/engine/physics/types.ts` | `src/shared/ents.h:60-118` | `CS_*`, `PHYS_*`, `COLLIDE_*`, `physent` fields, defaults, and reset state |
+| `src/engine/physics/constants.ts` | `src/engine/physics.cpp:473-478,1583` | stair/floor/slope/wall thresholds, jump velocity, gravity, and 5 ms frame time |
+| `src/engine/physics/scheduler.ts` | `src/engine/physics.cpp:1748-1775` | ceil-to-frame scheduling and render interpolation |
+| `src/engine/physics.ts` | `src/engine/physics.cpp:1549-1571,1590-1675,1682-1723` | input direction, initial velocity/friction/gravity integration, and movement frame structure |
 | `src/render/MapScene.ts` | `src/engine/world.cpp:1187-1205`, `src/engine/physics.cpp:2023-2055` | player-start yaw and conversion from feet position to the eye-origin position |
-| `src/physics/input.ts` | `src/engine/physics.cpp:2015-2020` | movement and jump input state/sign conventions |
-| `src/physics/replay.ts` | deterministic browser-side harness | timestamped input traces with renderer-independent result snapshots |
+| `src/engine/physics/input.ts` | `src/engine/physics.cpp:2015-2020` | movement and jump input state/sign conventions |
+| `src/engine/physics/replay.ts` | deterministic browser-side harness | timestamped input traces with renderer-independent result snapshots |
 
 The milestone-00 integrator deliberately has no collision response. Its role is to validate scheduling, state, input, coordinate conversion, and replay determinism before collision changes trajectories. The octree remains the physics-facing decoded `SauerMap.world`; renderer meshes are not an input to the physics core.
 
@@ -31,9 +31,9 @@ The next implementation stage must preserve the native split between traversal a
 
 | Browser implementation | Native source | Behavior |
 | --- | --- | --- |
-| `src/physics/collision.ts` | `src/engine/physics.cpp:776-1057`, `src/engine/octa.cpp:1204-1251`, `src/engine/mpr.h:113-175` | octree broad phase, solid/deformed cube planes, capsule support points, clip materials, and contact normals |
-| `src/physics/ground.ts` | `src/engine/physics.cpp:1072-1400` | floor classification, projection, landing/falling, stairs, ground adhesion, sliding, and collision retries |
-| `src/physics/simulation.ts` | `src/engine/physics.cpp:1590-1723`, `src/fpsgame/fps.cpp:264-270` | slope-relative desired velocity, gravity, jumping, ten movement substeps, and five-retry collision behavior |
+| `src/engine/physics/collision.ts` | `src/engine/physics.cpp:776-1057`, `src/engine/octa.cpp:1204-1251`, `src/engine/mpr.h:113-175` | octree broad phase, solid/deformed cube planes, capsule support points, clip materials, and contact normals |
+| `src/engine/physics/ground.ts` | `src/engine/physics.cpp:1072-1400` | floor classification, projection, landing/falling, stairs, ground adhesion, sliding, and collision retries |
+| `src/engine/physics.ts` | `src/engine/physics.cpp:1590-1723`, `src/fpsgame/fps.cpp:264-270` | slope-relative desired velocity, gravity, jumping, ten movement substeps, and five-retry collision behavior |
 
 Map-parser integration tests run the controller on the real `aard3c` and `triforts` octrees to ensure their player starts settle on geometry rather than falling through the world.
 
@@ -43,8 +43,8 @@ The contact smoothing path follows `vec::projectxy` (`src/shared/geom.h:147-160`
 
 | Browser implementation | Native source | Behavior |
 | --- | --- | --- |
-| `src/physics/simulation.ts` | `src/engine/physics.cpp:1590-1744` | lower-body volume probe, water/lava velocity rules, entry damping, liquid friction, and death/out-of-world state |
-| `src/physics/collision.ts` | `src/engine/physics.cpp:535-571,710-773,994-1057` | clip filtering by entity type, mapmodel ellipse/box collision, contact normals, and material lookup |
+| `src/engine/physics.ts` | `src/engine/physics.cpp:1590-1744` | lower-body volume probe, water/lava velocity rules, entry damping, liquid friction, and death/out-of-world state |
+| `src/engine/physics/collision.ts` | `src/engine/physics.cpp:535-571,710-773,994-1057` | clip filtering by entity type, mapmodel ellipse/box collision, contact normals, and material lookup |
 | `src/render/MapModelLoader.ts` | `src/engine/model.h:44-73`, `src/engine/rendermodel.cpp:52-66,217-232` | model bounds, `mdlcollide`, `mdlellipsecollide`, `mdlbb`, and bounding-box extension definitions |
 | `src/render/MapModelLoader.ts` | `src/fpsgame/entities.cpp:396-483` | initial trigger-driven `EF_NOCOLLIDE` filtering |
 

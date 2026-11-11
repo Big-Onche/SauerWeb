@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SauerMap } from "../map/types";
+import type { SauerMap } from "../engine/octa";
 import { createFogDomeGeometry, resolveMapFog } from "./MapFog";
 
 describe("map fog", () => {

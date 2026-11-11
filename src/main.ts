@@ -1,9 +1,9 @@
 import "./style.css";
-import { SauerMapParser } from "./map/SauerMapParser";
-import type { SauerMap } from "./map/types";
+import { SauerMapParser } from "./engine/worldio";
+import type { SauerMap } from "./engine/octa";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
 import { MapScene, type SceneStats, type ViewportTuning } from "./render/MapScene";
-import { PhysicsState } from "./physics/types";
+import { PhysicsState } from "./engine/physics/types";
 
 interface MapListItem {
   name: string;

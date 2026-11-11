@@ -1,5 +1,5 @@
 import type { MapSkyOverrides } from "../assets/types";
-import type { MapVariable, SauerMap } from "../map/types";
+import type { MapVariable, SauerMap } from "../engine/octa";
 
 export interface MapSky {
   basePath: string;

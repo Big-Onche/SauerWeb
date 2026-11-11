@@ -7,7 +7,7 @@ import { Constants } from "@babylonjs/core/Engines/constants";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import type { Scene } from "@babylonjs/core/scene";
 import type { ResolvedTexture } from "../assets/types";
-import type { Lightmap } from "../map/types";
+import type { Lightmap } from "../engine/octa";
 import { DEFAULT_MAP_LIGHTING, sauerColorBytes } from "./MapLighting";
 
 export type SauerSurfaceMode = "opaque" | "alpha-test" | "transparent" | "special";

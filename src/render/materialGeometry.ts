@@ -1,4 +1,4 @@
-import type { MaterialVolume, SauerMap } from "../map/types";
+import type { MaterialVolume, SauerMap } from "../engine/octa";
 
 export type MaterialRenderKind = "water" | "lava" | "glass" | "clip" | "noclip" | "gameclip" | "death" | "alpha";
 

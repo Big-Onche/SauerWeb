@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SauerMap } from "../map/types";
+import type { SauerMap } from "../engine/octa";
 import { DEFAULT_MAP_LIGHTING, expandSauerColor, resolveMapLighting, sauerColorBytes } from "./MapLighting";
 
 describe("map lighting", () => {
