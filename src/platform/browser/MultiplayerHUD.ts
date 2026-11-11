@@ -1,6 +1,7 @@
 import { ClientState } from "../../engine/physics/types";
 import type { MultiplayerClient, MultiplayerEvent, NetworkPlayer } from "../../fpsgame/client";
 import { GameModeFlag, gameModeHas, gameModeName } from "../../fpsgame/game";
+import { guiSkinMarkup } from "../../guiSkin";
 
 const MODEL_ICONS = ["mrfixit", "snoutx10k", "ogro", "inky", "captaincannon"];
 
@@ -67,7 +68,7 @@ export class MultiplayerHUD {
     const title = escapeHtml(this.client.serverDescription || "scoreboard");
     const details = `${escapeHtml(gameModeName(this.client.gameMode))} · ${escapeHtml(this.client.mapName)} · ` +
       formatTime(this.client.timeLeftSeconds);
-    return `<div class="score-guiskin" aria-hidden="true"></div><header><span>${title}</span>` +
+    return `${guiSkinMarkup()}<header><span>${title}</span>` +
       `<small>${details}</small></header><div class="score-groups ${teamMode ? "team-groups" : ""}">${groupMarkup}</div>` +
       (spectators.length ? `<div class="score-spectators"><strong>spectators</strong>${spectators.map((entry) =>
         `<span>${escapeHtml(entry.name)} <small>${entry.ping} ping · cn ${entry.clientNumber}</small></span>`).join("")}</div>` : "");

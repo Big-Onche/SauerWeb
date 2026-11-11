@@ -1,8 +1,10 @@
 import "./style.css";
+import "./guiSkin.css";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
 import { crc32 } from "./engine/crc32";
 import { SauerMapParser } from "./engine/worldio";
 import { gameModeName } from "./fpsgame/game";
+import { guiSkinMarkup } from "./guiSkin";
 import { GameConsole } from "./platform/browser/GameConsole";
 import { MapScene } from "./render/MapScene";
 
@@ -29,11 +31,17 @@ app.innerHTML = `
         <small>press any key to respawn</small>
       </section>
       <section id="pause-menu" class="game-pause" hidden aria-label="Pause menu">
-        <div class="pause-guiskin" aria-hidden="true"></div>
-        <h1>paused</h1>
-        <button type="button" data-action="resume">resume game</button>
-        <button type="button" data-action="switch-team" ${server ? "" : "hidden"}>switch team</button>
-        <button type="button" data-action="menu">main menu</button>
+        <div class="pause-dialog">
+          ${guiSkinMarkup()}
+          <h1>paused</h1>
+          <div class="pause-actions">
+            <button type="button" data-action="resume"><img src="/api/packages/icons/menu.jpg" alt="" /><span>resume game</span></button>
+            <button type="button" data-action="switch-team" ${server ? "" : "hidden"}>
+              <img src="/api/packages/icons/menu.jpg" alt="" /><span>switch team</span>
+            </button>
+            <button type="button" data-action="menu"><img src="/api/packages/icons/exit.jpg" alt="" /><span>main menu</span></button>
+          </div>
+        </div>
       </section>
     </section>
   </main>`;

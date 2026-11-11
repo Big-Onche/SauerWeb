@@ -1,8 +1,10 @@
 import "./menu.css";
+import "./guiSkin.css";
 import { refreshservers, servercompatible, servermodename, sortservers, type ServerListItem } from "./engine/serverbrowser";
 import { MAP_MENU_PAGES } from "./menuData";
 import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
 import { gameModeName } from "./fpsgame/game";
+import { guiSkinMarkup } from "./guiSkin";
 
 interface MapListItem {
   name: string;
@@ -20,7 +22,6 @@ let serverBrowserLoaded = false;
 let serverBrowserRequest = 0;
 const serverBrowserOptions = { searchlan: false, autoupdateservers: true, autosortservers: true };
 const backgroundDecals = createBackgroundDecals();
-let guiSkinSequence = 0;
 
 route();
 window.addEventListener("popstate", route);
@@ -359,27 +360,6 @@ function createBackgroundDecals(): string {
     const flip = Math.random() < 0.5 ? -1 : 1;
     return `<img src="/api/data/background_decal.png" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%;width:${size.toFixed(1)}px;--flip:${flip}" alt="" />`;
   }).join("");
-}
-
-function guiSkinMarkup(): string {
-  const skinId = guiSkinSequence++;
-  const pieces = [
-    ["corner top-left", "11 104 12 13"], ["edge top", "23 104 206 13"], ["corner top-right", "229 104 17 13"],
-    ["edge left", "11 56 12 48"], ["center", "23 56 206 48"], ["edge right", "229 56 17 48"],
-    ["corner bottom-left", "11 104 12 13"], ["edge bottom", "23 104 206 13"], ["corner bottom-right", "229 104 17 13"],
-  ];
-  const tileSizes: Record<string, [number, number]> = {
-    "edge top": [412, 26], "edge left": [24, 96], center: [412, 96], "edge right": [34, 96], "edge bottom": [412, 26],
-  };
-  return `<div class="gui-skin" aria-hidden="true">${pieces.map(([className, viewBox], index) => {
-    const classes = `skin-${className.replaceAll(" ", " skin-")}`;
-    const tileSize = tileSizes[className];
-    if (tileSize) {
-      const patternId = `skin-piece-${skinId}-${index}`;
-      return `<svg class="${classes}"><defs><pattern id="${patternId}" width="${tileSize[0]}" height="${tileSize[1]}" patternUnits="userSpaceOnUse"><svg width="${tileSize[0]}" height="${tileSize[1]}" viewBox="${viewBox}" preserveAspectRatio="none"><image href="/api/data/guiskin.png" width="256" height="128" /></svg></pattern></defs><rect width="100%" height="100%" fill="url(#${patternId})" /></svg>`;
-    }
-    return `<svg class="${classes}" viewBox="${viewBox}" preserveAspectRatio="none"><image href="/api/data/guiskin.png" width="256" height="128" /></svg>`;
-  }).join("")}</div>`;
 }
 
 function navigate(path: string): void {
