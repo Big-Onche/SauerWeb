@@ -29,6 +29,7 @@ import { resolveMapLighting } from "./MapLighting";
 import { loadMapModels } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
+import { installSauerFogDistance } from "./SauerFogShader";
 import { BrowserPhysicsInput } from "../physics/input";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../physics/simulation";
 import { WeaponSystem } from "../weapons/WeaponSystem";
@@ -88,6 +89,7 @@ export class MapScene {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
+    installSauerFogDistance();
     this.scene = new Scene(this.engine);
     this.materialCache = new MaterialCache(this.scene);
     this.scene.useRightHandedSystem = true;
