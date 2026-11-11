@@ -69,7 +69,7 @@ export class PhysicsSimulation {
 
   // Original: src/engine/physics.cpp
   // Function: physicsframe()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   physicsframe(nowMilliseconds: number, input: PhysicsInputState): Vec3 {
     if (!this.player.alive) this.player.clientState = ClientState.Dead;
     this.applyInput(input);
@@ -100,7 +100,7 @@ export class PhysicsSimulation {
 
   // Original: src/engine/physics.cpp
   // Function: moveplayer()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   private moveplayer(milliseconds: number): void {
     const player = this.player;
     player.previousPosition = copyVec3(player.position);

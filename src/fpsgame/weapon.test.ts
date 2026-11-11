@@ -11,7 +11,7 @@ const emptyWorld: WeaponWorld = { raycast: () => undefined };
 
 describe("Sauerbraten weapon parity", () => {
   it("ports the native player gun table without changing IDs or values", () => {
-    expect(SAUERBRATEN_SOURCE_REVISION).toBe("00f35db8ffe1281e332edb83262332f8197f671a");
+    expect(SAUERBRATEN_SOURCE_REVISION).toBe("SVN r6488");
     expect(WEAPONS.slice(0, 7).map((weapon) => [weapon.id, weapon.attackDelay, weapon.damage, weapon.spread,
       weapon.projectileSpeed, weapon.kickAmount, weapon.range, weapon.rays, weapon.hitPush, weapon.explosionRadius,
       weapon.projectileLifetime])).toEqual([

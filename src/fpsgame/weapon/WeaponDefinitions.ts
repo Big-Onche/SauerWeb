@@ -19,7 +19,7 @@ export const MAX_RAYS = 20;
 export const EXPLOSION_SELF_DAMAGE_DIVISOR = 2;
 export const EXPLOSION_SELF_PUSH = 2.5;
 export const EXPLOSION_DISTANCE_SCALE = 1.5;
-export const SAUERBRATEN_SOURCE_REVISION = "00f35db8ffe1281e332edb83262332f8197f671a";
+export const SAUERBRATEN_SOURCE_REVISION = "SVN r6488";
 
 export interface WeaponDefinition {
   id: Gun;
@@ -40,7 +40,7 @@ export interface WeaponDefinition {
 
 // Original: src/fpsgame/game.h
 // Data: guns[]
-// Sauerbraten reference: 00f35db8ffe1281e332edb83262332f8197f671a
+// Sauerbraten reference: SVN r6488
 export const WEAPONS: readonly WeaponDefinition[] = [
   weapon(Gun.Fist, "fist", "fist", "punch1", 250, 50, 0, 0, 0, 14, 1, 80, 0, 0),
   weapon(Gun.Shotgun, "shotgun", "shotg", "shotgun", 1400, 10, 400, 0, 20, 1024, 20, 80, 0, 0),

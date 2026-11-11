@@ -40,7 +40,7 @@ const LAYER_DUPLICATED = 1 << 7;
 
 // Original: src/engine/octarender.cpp
 // Functions: gencubeverts(), addcubeverts()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function generateGeometry(map: SauerMap, textures: ResolvedTexture[] = []): GeometryBatch[] {
   const batches = new Map<string, GeometryBatch>();
   const coincidentFaces = findCoincidentFaces(map.world);
@@ -208,7 +208,7 @@ function intervalOverlap(firstOrigin: number, firstSize: number, secondOrigin: n
 
 // Original: src/engine/octa.cpp
 // Function: genfaceverts()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 function generatedVertex(cube: OctreeCube, [x, y, z]: [number, number, number]): SurfaceVertex {
   const edge = (dimension: number, first: number, second: number) => cube.edges[dimension * 4 + second * 2 + first];
   const edgeValue = (value: number, high: number) => high ? value >> 4 : value & 0x0f;
@@ -274,7 +274,7 @@ function triangleAreaSquared(first: Vec3, second: Vec3, third: Vec3): number {
 
 // Original: src/engine/octarender.cpp
 // Function: calctexgen()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function projectUv(position: Vec3, orientation: number, scale: number, rotation: number, offset: [number, number]): [number, number] {
   const dimension = Math.floor(orientation / 2);
   const sDimension = [1, 0, 0][dimension];

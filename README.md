@@ -1,6 +1,7 @@
 # SauerWeb
 
-A browser-based viewer for native Cube 2: Sauerbraten maps, built with Babylon.js and TypeScript.
+A browser-based Cube 2: Sauerbraten client built with Babylon.js and TypeScript. It loads native maps and connects to original
+Sauerbraten protocol-260 servers through the bundled ENet WebAssembly transport.
 
 ## Run locally
 
@@ -13,9 +14,38 @@ npm install
 npm run dev
 ```
 
-The Vite development server indexes maps directly from `.Sauerbraten/packages/base`; the reference tree is never modified. Open the printed local URL, filter the archive, and select any enabled v33 map. You can also open a v33 `.ogz` from disk.
+The Vite development server indexes maps directly from `.Sauerbraten/packages/base`; the reference tree is never modified. Open the printed local URL,
+filter the archive, and select any enabled v33 map. You can also open a v33 `.ogz` from disk. The development server also starts the WebSocket-to-UDP
+relay and server browser API.
 
-Controls: **WASD / arrows** move, the **mouse** looks around, and the diamond button toggles wireframe.
+Controls: **WASD / arrows** move, the **mouse** aims, **left click** fires, **Tab** opens the multiplayer scoreboard, and the diamond button toggles
+wireframe.
+
+## Multiplayer and relay
+
+The multiplayer implementation is pinned to Sauerbraten SVN r6488 (`c63c9f327e278c6b49b39a8163a2717206d4f46a` in the official Git mirror):
+protocol 260, map format 33, and ENet 1.3.17. The original ENet C implementation is compiled to WebAssembly; TypeScript only supplies complete UDP datagrams
+to it and forwards its output as binary WebSocket frames. The relay never parses or modifies ENet traffic and creates a separate UDP socket for every
+browser connection.
+
+Relay destinations must be explicitly allowed. Configure the same list used by the server browser before starting Vite or the standalone relay:
+
+```powershell
+$env:SAUER_RELAY_SERVERS = "127.0.0.1:28785=Local server,play.example.net:28785=Public server"
+npm run dev
+```
+
+For production, run `npm run build` and `npm run relay`. The standalone process serves `/api/servers`, `/health`, and `/relay`; its port defaults to 8080
+and can be changed with `SAUER_RELAY_PORT`. Put it behind the same HTTPS reverse proxy as the static site, or configure native TLS with
+`SAUER_RELAY_TLS_KEY` and `SAUER_RELAY_TLS_CERT`. `SAUER_RELAY_ORIGINS` accepts a comma-separated browser-origin allowlist. Connection, message-size,
+packet-rate, and byte-rate limits are enforced in the relay.
+
+Precompiled ENet JavaScript and WebAssembly artifacts are committed, so Emscripten is not needed for ordinary development or deployment. To reproduce
+them with an activated emsdk:
+
+```powershell
+npm run build:enet
+```
 
 ## Source layout
 
@@ -24,6 +54,7 @@ The TypeScript core follows the native Sauerbraten tree. Engine code is renderer
 ```text
 src/
 ├── engine/
+│   ├── serverbrowser.ts
 │   ├── physics.ts
 │   ├── sound.ts
 │   ├── renderva.ts
@@ -32,8 +63,13 @@ src/
 │   └── rendermodel.ts
 ├── fpsgame/
 │   ├── client.ts
+│   ├── game.ts
 │   ├── weapon.ts
 │   └── entities.ts
+├── network/
+│   ├── enet.ts
+│   ├── protocol.ts
+│   └── enet/
 ├── platform/browser/
 └── render/
 ```
@@ -41,6 +77,11 @@ src/
 Large systems retain focused implementation modules beneath their native entry point, such as `engine/physics/` and `fpsgame/weapon/`. Correspondence comments identify the original C++ file, function, and verified reference revision.
 
 ## Current milestone
+
+- Connects to unmodified protocol-260 Sauerbraten servers with native ENet channels, reliability, sequencing, retransmission, and disconnect behavior.
+- Implements the native client handshake, map changes, spawn/death lifecycle, position updates, rifle shots, hit reports, damage, score state, pings, and
+  instagib HUD/scoreboard flow.
+- Provides an HTML/CSS server browser backed by native server-info queries. Only configured relay destinations are exposed and connectable.
 
 - Discovers all 331 bundled maps and reports their real format versions.
 - Decompresses and validates native `.ogz` files in the browser.

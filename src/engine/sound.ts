@@ -7,7 +7,7 @@ export class SoundSystem {
 
   // Original: src/engine/sound.cpp
   // Function: playsound()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   playsound(path: string, volume = 1): void {
     this.backend.play(path, volume);
   }

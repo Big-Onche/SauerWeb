@@ -68,7 +68,7 @@ export class OctreeCollisionWorld {
 
   // Original: src/engine/physics.cpp
   // Function: raycube()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   raycube(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0): RaycastResult | undefined {
     let best: RaycastResult | undefined;
     const visit = (cube: OctreeCube): void => {

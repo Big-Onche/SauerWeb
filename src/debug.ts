@@ -116,14 +116,24 @@ const gammaValue = required<HTMLOutputElement>("#gamma-value");
 const vibranceValue = required<HTMLOutputElement>("#vibrance-value");
 const parser = new SauerMapParser();
 const mapScene = new MapScene(canvas);
-mapScene.enableDebugLoadout();
+const launchParameters = new URLSearchParams(location.search);
+const multiplayerHost = launchParameters.get("server");
+const multiplayerPort = Number(launchParameters.get("port") || 28785);
+if (!multiplayerHost) mapScene.enableDebugLoadout();
 let maps: MapListItem[] = [];
 let activeMapName = "";
+let multiplayerConnected = false;
 const viewportSettingsStorageKey = "sauerweb.viewport-settings";
 const defaultViewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
 
 void loadMapIndex();
 setViewportTuning(readViewportTuning());
+mapScene.onMultiplayer((event) => {
+  if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMapName.toLocaleLowerCase()) {
+    const available = maps.find((map) => map.supported && map.name.toLocaleLowerCase() === event.map.toLocaleLowerCase());
+    if (available) void loadBundledMap(available.name);
+  }
+});
 
 search.addEventListener("input", () => renderMapList());
 fileInput.addEventListener("change", () => {
@@ -269,6 +279,10 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
     showLoadedMap(map, sceneStats);
     activeMapName = name;
     renderMapList();
+    if (multiplayerHost && !multiplayerConnected) {
+      multiplayerConnected = true;
+      await mapScene.connectMultiplayer({ host: multiplayerHost, port: multiplayerPort, playerName: savedPlayerName(), map: name, mode: 3 });
+    }
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     error.textContent = message;
@@ -276,6 +290,10 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
   } finally {
     setBusy(false);
   }
+}
+
+function savedPlayerName(): string {
+  try { return localStorage.getItem("sauerweb.player-name") || "unnamed"; } catch { return "unnamed"; }
 }
 
 async function decompressGzip(compressed: ArrayBuffer): Promise<ArrayBuffer> {

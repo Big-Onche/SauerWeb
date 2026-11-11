@@ -27,7 +27,7 @@ export interface ModelGeometryMesh {
 
 // Original: src/engine/md5.h
 // Function: md5meshgroup::loadmesh()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function parseMd5(source: string, animationSource?: string, adjustments: ModelAdjustment[] = []): ModelGeometry {
   const jointBlock = source.match(/joints\s*\{([\s\S]*?)\}/i)?.[1];
   if (!jointBlock) throw new Error("MD5 model has no joints block.");
@@ -219,7 +219,7 @@ function multiplyMd5Quaternions(left: [number, number, number, number], right: [
 
 // Original: src/engine/obj.h
 // Function: objmeshgroup::load()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function parseObj(source: string): ModelGeometry {
   const positions: number[][] = [];
   const texCoords: number[][] = [];
@@ -275,7 +275,7 @@ function objIndex(value: string | undefined, length: number): number {
 
 // Original: src/engine/md2.h
 // Function: md2::load()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function parseMd2(buffer: ArrayBuffer): ModelGeometry {
   const view = new DataView(buffer);
   if (view.byteLength < 68 || view.getInt32(0, true) !== 844121161 || view.getInt32(4, true) !== 8) throw new Error("Invalid MD2 header.");
@@ -337,7 +337,7 @@ export function parseMd2(buffer: ArrayBuffer): ModelGeometry {
 
 // Original: src/engine/md3.h
 // Function: md3::load()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function parseMd3(buffer: ArrayBuffer): ModelGeometry {
   const view = new DataView(buffer);
   if (view.byteLength < 108 || readAscii(view, 0, 4) !== "IDP3" || view.getInt32(4, true) !== 15) throw new Error("Invalid MD3 header.");
@@ -373,7 +373,7 @@ export function parseMd3(buffer: ArrayBuffer): ModelGeometry {
 
 // Original: src/engine/iqm.h
 // Function: iqmmeshgroup::loadiqmmeshes()
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function parseIqm(buffer: ArrayBuffer): ModelGeometry {
   const view = new DataView(buffer);
   if (view.byteLength < 124 || readAscii(view, 0, 16) !== "INTERQUAKEMODEL" || view.getUint32(16, true) !== 2) {

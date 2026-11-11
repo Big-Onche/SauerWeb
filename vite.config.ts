@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
+import { attachSauerRelay, configuredServers, serverListMiddleware } from "./relay/relay.mjs";
 
 const mapsDirectory = path.resolve(".Sauerbraten/packages/base");
 const sauerRoot = path.resolve(".Sauerbraten");
@@ -638,10 +639,13 @@ function resolveHudGunPose(source: string) {
 
 function sauerMapsPlugin(): Plugin {
   let cachedMaps: MapListItem[] | undefined;
+  const relayServers = configuredServers();
 
   return {
     name: "sauer-maps",
     configureServer(server) {
+      if (server.httpServer) attachSauerRelay(server.httpServer, { servers: relayServers });
+      server.middlewares.use("/api/servers", serverListMiddleware(relayServers));
       server.middlewares.use("/api/hudguns", (_request, response) => {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         response.setHeader("Cache-Control", "no-store");

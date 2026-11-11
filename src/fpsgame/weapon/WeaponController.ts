@@ -20,7 +20,7 @@ export class WeaponController {
 
   // Original: src/fpsgame/weapon.cpp
   // Function: shoot()
-  // Sauerbraten reference: 00f35db8ffe1281e332edb83262332f8197f671a
+  // Sauerbraten reference: SVN r6488
   shoot(nowMilliseconds: number, target: Vec3, targets: readonly Damageable[]): boolean {
     if (!this.owner.alive || !this.attacking || nowMilliseconds - this.lastAction < this.gunWait) return false;
     const gun = this.inventory.selectedGun;

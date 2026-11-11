@@ -24,7 +24,7 @@ export class SauerMapParser {
 
   // Original: src/engine/worldio.cpp
   // Function: load_world()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   load_world(buffer: ArrayBuffer, name = "map"): SauerMap {
     const reader = new BinaryReader(buffer);
     const header = this.readHeader(reader);
@@ -155,7 +155,7 @@ export class SauerMapParser {
 
   // Original: src/engine/worldio.cpp
   // Function: loadvslots()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   private loadvslots(reader: BinaryReader, declaredCount: number): VSlot[] {
     const vslots: VSlot[] = [];
     let remaining = declaredCount;
@@ -200,7 +200,7 @@ export class SauerMapParser {
 
   // Original: src/engine/worldio.cpp
   // Function: loadchildren()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   private loadchildren(reader: BinaryReader, origin: Vec3, size: number): OctreeCube[] {
     if (size < 1) throw new Error("Octree subdivides below one world unit.");
     return Array.from({ length: 8 }, (_, index) => {
@@ -215,7 +215,7 @@ export class SauerMapParser {
 
   // Original: src/engine/worldio.cpp
   // Function: loadc()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   private loadc(reader: BinaryReader, origin: Vec3, size: number): OctreeCube {
     const octsav = reader.uint8("octree node flags");
     const nodeType = octsav & 0x07;

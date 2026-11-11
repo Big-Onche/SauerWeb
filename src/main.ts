@@ -1,4 +1,5 @@
 import "./menu.css";
+import { refreshservers, servermodename, type ServerListItem } from "./engine/serverbrowser";
 import { MAP_MENU_PAGES } from "./menuData";
 
 interface MapListItem {
@@ -26,8 +27,9 @@ function route(): void {
     void import("./debug");
     return;
   }
-  document.title = path === "/maps" ? "SauerWeb — Maps" : "SauerWeb";
+  document.title = path === "/maps" ? "SauerWeb — Maps" : path === "/servers" ? "SauerWeb — Servers" : "SauerWeb";
   if (path === "/maps") renderMapsMenu();
+  else if (path === "/servers") renderServersMenu();
   else renderMainMenu();
 }
 
@@ -50,7 +52,7 @@ function renderMainMenu(): void {
         </div>
         <div class="menu-rule"></div>
         <nav class="menu-actions" aria-label="Main menu">
-          ${menuButton("server browser..", "server", false)}
+          ${menuButton("server browser..", "server", true)}
           ${menuButton("bot match..", "bot", true)}
           ${menuButton("campaign..", "campaign", false)}
           <div class="menu-rule compact"></div>
@@ -71,9 +73,55 @@ function renderMainMenu(): void {
   const playerName = required<HTMLInputElement>("#player-name");
   playerName.addEventListener("change", () => savePlayerName(playerName.value));
   required<HTMLButtonElement>("[data-action='bot']").addEventListener("click", () => navigate("/maps"));
+  required<HTMLButtonElement>("[data-action='server']").addEventListener("click", () => navigate("/servers"));
   const about = required<HTMLDialogElement>("#about-dialog");
   required<HTMLButtonElement>("[data-action='about']").addEventListener("click", () => about.showModal());
   about.querySelector("button")?.addEventListener("click", () => about.close());
+}
+
+function renderServersMenu(): void {
+  app.innerHTML = `
+    <main class="sauer-screen servers-screen">
+      ${backgroundMarkup(false)}
+      <section class="sauer-dialog servers-dialog" aria-labelledby="servers-title">
+        ${guiSkinMarkup()}
+        <header class="maps-heading"><div><p>multiplayer</p><h1 id="servers-title">server browser</h1></div>
+          <button id="servers-back" class="back-button" type="button">‹ main menu</button></header>
+        <div class="server-heading"><span>server</span><span>map</span><span>mode</span><span>players</span><span>ping</span></div>
+        <div id="server-list" class="server-list"><p>Querying configured Sauerbraten servers…</p></div>
+        <footer><span>PROTOCOL 260 · ENET 1.3.17</span><button id="refresh-servers" type="button">refresh</button></footer>
+      </section>
+    </main>`;
+  required<HTMLButtonElement>("#servers-back").addEventListener("click", () => navigate("/"));
+  required<HTMLButtonElement>("#refresh-servers").addEventListener("click", () => void loadServers());
+  void loadServers();
+}
+
+async function loadServers(): Promise<void> {
+  const list = required<HTMLDivElement>("#server-list");
+  list.innerHTML = "<p>Querying configured Sauerbraten servers…</p>";
+  try {
+    const servers = await refreshservers();
+    list.replaceChildren(...servers.map((server) => {
+      const attributes = server.attributes ?? [];
+      const compatible = server.online && attributes[0] === 260;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.disabled = !compatible || !server.map;
+      button.innerHTML = `<span><strong>${escapeHtml(server.description || server.label)}</strong><small>${escapeHtml(server.host)}:${server.port}</small></span>` +
+        `<span>${escapeHtml(server.map || "—")}</span><span>${escapeHtml(servermodename(attributes[1]))}</span>` +
+        `<span>${server.numPlayers ?? 0}/${attributes[3] ?? "?"}</span><span>${server.ping ?? "—"}</span>`;
+      if (compatible && server.map) button.addEventListener("click", () => launchServer(server));
+      return button;
+    }));
+  } catch (caught) {
+    list.innerHTML = `<p>${escapeHtml(caught instanceof Error ? caught.message : String(caught))}</p>`;
+  }
+}
+
+function launchServer(server: ServerListItem): void {
+  const query = new URLSearchParams({ map: server.map ?? "", server: server.host, port: String(server.port) });
+  location.assign(`/debug?${query}`);
 }
 
 function renderMapsMenu(): void {

@@ -50,7 +50,7 @@ const FPS_ENTITY_DEFINITIONS: FpsEntityDefinition[] = [
 
 // Original: src/fpsgame/entities.cpp
 // Function: entities::readent() / entity registration
-// Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+// Sauerbraten reference: SVN r6488
 export function createFpsEntityRegistry(entities: MapEntity[]): RegisteredMapEntity[] {
   return entities.map((entity, index) => registerEntity(entity, index));
 }

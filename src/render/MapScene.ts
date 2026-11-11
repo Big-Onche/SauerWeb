@@ -32,12 +32,13 @@ import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { installSauerFogDistance } from "./SauerFogShader";
 import { BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics";
-import { createClient } from "../fpsgame/client";
+import { createClient, type MultiplayerEvent, type ServerEndpoint } from "../fpsgame/client";
 import { BrowserWeaponInput } from "../platform/browser/WeaponInput";
 import { WeaponHUD } from "../platform/browser/WeaponHUD";
 import { WeaponRenderer } from "../platform/browser/WeaponRenderer";
 import { WeaponAudio } from "../platform/browser/WeaponAudio";
 import { ParticleRenderer } from "./ParticleRenderer";
+import { MultiplayerHUD } from "../platform/browser/MultiplayerHUD";
 
 export type CameraMode = "free" | "player";
 
@@ -63,12 +64,14 @@ export class MapScene {
   private readonly freeCamera: UniversalCamera;
   private readonly playerCamera: UniversalCamera;
   private readonly physics = new PhysicsSimulation();
+  private readonly fpsClient = createClient(this.physics);
   private readonly physicsInput: BrowserPhysicsInput;
-  private readonly weapons = createClient(this.physics).weapons;
+  private readonly weapons = this.fpsClient.weapons;
   private readonly weaponInput: BrowserWeaponInput;
   private readonly weaponHUD: WeaponHUD;
   private readonly weaponRenderer: WeaponRenderer;
   private readonly particleRenderer: ParticleRenderer;
+  private readonly multiplayerHUD: MultiplayerHUD;
   private cameraMode: CameraMode = "free";
   private materialCache: MaterialCache;
   private fallbackMaterial?: StandardMaterial;
@@ -84,6 +87,8 @@ export class MapScene {
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
+  private readonly networkPlayerMeshes = new Map<number, Mesh>();
+  private currentMap?: SauerMap;
   private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
   private debugLoadout = false;
 
@@ -113,10 +118,13 @@ export class MapScene {
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
+    this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
     this.weaponHUD.setVisible(false);
     this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera);
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
     new WeaponAudio(this.weapons.events);
+    this.fpsClient.multiplayer.addEventListener("multiplayer", (event) =>
+      this.handleMultiplayerEvent((event as CustomEvent<MultiplayerEvent>).detail));
 
     this.engine.runRenderLoop(() => {
       this.updatePhysics(performance.now());
@@ -130,6 +138,7 @@ export class MapScene {
                 lightingOverrides?: MapLightingOverrides, fogOverrides?: MapFogOverrides,
                 mapModels: MapModelAsset[] = []): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
+    this.currentMap = map;
     const lighting = resolveMapLighting(map, lightingOverrides);
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.volumeMeshes.length = 0;
@@ -139,6 +148,7 @@ export class MapScene {
     this.entityMaterials.forEach((material) => material.dispose());
     this.entityMaterials.clear();
     this.mapModelMeshes.length = 0;
+    this.networkPlayerMeshes.clear();
     this.materialCache.dispose();
     this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
     this.fallbackMaterial?.dispose(true, true);
@@ -249,6 +259,7 @@ export class MapScene {
     this.physicsInput.enabled = playerMode;
     this.weaponInput.enabled = playerMode;
     this.weaponHUD.setVisible(playerMode);
+    this.multiplayerHUD.setVisible(playerMode && this.fpsClient.multiplayer.clientNumber >= 0);
     this.weaponRenderer.setHudGunVisible(playerMode);
     if (playerMode) {
       this.freeCamera.detachControl();
@@ -290,6 +301,19 @@ export class MapScene {
     this.debugLoadout = true;
     this.weapons.controller.inventory.grantMaximumAmmo();
     this.weaponHUD.render();
+  }
+
+  async connectMultiplayer(endpoint: ServerEndpoint): Promise<void> {
+    this.debugLoadout = false;
+    this.setCameraMode("player");
+    this.multiplayerHUD.setVisible(true);
+    await this.fpsClient.multiplayer.connect(endpoint);
+  }
+
+  onMultiplayer(listener: (event: MultiplayerEvent) => void): () => void {
+    const wrapped = (event: Event): void => listener((event as CustomEvent<MultiplayerEvent>).detail);
+    this.fpsClient.multiplayer.addEventListener("multiplayer", wrapped);
+    return () => this.fpsClient.multiplayer.removeEventListener("multiplayer", wrapped);
   }
 
   private createEntityMarker(entity: RegisteredMapEntity): void {
@@ -594,7 +618,50 @@ export class MapScene {
       y: this.physics.player.position.y + Math.cos(yaw) * Math.cos(pitch) * 2048,
       z: this.physics.player.position.z + Math.sin(pitch) * 2048,
     });
+    this.fpsClient.multiplayer.update(nowMilliseconds);
+    this.multiplayerHUD.render();
+    this.updateNetworkPlayers();
     this.updatePlayerCamera(renderPosition);
+  }
+
+  private handleMultiplayerEvent(event: MultiplayerEvent): void {
+    if (event.type === "spawn") this.spawnNetworkPlayer();
+    else if (event.type === "remote-shot") {
+      const line = MeshBuilder.CreateLines(`network-shot-${event.clientNumber}`, {
+        points: [toBabylonPosition(event.from), toBabylonPosition(event.to)],
+      }, this.scene);
+      line.color = new Color3(1, 0.75, 0.25);
+      line.isPickable = false;
+      window.setTimeout(() => line.dispose(), 90);
+    }
+  }
+
+  private spawnNetworkPlayer(): void {
+    const starts = this.currentMap?.entities.filter((entity) => entity.type === 3) ?? [];
+    const start = starts[Math.floor(Math.random() * starts.length)];
+    if (start) this.physics.spawn({ ...start.position, z: start.position.z + this.physics.player.eyeHeight }, start.attributes[0] ?? 0, performance.now());
+    else this.physics.reset(performance.now());
+    this.weaponHUD.render();
+  }
+
+  private updateNetworkPlayers(): void {
+    const multiplayer = this.fpsClient.multiplayer;
+    for (const [clientNumber, player] of multiplayer.players) {
+      if (clientNumber === multiplayer.clientNumber) continue;
+      let mesh = this.networkPlayerMeshes.get(clientNumber);
+      if (!mesh) {
+        mesh = MeshBuilder.CreateCapsule(`network-player-${clientNumber}`, { radius: player.radius, height: player.eyeHeight + player.aboveEye }, this.scene);
+        mesh.material = this.getEntityMaterial("network-player");
+        mesh.isPickable = false;
+        this.networkPlayerMeshes.set(clientNumber, mesh);
+      }
+      mesh.setEnabled(player.alive);
+      mesh.position.copyFrom(toBabylonPosition({ ...player.position, z: player.position.z - (player.eyeHeight - player.aboveEye) / 2 }));
+      mesh.rotation.y = player.yaw * Math.PI / 180;
+    }
+    for (const [clientNumber, mesh] of this.networkPlayerMeshes) {
+      if (!multiplayer.players.has(clientNumber)) { mesh.dispose(); this.networkPlayerMeshes.delete(clientNumber); }
+    }
   }
 
   private updatePlayerCamera(position: RegisteredMapEntity["position"]): void {

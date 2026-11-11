@@ -16,7 +16,7 @@ export class GroundMover {
 
   // Original: src/engine/physics.cpp
   // Function: move()
-  // Sauerbraten reference: 77dab9772147fc8e6861578e0f767204d9daca5a
+  // Sauerbraten reference: SVN r6488
   move(entity: PhysicsEntity, direction: Vec3): boolean {
     const old = copyVec3(entity.position);
     let collided = false;
