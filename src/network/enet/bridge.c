@@ -8,6 +8,7 @@ static ENetPeer *server_peer = NULL;
 static ENetEvent current_event;
 
 void sauer_enet_clear_datagrams(void);
+void sauer_enet_set_remote_port(enet_uint16 port);
 
 EMSCRIPTEN_KEEPALIVE int sauer_enet_create(enet_uint16 port, size_t channels)
 {
@@ -16,6 +17,7 @@ EMSCRIPTEN_KEEPALIVE int sauer_enet_create(enet_uint16 port, size_t channels)
     if(enet_initialize() < 0) return -2;
     client_host = enet_host_create(NULL, 1, channels, 0, 0);
     if(!client_host) return -3;
+    sauer_enet_set_remote_port(port);
     address.host = ENET_HOST_TO_NET_32(0x7F000001U);
     address.port = port;
     server_peer = enet_host_connect(client_host, &address, channels, 0);

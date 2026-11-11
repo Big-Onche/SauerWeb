@@ -22,6 +22,7 @@ typedef struct datagram
 static datagram *incoming_head = NULL, *incoming_tail = NULL;
 static datagram *outgoing_head = NULL, *outgoing_tail = NULL;
 static enet_uint32 time_base = 0;
+static enet_uint16 remote_port = 28785;
 
 static void queue_datagram(datagram **head, datagram **tail, const enet_uint8 *data, size_t length)
 {
@@ -127,7 +128,7 @@ int enet_socket_receive(ENetSocket socket, ENetAddress *address, ENetBuffer *buf
     if(address)
     {
         address->host = ENET_HOST_TO_NET_32(0x7F000001U);
-        address->port = 28785;
+        address->port = remote_port;
     }
     index = remaining ? (size_t)-1 : item->length;
     free(item);
@@ -152,6 +153,8 @@ EMSCRIPTEN_KEEPALIVE void sauer_enet_queue_incoming(const enet_uint8 *data, size
 {
     queue_datagram(&incoming_head, &incoming_tail, data, length);
 }
+
+void sauer_enet_set_remote_port(enet_uint16 port) { remote_port = port; }
 
 EMSCRIPTEN_KEEPALIVE const enet_uint8 *sauer_enet_outgoing_data(void) { return outgoing_head ? outgoing_head->data : NULL; }
 EMSCRIPTEN_KEEPALIVE size_t sauer_enet_outgoing_length(void) { return outgoing_head ? outgoing_head->length : 0; }
