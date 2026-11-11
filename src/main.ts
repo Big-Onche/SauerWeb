@@ -1,6 +1,7 @@
 import "./menu.css";
 import { refreshservers, servercompatible, servermodename, sortservers, type ServerListItem } from "./engine/serverbrowser";
 import { MAP_MENU_PAGES } from "./menuData";
+import { PLAYER_MODEL_NAMES } from "./fpsgame/render";
 
 interface MapListItem {
   name: string;
@@ -38,6 +39,9 @@ function route(): void {
 }
 
 function renderMainMenu(): void {
+  const playerModel = savedPlayerModel();
+  const playerModelName = PLAYER_MODEL_NAMES[playerModel];
+  const playerModelIcon = playerModelName === "ogro2" ? "ogro" : playerModelName;
   app.innerHTML = `
     <main class="sauer-screen">
       ${backgroundMarkup(true)}
@@ -45,13 +49,14 @@ function renderMainMenu(): void {
         ${guiSkinMarkup()}
         <h1 id="main-menu-title" class="sr-only">Sauerbraten main menu</h1>
         <div class="identity-row">
-          <button class="portrait" type="button" aria-label="Choose player model" disabled>
-            <img src="/api/packages/icons/mrfixit.jpg" alt="Mr. Fixit" />
+          <button class="portrait" type="button" data-action="player-model" aria-label="Choose player model">
+            <img src="/api/packages/icons/${playerModelIcon}.jpg" alt="${playerModelLabel(playerModel)}" />
           </button>
           <div class="identity-fields">
             <label for="player-name">player name</label>
             <input id="player-name" maxlength="15" value="${escapeHtml(savedPlayerName())}" autocomplete="nickname" />
-            <div class="model-row"><span>Mr. Fixit</span><img src="/api/packages/crosshairs/cross_normal.png" alt="Current crosshair" /></div>
+            <div class="model-row"><span>${playerModelLabel(playerModel)}</span>
+              <img src="/api/packages/crosshairs/cross_normal.png" alt="Current crosshair" /></div>
           </div>
         </div>
         <div class="menu-rule"></div>
@@ -76,6 +81,11 @@ function renderMainMenu(): void {
 
   const playerName = required<HTMLInputElement>("#player-name");
   playerName.addEventListener("change", () => savePlayerName(playerName.value));
+  required<HTMLButtonElement>("[data-action='player-model']").addEventListener("click", () => {
+    savePlayerName(playerName.value);
+    savePlayerModel((playerModel + 1) % PLAYER_MODEL_NAMES.length);
+    renderMainMenu();
+  });
   required<HTMLButtonElement>("[data-action='bot']").addEventListener("click", () => navigate("/maps"));
   required<HTMLButtonElement>("[data-action='server']").addEventListener("click", () => navigate("/servers"));
   const about = required<HTMLDialogElement>("#about-dialog");
@@ -327,6 +337,27 @@ function savePlayerName(name: string): void {
   } catch {
     // The name remains editable when browser storage is unavailable.
   }
+}
+
+function savedPlayerModel(): number {
+  try {
+    const model = Number(localStorage.getItem("sauerweb.player-model"));
+    return Number.isInteger(model) && model >= 0 && model < PLAYER_MODEL_NAMES.length ? model : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function savePlayerModel(model: number): void {
+  try {
+    localStorage.setItem("sauerweb.player-model", String(model));
+  } catch {
+    // The default model remains available when browser storage is unavailable.
+  }
+}
+
+function playerModelLabel(model: number): string {
+  return ["Mr. Fixit", "Snout X10K", "Ogro", "Inky", "Captain Cannon"][model] ?? "Mr. Fixit";
 }
 
 function required<ElementType extends Element>(selector: string): ElementType {

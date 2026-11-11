@@ -68,6 +68,14 @@ app.innerHTML = `
           <span><strong>Vibrance</strong><output id="vibrance-value" for="vibrance">100%</output></span>
           <input id="vibrance" type="range" min="0" max="2" value="1" step="0.01" />
         </label>
+        <label class="setting-check" for="thirdperson">
+          <span><strong>Third-person view</strong><small>Show your player model</small></span>
+          <input id="thirdperson" type="checkbox" />
+        </label>
+        <label class="setting-check" for="teamskins">
+          <span><strong>Team skins</strong><small>Blue allies, red enemies</small></span>
+          <input id="teamskins" type="checkbox" />
+        </label>
         <p class="settings-hint">Adjustments are saved on this device.</p>
       </section>
       <div id="empty-state" class="empty-state">
@@ -111,6 +119,8 @@ const settingsReset = required<HTMLButtonElement>("#settings-reset");
 const contrastInput = required<HTMLInputElement>("#contrast");
 const gammaInput = required<HTMLInputElement>("#gamma");
 const vibranceInput = required<HTMLInputElement>("#vibrance");
+const thirdpersonInput = required<HTMLInputElement>("#thirdperson");
+const teamskinsInput = required<HTMLInputElement>("#teamskins");
 const contrastValue = required<HTMLOutputElement>("#contrast-value");
 const gammaValue = required<HTMLOutputElement>("#gamma-value");
 const vibranceValue = required<HTMLOutputElement>("#vibrance-value");
@@ -125,9 +135,11 @@ let activeMapName = "";
 let multiplayerConnected = false;
 const viewportSettingsStorageKey = "sauerweb.viewport-settings";
 const defaultViewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
+const gameplaySettingsStorageKey = "sauerweb.gameplay-settings";
 
 void loadMapIndex();
 setViewportTuning(readViewportTuning());
+setGameplaySettings(readGameplaySettings());
 mapScene.onMultiplayer((event) => {
   if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMapName.toLocaleLowerCase()) {
     const available = maps.find((map) => map.supported && map.name.toLocaleLowerCase() === event.map.toLocaleLowerCase());
@@ -161,6 +173,8 @@ physicsReset.addEventListener("click", () => mapScene.resetPlayer());
 settingsToggle.addEventListener("click", () => setSettingsOpen(settingsPanel.hidden));
 settingsReset.addEventListener("click", () => setViewportTuning(defaultViewportTuning));
 [contrastInput, gammaInput, vibranceInput].forEach((input) => input.addEventListener("input", updateViewportTuning));
+thirdpersonInput.addEventListener("change", updateGameplaySettings);
+teamskinsInput.addEventListener("change", updateGameplaySettings);
 document.addEventListener("pointerdown", (event) => {
   if (!settingsPanel.hidden && event.target instanceof Node && !settingsPanel.contains(event.target) && !settingsToggle.contains(event.target)) {
     setSettingsOpen(false);
@@ -203,6 +217,31 @@ function setViewportTuning(tuning: ViewportTuning): void {
     localStorage.setItem(viewportSettingsStorageKey, JSON.stringify(tuning));
   } catch {
     // The viewport remains adjustable when storage is unavailable.
+  }
+}
+
+function updateGameplaySettings(): void {
+  setGameplaySettings({ thirdperson: thirdpersonInput.checked, teamskins: teamskinsInput.checked });
+}
+
+function setGameplaySettings(settings: { thirdperson: boolean; teamskins: boolean }): void {
+  thirdpersonInput.checked = settings.thirdperson;
+  teamskinsInput.checked = settings.teamskins;
+  mapScene.setThirdPerson(settings.thirdperson);
+  mapScene.setTeamSkins(settings.teamskins);
+  try {
+    localStorage.setItem(gameplaySettingsStorageKey, JSON.stringify(settings));
+  } catch {
+    // Gameplay settings remain adjustable when storage is unavailable.
+  }
+}
+
+function readGameplaySettings(): { thirdperson: boolean; teamskins: boolean } {
+  try {
+    const stored = JSON.parse(localStorage.getItem(gameplaySettingsStorageKey) ?? "null") as Record<string, unknown> | null;
+    return { thirdperson: stored?.thirdperson === true, teamskins: stored?.teamskins === true };
+  } catch {
+    return { thirdperson: false, teamskins: false };
   }
 }
 
@@ -281,7 +320,9 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
     renderMapList();
     if (multiplayerHost && !multiplayerConnected) {
       multiplayerConnected = true;
-      await mapScene.connectMultiplayer({ host: multiplayerHost, port: multiplayerPort, playerName: savedPlayerName(), map: name, mode: 3 });
+      await mapScene.connectMultiplayer({ host: multiplayerHost, port: multiplayerPort, playerName: savedPlayerName(),
+        playerModel: savedPlayerModel(),
+        map: name, mode: 3 });
     }
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
@@ -294,6 +335,15 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
 
 function savedPlayerName(): string {
   try { return localStorage.getItem("sauerweb.player-name") || "unnamed"; } catch { return "unnamed"; }
+}
+
+function savedPlayerModel(): number {
+  try {
+    const model = Number(localStorage.getItem("sauerweb.player-model"));
+    return Number.isInteger(model) && model >= 0 && model < 5 ? model : 0;
+  } catch {
+    return 0;
+  }
 }
 
 async function decompressGzip(compressed: ArrayBuffer): Promise<ArrayBuffer> {

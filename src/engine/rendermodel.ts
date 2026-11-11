@@ -28,7 +28,7 @@ export interface ModelGeometryMesh {
 // Original: src/engine/md5.h
 // Function: md5meshgroup::loadmesh()
 // Sauerbraten reference: SVN r6488
-export function parseMd5(source: string, animationSource?: string, adjustments: ModelAdjustment[] = []): ModelGeometry {
+export function parseMd5(source: string, animationSource?: string, adjustments: ModelAdjustment[] = [], animationFrame = 0): ModelGeometry {
   const jointBlock = source.match(/joints\s*\{([\s\S]*?)\}/i)?.[1];
   if (!jointBlock) throw new Error("MD5 model has no joints block.");
   const bindJoints = [...jointBlock.matchAll(/^\s*"([^"]*)"\s+(-?\d+)\s+\(\s*([^)]*?)\s*\)\s+\(\s*([^)]*?)\s*\)/gm)].map((match) => {
@@ -40,7 +40,7 @@ export function parseMd5(source: string, animationSource?: string, adjustments: 
     return { name: match[1], parent: Number(match[2]), position, orientation: md5Quaternion(orientation) };
   });
   if (!bindJoints.length) throw new Error("MD5 model has no readable joints.");
-  const joints = animationSource ? parseMd5AnimationFrame(animationSource, adjustments) : bindJoints;
+  const joints = animationSource ? parseMd5AnimationFrame(animationSource, adjustments, animationFrame) : bindJoints;
   if (joints.length !== bindJoints.length) throw new Error("MD5 animation does not match its mesh skeleton.");
   const meshes: ModelGeometryMesh[] = [];
   let meshIndex = 0;
@@ -88,11 +88,25 @@ export function parseMd5(source: string, animationSource?: string, adjustments: 
   return { meshes, joints };
 }
 
-function parseMd5AnimationFrame(source: string, adjustments: ModelAdjustment[]): ModelJointPose[] {
+export interface Md5AnimationInfo {
+  frameCount: number;
+  frameRate: number;
+}
+
+export function md5AnimationInfo(source: string): Md5AnimationInfo {
+  return {
+    frameCount: Math.max(1, Number(source.match(/numFrames\s+(\d+)/i)?.[1] ?? 1)),
+    frameRate: Math.max(1, Number(source.match(/frameRate\s+(\d+)/i)?.[1] ?? 24)),
+  };
+}
+
+function parseMd5AnimationFrame(source: string, adjustments: ModelAdjustment[], animationFrame: number): ModelJointPose[] {
   const hierarchyBlock = source.match(/hierarchy\s*\{([\s\S]*?)\}/i)?.[1];
   const baseBlock = source.match(/baseframe\s*\{([\s\S]*?)\}/i)?.[1];
-  const frameBlock = source.match(/frame\s+0\s*\{([\s\S]*?)\}/i)?.[1];
-  if (!hierarchyBlock || !baseBlock || !frameBlock) throw new Error("MD5 animation has no readable first frame.");
+  const frameCount = md5AnimationInfo(source).frameCount;
+  const frame = Math.min(frameCount - 1, Math.max(0, Math.trunc(animationFrame)));
+  const frameBlock = source.match(new RegExp(`frame\\s+${frame}\\s*\\{([\\s\\S]*?)\\}`, "i"))?.[1];
+  if (!hierarchyBlock || !baseBlock || !frameBlock) throw new Error(`MD5 animation has no readable frame ${frame}.`);
   const hierarchy = [...hierarchyBlock.matchAll(/^\s*"([^"]*)"\s+(-?\d+)\s+(\d+)\s+(\d+)/gm)].map((match) => ({
     name: match[1], parent: Number(match[2]), flags: Number(match[3]), start: Number(match[4]),
   }));
@@ -374,11 +388,24 @@ export function parseMd3(buffer: ArrayBuffer): ModelGeometry {
 // Original: src/engine/iqm.h
 // Function: iqmmeshgroup::loadiqmmeshes()
 // Sauerbraten reference: SVN r6488
-export function parseIqm(buffer: ArrayBuffer): ModelGeometry {
+export interface IqmAnimationInfo {
+  frameCount: number;
+  frameRate: number;
+}
+
+export function iqmAnimationInfo(buffer: ArrayBuffer): IqmAnimationInfo {
   const view = new DataView(buffer);
-  if (view.byteLength < 124 || readAscii(view, 0, 16) !== "INTERQUAKEMODEL" || view.getUint32(16, true) !== 2) {
-    throw new Error("Invalid IQM header.");
-  }
+  validateIqm(view);
+  const frameCount = view.getUint32(92, true);
+  const animationCount = view.getUint32(84, true);
+  const animationOffset = view.getUint32(88, true);
+  const frameRate = animationCount && rangeWithin(animationOffset, 20, view.byteLength) ? view.getFloat32(animationOffset + 12, true) : 24;
+  return { frameCount: Math.max(1, frameCount), frameRate: Math.max(1, frameRate) };
+}
+
+export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, animationFrame = 0): ModelGeometry {
+  const view = new DataView(buffer);
+  validateIqm(view);
   const fileSize = view.getUint32(20, true);
   const textSize = view.getUint32(28, true);
   const textOffset = view.getUint32(32, true);
@@ -394,6 +421,8 @@ export function parseIqm(buffer: ArrayBuffer): ModelGeometry {
       !rangeWithin(triangleOffset, triangleCount * 12, fileSize)) throw new Error("Invalid IQM section bounds.");
   let positionOffset: number | undefined;
   let texCoordOffset: number | undefined;
+  let blendIndexOffset: number | undefined;
+  let blendWeightOffset: number | undefined;
   for (let index = 0; index < vertexArrayCount; index++) {
     const offset = vertexArrayOffset + index * 20;
     const type = view.getUint32(offset, true);
@@ -402,11 +431,17 @@ export function parseIqm(buffer: ArrayBuffer): ModelGeometry {
     const dataOffset = view.getUint32(offset + 16, true);
     if (type === 0 && format === 7 && size === 3) positionOffset = dataOffset;
     else if (type === 1 && format === 7 && size === 2) texCoordOffset = dataOffset;
+    else if (type === 4 && format === 1 && size === 4) blendIndexOffset = dataOffset;
+    else if (type === 5 && format === 1 && size === 4) blendWeightOffset = dataOffset;
   }
   if (positionOffset === undefined || !rangeWithin(positionOffset, vertexCount * 12, fileSize) ||
       texCoordOffset !== undefined && !rangeWithin(texCoordOffset, vertexCount * 8, fileSize)) {
     throw new Error("IQM model has invalid vertex arrays.");
   }
+  const animatedPositions = animationBuffer && blendIndexOffset !== undefined && blendWeightOffset !== undefined &&
+    rangeWithin(blendIndexOffset, vertexCount * 4, fileSize) && rangeWithin(blendWeightOffset, vertexCount * 4, fileSize)
+    ? skinIqmPositions(view, positionOffset, vertexCount, blendIndexOffset, blendWeightOffset, animationBuffer, animationFrame)
+    : undefined;
   const meshes: ModelGeometryMesh[] = [];
   for (let meshIndex = 0; meshIndex < meshCount; meshIndex++) {
     const offset = meshOffset + meshIndex * 24;
@@ -423,8 +458,9 @@ export function parseIqm(buffer: ArrayBuffer): ModelGeometry {
     const indices: number[] = [];
     for (let index = 0; index < meshVertexCount; index++) {
       const vertexOffset = positionOffset + (firstVertex + index) * 12;
-      positions.push(view.getFloat32(vertexOffset, true), view.getFloat32(vertexOffset + 8, true),
-        -view.getFloat32(vertexOffset + 4, true));
+      const source = animatedPositions?.[firstVertex + index] ?? [view.getFloat32(vertexOffset, true), view.getFloat32(vertexOffset + 4, true),
+        view.getFloat32(vertexOffset + 8, true)];
+      positions.push(source[0], source[2], -source[1]);
       if (texCoordOffset !== undefined) {
         const uvOffset = texCoordOffset + (firstVertex + index) * 8;
         uvs.push(view.getFloat32(uvOffset, true), view.getFloat32(uvOffset + 4, true));
@@ -444,6 +480,131 @@ export function parseIqm(buffer: ArrayBuffer): ModelGeometry {
   }
   if (!meshes.length) throw new Error("IQM model contains no renderable geometry.");
   return { meshes };
+}
+
+interface IqmTransform {
+  position: [number, number, number];
+  orientation: [number, number, number, number];
+  scale: [number, number, number];
+}
+
+function skinIqmPositions(view: DataView, positionOffset: number, vertexCount: number, blendIndexOffset: number, blendWeightOffset: number,
+                          animationBuffer: ArrayBuffer, animationFrame: number): Array<[number, number, number]> {
+  const animation = new DataView(animationBuffer);
+  validateIqm(animation);
+  const jointCount = view.getUint32(68, true);
+  const jointOffset = view.getUint32(72, true);
+  const poseCount = animation.getUint32(76, true);
+  const poseOffset = animation.getUint32(80, true);
+  if (!jointCount || poseCount !== jointCount || !rangeWithin(jointOffset, jointCount * 48, view.byteLength) ||
+      !rangeWithin(poseOffset, poseCount * 88, animation.byteLength)) return [];
+  const base = readIqmJoints(view, jointOffset, jointCount);
+  const animated = readIqmFrame(animation, poseOffset, poseCount, animationFrame);
+  const result: Array<[number, number, number]> = [];
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    const offset = positionOffset + vertex * 12;
+    const source: [number, number, number] = [view.getFloat32(offset, true), view.getFloat32(offset + 4, true), view.getFloat32(offset + 8, true)];
+    const position: [number, number, number] = [0, 0, 0];
+    let totalWeight = 0;
+    for (let blend = 0; blend < 4; blend++) {
+      const weight = view.getUint8(blendWeightOffset + vertex * 4 + blend) / 255;
+      if (!weight) continue;
+      const joint = view.getUint8(blendIndexOffset + vertex * 4 + blend);
+      if (!base[joint] || !animated[joint]) continue;
+      const transformed = applyIqmTransform(animated[joint], inverseIqmTransform(base[joint], source));
+      position[0] += transformed[0] * weight;
+      position[1] += transformed[1] * weight;
+      position[2] += transformed[2] * weight;
+      totalWeight += weight;
+    }
+    result.push(totalWeight > 0 ? position : source);
+  }
+  return result;
+}
+
+function readIqmJoints(view: DataView, offset: number, count: number): IqmTransform[] {
+  const result: IqmTransform[] = [];
+  for (let index = 0; index < count; index++) {
+    const jointOffset = offset + index * 48;
+    const parent = view.getInt32(jointOffset + 4, true);
+    const transform: IqmTransform = {
+      position: readIqmFloats3(view, jointOffset + 8),
+      orientation: normalizeIqmQuaternion(readIqmFloats4(view, jointOffset + 20)),
+      scale: readIqmFloats3(view, jointOffset + 36),
+    };
+    result.push(parent >= 0 ? combineIqmTransforms(result[parent], transform) : transform);
+  }
+  return result;
+}
+
+function readIqmFrame(view: DataView, poseOffset: number, poseCount: number, requestedFrame: number): IqmTransform[] {
+  const frameCount = Math.max(1, view.getUint32(92, true));
+  const channelCount = view.getUint32(96, true);
+  const framesOffset = view.getUint32(100, true);
+  const frame = Math.min(frameCount - 1, Math.max(0, Math.trunc(requestedFrame)));
+  let channel = framesOffset + frame * channelCount * 2;
+  const result: IqmTransform[] = [];
+  for (let index = 0; index < poseCount; index++) {
+    const offset = poseOffset + index * 88;
+    const parent = view.getInt32(offset, true);
+    const mask = view.getUint32(offset + 4, true);
+    const values = Array.from({ length: 10 }, (_, component) => view.getFloat32(offset + 8 + component * 4, true));
+    for (let component = 0; component < 10; component++) {
+      if (!(mask & 1 << component)) continue;
+      values[component] += view.getUint16(channel, true) * view.getFloat32(offset + 48 + component * 4, true);
+      channel += 2;
+    }
+    const transform: IqmTransform = {
+      position: [values[0], values[1], values[2]],
+      orientation: normalizeIqmQuaternion([values[3], values[4], values[5], values[6]]),
+      scale: [values[7], values[8], values[9]],
+    };
+    result.push(parent >= 0 ? combineIqmTransforms(result[parent], transform) : transform);
+  }
+  return result;
+}
+
+function combineIqmTransforms(parent: IqmTransform, child: IqmTransform): IqmTransform {
+  const scaled: [number, number, number] = [child.position[0] * parent.scale[0], child.position[1] * parent.scale[1],
+    child.position[2] * parent.scale[2]];
+  const rotated = rotateMd5Vector(scaled, parent.orientation);
+  return {
+    position: [parent.position[0] + rotated[0], parent.position[1] + rotated[1], parent.position[2] + rotated[2]],
+    orientation: normalizeIqmQuaternion(multiplyMd5Quaternions(parent.orientation, child.orientation)),
+    scale: [parent.scale[0] * child.scale[0], parent.scale[1] * child.scale[1], parent.scale[2] * child.scale[2]],
+  };
+}
+
+function inverseIqmTransform(transform: IqmTransform, position: [number, number, number]): [number, number, number] {
+  const translated: [number, number, number] = [position[0] - transform.position[0], position[1] - transform.position[1],
+    position[2] - transform.position[2]];
+  const rotated = rotateMd5Vector(translated, invertMd5Quaternion(transform.orientation));
+  return [rotated[0] / transform.scale[0], rotated[1] / transform.scale[1], rotated[2] / transform.scale[2]];
+}
+
+function applyIqmTransform(transform: IqmTransform, position: [number, number, number]): [number, number, number] {
+  const scaled: [number, number, number] = [position[0] * transform.scale[0], position[1] * transform.scale[1], position[2] * transform.scale[2]];
+  const rotated = rotateMd5Vector(scaled, transform.orientation);
+  return [rotated[0] + transform.position[0], rotated[1] + transform.position[1], rotated[2] + transform.position[2]];
+}
+
+function normalizeIqmQuaternion(quaternion: [number, number, number, number]): [number, number, number, number] {
+  const length = Math.hypot(...quaternion) || 1;
+  return [quaternion[0] / length, quaternion[1] / length, quaternion[2] / length, quaternion[3] / length];
+}
+
+function readIqmFloats3(view: DataView, offset: number): [number, number, number] {
+  return [view.getFloat32(offset, true), view.getFloat32(offset + 4, true), view.getFloat32(offset + 8, true)];
+}
+
+function readIqmFloats4(view: DataView, offset: number): [number, number, number, number] {
+  return [view.getFloat32(offset, true), view.getFloat32(offset + 4, true), view.getFloat32(offset + 8, true), view.getFloat32(offset + 12, true)];
+}
+
+function validateIqm(view: DataView): void {
+  if (view.byteLength < 124 || readAscii(view, 0, 16) !== "INTERQUAKEMODEL" || view.getUint32(16, true) !== 2) {
+    throw new Error("Invalid IQM header.");
+  }
 }
 
 function rangeWithin(offset: number, length: number, limit: number): boolean {

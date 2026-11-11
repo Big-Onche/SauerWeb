@@ -11,7 +11,15 @@ import { Gun } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent } from "./weapon/WeaponEvents";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
-export interface ServerEndpoint { host: string; port: number; relayUrl?: string; playerName: string; map?: string; mode?: number }
+export interface ServerEndpoint {
+  host: string;
+  port: number;
+  relayUrl?: string;
+  playerName: string;
+  playerModel?: number;
+  map?: string;
+  mode?: number;
+}
 
 export interface NetworkPlayer extends Damageable {
   clientNumber: number;
@@ -32,6 +40,9 @@ export interface NetworkPlayer extends Damageable {
   physicsState: PhysicsState;
   selectedGun: number;
   ammo: Int32Array;
+  lastAction: number;
+  lastPain: number;
+  deadAt: number;
 }
 
 export type MultiplayerEvent =
@@ -287,7 +298,7 @@ export class MultiplayerClient extends EventTarget {
     packet.getString();
     if (passwordProtected) throw new Error("Password-protected servers are not supported yet.");
     const intro = new PacketWriter().putInt(NetworkMessage.Connect).putString(this.endpoint?.playerName ?? "unnamed")
-      .putInt(0).putString("").putString("").putString("");
+      .putInt(this.endpoint?.playerModel ?? 0).putString("").putString("").putString("");
     this.transport.send(1, intro.finish(), true);
     this.transport.flush();
   }
@@ -305,6 +316,7 @@ export class MultiplayerClient extends EventTarget {
     this.parseState(player, packet);
     player.state = ClientState.Alive;
     player.alive = true;
+    player.deadAt = 0;
     if (clientNumber === this.clientNumber) {
       this.physics.player.alive = true;
       this.physics.player.clientState = ClientState.Alive;
@@ -346,6 +358,8 @@ export class MultiplayerClient extends EventTarget {
     packet.getInt();
     const from = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
     const to = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
+    const player = this.players.get(clientNumber);
+    if (player) player.lastAction = performance.now();
     this.emit({ type: "remote-shot", clientNumber, gun, from, to });
   }
 
@@ -354,6 +368,7 @@ export class MultiplayerClient extends EventTarget {
     packet.getInt(); packet.getInt();
     const armour = packet.getInt(), health = packet.getInt(), target = this.playerFor(targetNumber);
     target.armour = armour; target.health = health;
+    target.lastPain = performance.now();
     if (targetNumber === this.clientNumber) { this.physics.player.armour = armour; this.physics.player.health = health; }
   }
 
@@ -364,7 +379,7 @@ export class MultiplayerClient extends EventTarget {
 
   private setDead(clientNumber: number): void {
     const player = this.playerFor(clientNumber);
-    player.state = ClientState.Dead; player.alive = false; player.deaths++;
+    player.state = ClientState.Dead; player.alive = false; player.deaths++; player.deadAt = performance.now();
     if (clientNumber === this.clientNumber) {
       this.physics.player.alive = false;
       this.physics.player.clientState = ClientState.Dead;
@@ -437,6 +452,7 @@ export class MultiplayerClient extends EventTarget {
       clientNumber, name: clientNumber === this.clientNumber ? this.endpoint?.playerName ?? "unnamed" : "unnamed", team: "", model: 0,
       lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, ping: 0, yaw: 0, pitch: 0, roll: 0, move: 0 as const,
       strafe: 0 as const, physicsState: PhysicsState.Fall, selectedGun: Gun.Pistol, ammo: new Int32Array(12),
+      lastAction: 0, lastPain: 0, deadAt: 0,
     });
     this.players.set(clientNumber, player);
     this.syncTargets();

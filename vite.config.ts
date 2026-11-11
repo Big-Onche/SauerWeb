@@ -447,8 +447,41 @@ function resolveMapModels(names: string[]): Array<{
   });
 }
 
+function resolvePlayerModels() {
+  const definitions = [
+    { name: "mrfixit", ffa: "mrfixit", blueTeam: "mrfixit/blue", redTeam: "mrfixit/red", animations: "mrfixit/anims.cfg", format: "md5" },
+    { name: "snoutx10k", ffa: "snoutx10k", blueTeam: "snoutx10k/blue", redTeam: "snoutx10k/red", animations: "mrfixit/anims.cfg", format: "md5" },
+    { name: "ogro2", ffa: "ogro2", blueTeam: "ogro2/blue", redTeam: "ogro2/red", animations: "ogro2/anims.cfg", format: "iqm" },
+    { name: "inky", ffa: "inky", blueTeam: "inky/blue", redTeam: "inky/red", animations: "inky/anims.cfg", format: "md5" },
+    { name: "captaincannon", ffa: "captaincannon", blueTeam: "captaincannon/blue", redTeam: "captaincannon/red",
+      animations: "captaincannon/anims.cfg", format: "md5" },
+  ];
+  return definitions.map((definition, index) => {
+    const animationConfig = path.join(packagesDirectory, "models", definition.animations);
+    const animationDirectory = path.dirname(animationConfig);
+    const animations: Record<string, string> = {};
+    if (fs.existsSync(animationConfig)) {
+      for (const statement of splitStatements(fs.readFileSync(animationConfig, "utf8"))) {
+        const tokens = tokenize(statement.text);
+        if (tokens[0]?.toLowerCase() !== `${definition.format}anim` || !tokens[1] || !tokens[2] || animations[tokens[1].toLowerCase()]) continue;
+        animations[tokens[1].toLowerCase()] = resolveModelAssetPath(animationDirectory, tokens[2]);
+      }
+    }
+    const model = (name: string) => ({ ...resolveMapModels([name])[0], index });
+    return {
+      index,
+      name: definition.name,
+      ffa: model(definition.ffa),
+      blueTeam: model(definition.blueTeam),
+      redTeam: model(definition.redTeam),
+      animations,
+    };
+  });
+}
+
 function resolveRenderableMapModel(index: number, name: string, modelDirectory: string, configPath: string, format: string) {
   const configDirectory = path.dirname(configPath);
+  let assetDirectory = configDirectory;
   const settings = {
     scale: 0.25,
     translate: [0, 0, 0] as [number, number, number],
@@ -474,12 +507,13 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     const tokens = tokenize(statement.text);
     const command = tokens[0]?.toLowerCase();
     const args = tokens.slice(1);
-    if (command === `${format.toLowerCase()}load` && args[0]) geometryPath = resolveModelAssetPath(configDirectory, args[0]);
+    if (command === `${format.toLowerCase()}dir` && args[0]) assetDirectory = path.resolve(packagesDirectory, "models", args[0]);
+    else if (command === `${format.toLowerCase()}load` && args[0]) geometryPath = resolveModelAssetPath(assetDirectory, args[0]);
     else if (command === `${format.toLowerCase()}skin` && args[0] && args[1]) {
       skins.push({
         mesh: args[0],
-        diffusePath: resolveModelAssetPath(configDirectory, args[1]),
-        masksPath: args[2] ? resolveModelAssetPath(configDirectory, args[2]) : undefined,
+        diffusePath: resolveModelAssetPath(assetDirectory, args[1]),
+        masksPath: args[2] ? resolveModelAssetPath(assetDirectory, args[2]) : undefined,
       });
     } else if (command === "mdlscale") {
       const scale = numberArg(args[0], 100) > 0 ? numberArg(args[0], 100) / 100 : 1;
@@ -650,6 +684,11 @@ function sauerMapsPlugin(): Plugin {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         response.setHeader("Cache-Control", "no-store");
         response.end(JSON.stringify(resolveHudGuns()));
+      });
+      server.middlewares.use("/api/playermodels", (_request, response) => {
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.end(JSON.stringify(resolvePlayerModels()));
       });
       server.middlewares.use("/api/packages", (request, response, next) => {
         let requestedPath: string;

@@ -47,6 +47,11 @@ button { color: inherit; }
 .setting-row output { color: #91a283; font: 500 10px "DM Mono"; }
 .setting-row input { width: 100%; height: 18px; margin: 7px 0 0; accent-color: #a7c17e; cursor: pointer; }
 .setting-row input:focus-visible { outline: 1px solid #a7c17e; outline-offset: 3px; }
+.setting-check { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 15px; color: #cbd5c8; cursor: pointer; }
+.setting-check span { display: grid; gap: 2px; }
+.setting-check strong { font-size: 11px; font-weight: 500; }
+.setting-check small { color: #718070; font: 500 9px "DM Mono"; }
+.setting-check input { width: 16px; height: 16px; margin: 0; accent-color: #a7c17e; cursor: pointer; }
 .settings-hint { margin: 17px 0 0; padding-top: 11px; border-top: 1px solid #2b332d; color: #657169; font: 400 8px "DM Mono"; text-transform: uppercase; letter-spacing: .04em; }
 .empty-state { position: absolute; top: 50%; left: 50%; width: min(480px, 80%); text-align: center; transform: translate(-50%, -48%); pointer-events: none; }
 .empty-state h2 { margin: 11px 0 10px; font-size: clamp(24px, 3vw, 38px); font-weight: 500; letter-spacing: -.045em; }.empty-state > p:last-child { margin: auto; max-width: 430px; color: #7d8980; font-size: 13px; line-height: 1.7; }

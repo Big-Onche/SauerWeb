@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseIqm, parseMd2, parseMd5 } from "./rendermodel";
+import { iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd2, parseMd5 } from "./rendermodel";
 
 describe("MD2 mapmodel loading", () => {
   it.each(["dcp/palmtree", "objects/well_roof", "objects/well_base"])('decodes the bundled model "%s"', (name) => {
@@ -50,5 +50,25 @@ describe("MD5 model loading", () => {
     const adjusted = parseMd5(mesh, animation, [{ bone: "Root", yaw: 10.5, pitch: -10, roll: 0, translate: [0, 0, 0] }]);
 
     expect(adjusted.meshes[0].positions).not.toEqual(unadjusted.meshes[0].positions);
+  });
+
+  it("skins a player model at successive MD5 animation frames", () => {
+    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
+    const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
+
+    expect(md5AnimationInfo(animation).frameCount).toBeGreaterThan(1);
+    expect(parseMd5(mesh, animation, [], 1).meshes[0].positions).not.toEqual(parseMd5(mesh, animation, [], 0).meshes[0].positions);
+  });
+
+  it("skins the Ogro player model at successive IQM animation frames", () => {
+    const directory = path.resolve(".Sauerbraten/packages/models/ogro2");
+    const meshBytes = fs.readFileSync(path.join(directory, "ogro.iqm"));
+    const animationBytes = fs.readFileSync(path.join(directory, "run.iqm"));
+    const mesh = meshBytes.buffer.slice(meshBytes.byteOffset, meshBytes.byteOffset + meshBytes.byteLength) as ArrayBuffer;
+    const animation = animationBytes.buffer.slice(animationBytes.byteOffset, animationBytes.byteOffset + animationBytes.byteLength) as ArrayBuffer;
+
+    expect(iqmAnimationInfo(animation).frameCount).toBeGreaterThan(1);
+    expect(parseIqm(mesh, animation, 1).meshes[0].positions).not.toEqual(parseIqm(mesh, animation, 0).meshes[0].positions);
   });
 });

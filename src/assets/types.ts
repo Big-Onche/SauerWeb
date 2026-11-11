@@ -97,6 +97,15 @@ export interface MapModelMeshSettings {
   cullFace?: boolean;
 }
 
+export interface PlayerModelAsset {
+  index: number;
+  name: string;
+  ffa: MapModelAsset;
+  blueTeam: MapModelAsset;
+  redTeam: MapModelAsset;
+  animations: Record<string, string>;
+}
+
 export interface MapLightingOverrides {
   ambient?: number;
   skylight?: number;

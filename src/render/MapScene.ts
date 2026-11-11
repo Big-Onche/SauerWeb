@@ -39,6 +39,8 @@ import { WeaponRenderer } from "../platform/browser/WeaponRenderer";
 import { WeaponAudio } from "../platform/browser/WeaponAudio";
 import { ParticleRenderer } from "./ParticleRenderer";
 import { MultiplayerHUD } from "../platform/browser/MultiplayerHUD";
+import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platform/browser/PlayerRenderer";
+import { ClientState } from "../engine/physics/types";
 
 export type CameraMode = "free" | "player";
 
@@ -72,7 +74,10 @@ export class MapScene {
   private readonly weaponRenderer: WeaponRenderer;
   private readonly particleRenderer: ParticleRenderer;
   private readonly multiplayerHUD: MultiplayerHUD;
+  private readonly playerRenderer: PlayerRenderer;
   private cameraMode: CameraMode = "free";
+  private thirdperson = false;
+  private teamskins = false;
   private materialCache: MaterialCache;
   private fallbackMaterial?: StandardMaterial;
   private skyboxMaterial?: StandardMaterial;
@@ -87,7 +92,6 @@ export class MapScene {
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
-  private readonly networkPlayerMeshes = new Map<number, Mesh>();
   private currentMap?: SauerMap;
   private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
   private debugLoadout = false;
@@ -119,6 +123,7 @@ export class MapScene {
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
+    this.playerRenderer = new PlayerRenderer(this.scene);
     this.weaponHUD.setVisible(false);
     this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera);
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
@@ -140,6 +145,7 @@ export class MapScene {
     const generation = ++this.loadGeneration;
     this.currentMap = map;
     const lighting = resolveMapLighting(map, lightingOverrides);
+    this.playerRenderer.clear();
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.volumeMeshes.length = 0;
     this.volumeMaterials.forEach((material) => material.dispose(true, true));
@@ -148,7 +154,6 @@ export class MapScene {
     this.entityMaterials.forEach((material) => material.dispose());
     this.entityMaterials.clear();
     this.mapModelMeshes.length = 0;
-    this.networkPlayerMeshes.clear();
     this.materialCache.dispose();
     this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
     this.fallbackMaterial?.dispose(true, true);
@@ -260,7 +265,7 @@ export class MapScene {
     this.weaponInput.enabled = playerMode;
     this.weaponHUD.setVisible(playerMode);
     this.multiplayerHUD.setVisible(playerMode && this.fpsClient.multiplayer.clientNumber >= 0);
-    this.weaponRenderer.setHudGunVisible(playerMode);
+    this.weaponRenderer.setHudGunVisible(playerMode && !this.thirdperson);
     if (playerMode) {
       this.freeCamera.detachControl();
       this.physics.reset(performance.now());
@@ -278,6 +283,16 @@ export class MapScene {
 
   setPhysicsPaused(paused: boolean): void {
     this.physics.setPaused(paused, performance.now());
+  }
+
+  setThirdPerson(enabled: boolean): void {
+    this.thirdperson = enabled;
+    this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !enabled);
+    if (this.cameraMode === "player") this.updatePlayerCamera(this.physics.player.position);
+  }
+
+  setTeamSkins(enabled: boolean): void {
+    this.teamskins = enabled;
   }
 
   resetPlayer(): void {
@@ -646,28 +661,72 @@ export class MapScene {
 
   private updateNetworkPlayers(): void {
     const multiplayer = this.fpsClient.multiplayer;
+    const players: RenderPlayer[] = [];
+    const localNetworkPlayer = multiplayer.players.get(multiplayer.clientNumber);
     for (const [clientNumber, player] of multiplayer.players) {
-      if (clientNumber === multiplayer.clientNumber) continue;
-      let mesh = this.networkPlayerMeshes.get(clientNumber);
-      if (!mesh) {
-        mesh = MeshBuilder.CreateCapsule(`network-player-${clientNumber}`, { radius: player.radius, height: player.eyeHeight + player.aboveEye }, this.scene);
-        mesh.material = this.getEntityMaterial("network-player");
-        mesh.isPickable = false;
-        this.networkPlayerMeshes.set(clientNumber, mesh);
-      }
-      mesh.setEnabled(player.alive);
-      mesh.position.copyFrom(toBabylonPosition({ ...player.position, z: player.position.z - (player.eyeHeight - player.aboveEye) / 2 }));
-      mesh.rotation.y = player.yaw * Math.PI / 180;
+      const local = clientNumber === multiplayer.clientNumber;
+      if (local && !this.thirdperson) continue;
+      const source = local ? this.physics.player : player;
+      players.push({
+        id: clientNumber,
+        model: player.model,
+        team: player.team,
+        local,
+        visible: player.state !== ClientState.Spectator && player.state !== ClientState.Spawning,
+        position: { ...source.position, z: source.position.z - source.eyeHeight },
+        yaw: source.yaw,
+        pitch: source.pitch,
+        state: local ? this.physics.player.clientState : player.state,
+        move: source.move,
+        strafe: source.strafe,
+        physicsState: source.physicsState,
+        inWater: local ? this.physics.player.inWater : 0,
+        timeInAir: local ? this.physics.player.timeInAir : undefined,
+        velocityZ: source.velocity.z + (local ? this.physics.player.falling.z : 0),
+        lastPain: player.lastPain,
+        deadAt: player.deadAt,
+      });
     }
-    for (const [clientNumber, mesh] of this.networkPlayerMeshes) {
-      if (!multiplayer.players.has(clientNumber)) { mesh.dispose(); this.networkPlayerMeshes.delete(clientNumber); }
+    if (this.thirdperson && multiplayer.clientNumber < 0) {
+      const player = this.physics.player;
+      players.push({
+        id: -1,
+        model: 0,
+        team: "",
+        local: true,
+        visible: player.clientState !== ClientState.Spectator,
+        position: { ...player.position, z: player.position.z - player.eyeHeight },
+        yaw: player.yaw,
+        pitch: player.pitch,
+        state: player.clientState,
+        move: player.move,
+        strafe: player.strafe,
+        physicsState: player.physicsState,
+        inWater: player.inWater,
+        timeInAir: player.timeInAir,
+        velocityZ: player.velocity.z + player.falling.z,
+      });
     }
+    this.playerRenderer.rendergame(players, multiplayer.gameMode, this.teamskins, localNetworkPlayer?.team ?? "", performance.now());
   }
 
   private updatePlayerCamera(position: RegisteredMapEntity["position"]): void {
-    this.playerCamera.position.copyFrom(toBabylonPosition(position));
     const yaw = this.physics.player.yaw * Math.PI / 180;
     const pitch = this.physics.player.pitch * Math.PI / 180;
+    let cameraPosition = toBabylonPosition(position);
+    if (this.thirdperson) {
+      const desired = thirdpersoncamera(position, this.physics.player.yaw, this.physics.player.pitch);
+      const offset = desired.subtract(cameraPosition);
+      const distance = offset.length();
+      const hit = distance > 0 ? this.physics.raycast(position, {
+        x: offset.x / distance,
+        y: offset.z / distance,
+        z: offset.y / distance,
+      }, distance, 1) : undefined;
+      if (hit) offset.scaleInPlace(Math.max(0, hit.distance - 0.5) / distance);
+      cameraPosition = cameraPosition.add(offset);
+    }
+    this.playerCamera.position.copyFrom(cameraPosition);
     const direction = toBabylonDirection({
       x: -Math.sin(yaw) * Math.cos(pitch),
       y: Math.cos(yaw) * Math.cos(pitch),
