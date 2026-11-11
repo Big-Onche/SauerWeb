@@ -39,15 +39,22 @@ export class DamageSystem {
     const applied = amount - absorbed;
     target.armour -= absorbed;
     target.health -= applied;
-    const definition = WEAPONS[gun];
-    const push = definition.hitPush * amount / target.weight * (target === attacker && definition.explosionRadius ? EXPLOSION_SELF_PUSH : 1);
-    addScaled(target.velocity, direction, push);
+    hitpush(target, amount, direction, gun, target === attacker);
     const killed = target.health <= 0;
     if (killed) target.alive = false;
     this.events.emit({ type: "damage", gun, target, amount: applied, absorbed });
     if (killed) this.events.emit({ type: "death", gun, target });
     return { applied, absorbed, killed };
   }
+}
+
+// Original: src/fpsgame/game.h
+// Function: fpsent::hitpush()
+// Sauerbraten reference: SVN r6488
+export function hitpush(target: Damageable, damage: number, direction: Vec3, gun: Gun, selfDamage = false): void {
+  const definition = WEAPONS[gun];
+  const push = definition.hitPush * damage / target.weight * (selfDamage && definition.explosionRadius ? EXPLOSION_SELF_PUSH : 1);
+  addScaled(target.velocity, direction, push);
 }
 
 export function createDamageable(id: string, position: Vec3, health = 100): Damageable {

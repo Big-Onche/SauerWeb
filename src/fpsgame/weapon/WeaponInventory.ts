@@ -54,6 +54,10 @@ export class WeaponInventory {
     return gun >= Gun.Fist && gun < GUN_COUNT && this.ammo[gun] > 0;
   }
 
+  pickup(gun: Gun): { readonly add: number; readonly max: number } {
+    return AMMO_PICKUPS[gun - Gun.Shotgun] ?? { add: 0, max: 0 };
+  }
+
   consume(gun: Gun): boolean {
     if (!this.hasAmmo(gun)) return false;
     if (gun !== Gun.Fist) this.ammo[gun]--;

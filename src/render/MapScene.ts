@@ -178,6 +178,7 @@ export class MapScene {
     this.weaponRenderer.clear();
     this.weapons.projectiles.clear();
     this.physics.setMap(map);
+    this.fpsClient.multiplayer.setMapEntities(map.entityRegistry);
     const batches = generateGeometry(map, textures);
     const materialBatches = generateMaterialGeometry(map);
     let faces = 0;
@@ -686,20 +687,15 @@ export class MapScene {
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
     if (event.type === "spawn") this.spawnNetworkPlayer();
-    else if (event.type === "remote-shot") {
-      const line = MeshBuilder.CreateLines(`network-shot-${event.clientNumber}`, {
-        points: [toBabylonPosition(event.from), toBabylonPosition(event.to)],
-      }, this.scene);
-      line.color = new Color3(1, 0.75, 0.25);
-      line.isPickable = false;
-      window.setTimeout(() => line.dispose(), 90);
-    }
   }
 
   private spawnNetworkPlayer(): void {
     const starts = this.currentMap?.entities.filter((entity) => entity.type === 3) ?? [];
     const start = starts[Math.floor(Math.random() * starts.length)];
-    if (start) this.physics.spawn({ ...start.position, z: start.position.z + this.physics.player.eyeHeight }, start.attributes[0] ?? 0, performance.now());
+    if (start) {
+      this.physics.spawn({ ...start.position, z: start.position.z + this.physics.player.eyeHeight }, start.attributes[0] ?? 0,
+        performance.now());
+    }
     else this.physics.reset(performance.now());
     this.weaponHUD.render();
   }

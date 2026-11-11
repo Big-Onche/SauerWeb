@@ -4,7 +4,7 @@ import { ArmourType, type Damageable } from "./DamageSystem";
 import { HitscanSystem, type WeaponWorld } from "./HitscanSystem";
 import { ProjectileSystem } from "./ProjectileSystem";
 import { Gun, WEAPONS } from "./WeaponDefinitions";
-import type { WeaponEvents } from "./WeaponEvents";
+import type { WeaponEvents, WeaponHit } from "./WeaponEvents";
 import { WeaponInventory } from "./WeaponInventory";
 import { GameModeFlag, gameModeHas } from "../game";
 
@@ -15,6 +15,7 @@ export class WeaponController {
   gunWait = 0;
   lastAttackGun = -1;
   quadMilliseconds = 0;
+  serverAuthoritative = false;
 
   constructor(readonly owner: Damageable, private readonly world: WeaponWorld, private readonly hitscan: HitscanSystem,
               private readonly projectiles: ProjectileSystem, private readonly events: WeaponEvents) {}
@@ -44,10 +45,11 @@ export class WeaponController {
     if (barrier) to = copyVec3(barrier.position);
     addScaled(this.owner.velocity, direction, definition.kickAmount * -2.5);
     const multiplier = this.quadMilliseconds > 0 ? 4 : 1;
-    let rays: Vec3[] = [];
+    let rays: Vec3[] = [], hits: WeaponHit[] = [];
     if (definition.projectileSpeed) this.projectiles.spawn(gun, this.owner, from, to, multiplier);
-    else rays = this.hitscan.fire(gun, this.owner, from, to, multiplier, targets).endpoints;
-    this.events.emit({ type: "shot", gun, from, to, rays });
+    else ({ endpoints: rays, hits } = this.hitscan.fire(gun, this.owner, from, to, multiplier, targets, !this.serverAuthoritative));
+    if (definition.rays === 1 && rays.length) to = copyVec3(rays[0]);
+    this.events.emit({ type: "shot", gun, millis: nowMilliseconds, from, to, rays, hits });
     this.gunWait = definition.attackDelay;
     return true;
   }

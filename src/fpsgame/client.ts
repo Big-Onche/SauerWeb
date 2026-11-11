@@ -1,14 +1,14 @@
 import { PhysicsSimulation } from "../engine/physics";
 import { ClientState, PhysicsState } from "../engine/physics/types";
-import { copyVec3, magnitude, normalize, subtract } from "../engine/physics/vector";
+import { copyVec3, magnitude } from "../engine/physics/vector";
 import type { Vec3 } from "../engine/octa";
 import { EnetClient, type EnetEvent, ENET_PACKET_FLAG_UNSEQUENCED } from "../network/enet";
 import { PacketReader, PacketWriter } from "../network/protocol";
 import { DMF, DNF, DVELF, gameModeName, NetworkMessage, PROTOCOL_VERSION } from "./game";
 import { WeaponSystem } from "./weapon";
-import { createDamageable, type Damageable } from "./weapon/DamageSystem";
-import { Gun } from "./weapon/WeaponDefinitions";
-import type { WeaponEvent } from "./weapon/WeaponEvents";
+import { createDamageable, hitpush, type Damageable } from "./weapon/DamageSystem";
+import { Gun, WEAPONS } from "./weapon/WeaponDefinitions";
+import type { WeaponEvent, WeaponHit } from "./weapon/WeaponEvents";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -41,6 +41,8 @@ export interface NetworkPlayer extends Damageable {
   selectedGun: number;
   ammo: Int32Array;
   lastAction: number;
+  gunWait: number;
+  lastAttackGun: number;
   lastPain: number;
   deadAt: number;
 }
@@ -79,7 +81,7 @@ export class MultiplayerClient extends EventTarget {
   private lastPing = 0;
   private mapStarted = performance.now();
   private lastSpawnAttempt = 0;
-  private pendingHits: NetworkPlayer[] = [];
+  private mapEntityTypes: number[] = [];
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
     super();
@@ -89,12 +91,14 @@ export class MultiplayerClient extends EventTarget {
 
   async connect(endpoint: ServerEndpoint): Promise<void> {
     this.disconnect();
+    this.weapons.controller.serverAuthoritative = true;
     this.endpoint = { ...endpoint, playerName: endpoint.playerName.slice(0, 15) || "unnamed" };
     this.emit({ type: "status", status: `connecting to ${endpoint.host}:${endpoint.port}` });
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     try {
       await this.transport.connect(endpoint.relayUrl ?? `${protocol}//${location.host}/relay`, endpoint.host, endpoint.port);
     } catch (error) {
+      this.weapons.controller.serverAuthoritative = false;
       this.emit({ type: "status", status: error instanceof Error ? error.message : String(error) });
       throw error;
     }
@@ -105,6 +109,7 @@ export class MultiplayerClient extends EventTarget {
     this.connected = false;
     this.clientNumber = -1;
     this.players.clear();
+    this.weapons.controller.serverAuthoritative = false;
     this.syncTargets();
   }
 
@@ -137,6 +142,10 @@ export class MultiplayerClient extends EventTarget {
     this.transport.flush();
   }
 
+  setMapEntities(entities: readonly { type: number }[]): void {
+    this.mapEntityTypes = entities.map((entity) => entity.type);
+  }
+
   private handleEnet(event: EnetEvent): void {
     if (event.type === "connect") {
       this.emit({ type: "status", status: "ENet connected; waiting for server" });
@@ -144,6 +153,7 @@ export class MultiplayerClient extends EventTarget {
     }
     if (event.type === "disconnect") {
       this.connected = false;
+      this.weapons.controller.serverAuthoritative = false;
       this.emit({ type: "disconnect", reason: event.data });
       return;
     }
@@ -195,7 +205,10 @@ export class MultiplayerClient extends EventTarget {
       player.move = (physicalState >> 4) & 2 ? -1 : (physicalState >> 4) & 1 ? 1 : 0;
       player.strafe = (physicalState >> 6) & 2 ? -1 : (physicalState >> 6) & 1 ? 1 : 0;
       player.physicsState = physicalState & 7;
-      if (player.state === ClientState.Lagged || player.state === ClientState.Spawning) player.state = ClientState.Alive;
+      if (player.state === ClientState.Lagged || player.state === ClientState.Spawning) {
+        player.state = ClientState.Alive;
+        player.alive = true;
+      }
       this.emit({ type: "players" });
     }
   }
@@ -233,20 +246,20 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Spawn: {
           const player = this.players.get(sender);
           this.parseState(player, packet);
-          if (player) player.state = ClientState.Spawning;
+          if (player) { player.state = ClientState.Spawning; player.alive = false; }
           break;
         }
-        case NetworkMessage.ForceDeath: this.setDead(packet.getInt()); break;
+        case NetworkMessage.ForceDeath: this.setDead(packet.getInt(), false); break;
+        case NetworkMessage.Shoot: this.parseShoot(sender, packet); break;
         case NetworkMessage.ShotEffects: this.parseShotEffects(packet); break;
         case NetworkMessage.Damage: this.parseDamage(packet); break;
-        case NetworkMessage.HitPush:
-          packet.getInt(); packet.getInt(); packet.getInt();
-          for (let index = 0; index < 3; index++) packet.getInt();
-          break;
+        case NetworkMessage.HitPush: this.parseHitPush(packet); break;
         case NetworkMessage.Died: this.parseDied(packet); break;
         case NetworkMessage.Resume: this.parseResume(packet); break;
         case NetworkMessage.TeamInfo: this.skipTeamInfo(packet); break;
         case NetworkMessage.ItemList: while (packet.getInt() >= 0) packet.getInt(); break;
+        case NetworkMessage.ItemSpawn: packet.getInt(); break;
+        case NetworkMessage.ItemAccept: this.parseItemAccept(packet); break;
         case NetworkMessage.CurrentMaster:
           packet.getInt();
           for (let clientNumber = packet.getInt(); clientNumber >= 0; clientNumber = packet.getInt()) packet.getInt();
@@ -260,6 +273,8 @@ export class MultiplayerClient extends EventTarget {
           if (player) player.selectedGun = gun;
           break;
         }
+        case NetworkMessage.ReplenishAmmo: this.parseReplenishAmmo(packet); break;
+        case NetworkMessage.BaseRegen: this.parseBaseRegen(packet); break;
         case NetworkMessage.ClientPing: {
           const player = this.players.get(sender), ping = packet.getInt();
           if (player) player.ping = ping;
@@ -284,6 +299,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Spectator: {
           const player = this.playerFor(packet.getInt());
           player.state = packet.getInt() ? ClientState.Spectator : ClientState.Dead;
+          player.alive = false;
           break;
         }
         case NetworkMessage.DemoPacket: break;
@@ -344,7 +360,13 @@ export class MultiplayerClient extends EventTarget {
     if (resume) {
       const state = packet.getInt(), frags = packet.getInt(), flags = packet.getInt(), deaths = packet.getInt();
       packet.getInt();
-      if (player) { player.state = state; player.frags = frags; player.flags = flags; player.deaths = deaths; }
+      if (player) {
+        player.state = state;
+        player.alive = state === ClientState.Alive;
+        player.frags = frags;
+        player.flags = flags;
+        player.deaths = deaths;
+      }
     }
     const lifeSequence = packet.getInt(), health = packet.getInt(), maxHealth = packet.getInt(), armour = packet.getInt(),
       armourType = packet.getInt();
@@ -364,16 +386,50 @@ export class MultiplayerClient extends EventTarget {
     this.emit({ type: "players" });
   }
 
+  // Original: src/fpsgame/client.cpp
+  // Function: parsepacketclient(), N_SHOTFX
+  // Sauerbraten reference: SVN r6488
   private parseShotEffects(packet: PacketReader): void {
     const clientNumber = packet.getInt(), gun = packet.getInt() as Gun;
     packet.getInt();
     const from = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
     const to = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
     const player = this.players.get(clientNumber);
-    if (player) player.lastAction = performance.now();
+    if (player) this.applyShotEffects(player, gun);
+    this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [] });
     this.emit({ type: "remote-shot", clientNumber, gun, from, to });
   }
 
+  // Original: src/fpsgame/client.cpp
+  // Function: parsepacketclient(), N_SHOTFX
+  // Sauerbraten reference: SVN r6488
+  private applyShotEffects(player: NetworkPlayer, gun: Gun): void {
+    if (gun > Gun.Fist && gun <= Gun.Pistol && player.ammo[gun]) player.ammo[gun]--;
+    player.selectedGun = Math.min(Gun.Pistol, Math.max(Gun.Fist, gun));
+    player.gunWait = this.weaponDelay(player.selectedGun);
+    player.lastAction = performance.now();
+    player.lastAttackGun = player.selectedGun;
+  }
+
+  // Original: src/fpsgame/server.cpp
+  // Function: parsepacket(), N_SHOOT
+  // Sauerbraten reference: SVN r6488
+  private parseShoot(sender: number, packet: PacketReader): void {
+    packet.getInt();
+    const gun = packet.getInt() as Gun;
+    const from = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
+    const to = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
+    const hitCount = packet.getInt();
+    for (let hit = 0; hit < hitCount; hit++) for (let field = 0; field < 7; field++) packet.getInt();
+    const player = this.players.get(sender);
+    if (player) this.applyShotEffects(player, gun);
+    this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [] });
+    this.emit({ type: "remote-shot", clientNumber: sender, gun, from, to });
+  }
+
+  // Original: src/fpsgame/client.cpp
+  // Function: parsepacketclient(), N_DAMAGE
+  // Sauerbraten reference: SVN r6488
   private parseDamage(packet: PacketReader): void {
     const targetNumber = packet.getInt();
     packet.getInt(); packet.getInt();
@@ -383,14 +439,77 @@ export class MultiplayerClient extends EventTarget {
     if (targetNumber === this.clientNumber) { this.physics.player.armour = armour; this.physics.player.health = health; }
   }
 
+  // Original: src/fpsgame/client.cpp
+  // Function: parsepacketclient(), N_HITPUSH
+  // Sauerbraten reference: SVN r6488
+  private parseHitPush(packet: PacketReader): void {
+    const targetNumber = packet.getInt(), gun = packet.getInt() as Gun, damage = packet.getInt();
+    const direction = { x: packet.getInt() / DNF, y: packet.getInt() / DNF, z: packet.getInt() / DNF };
+    const target = this.players.get(targetNumber);
+    if (target) hitpush(target, damage * (target.health <= 0 ? 2 : 1), direction, gun);
+    if (targetNumber === this.clientNumber) hitpush(this.physics.player, damage * (this.physics.player.health <= 0 ? 2 : 1), direction, gun);
+  }
+
+  // Original: src/fpsgame/capture.h
+  // Function: parsepacketclient(), N_REPAMMO
+  // Sauerbraten reference: SVN r6488
+  private parseReplenishAmmo(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), gun = packet.getInt() as Gun, player = this.players.get(clientNumber);
+    if (!player || gun < Gun.Shotgun || gun > Gun.Pistol) return;
+    const pickup = this.weapons.controller.inventory.pickup(gun);
+    player.ammo[gun] = Math.min(pickup.max, player.ammo[gun] + pickup.add);
+    if (clientNumber === this.clientNumber) this.weapons.controller.inventory.ammo[gun] = player.ammo[gun];
+  }
+
+  // Original: src/fpsgame/client.cpp
+  // Function: parsepacketclient(), N_ITEMACC
+  // Sauerbraten reference: SVN r6488
+  private parseItemAccept(packet: PacketReader): void {
+    const entityIndex = packet.getInt(), clientNumber = packet.getInt();
+    if (clientNumber < 0) return;
+    const entityType = this.mapEntityTypes[entityIndex];
+    if (!Number.isInteger(entityType) || entityType < 8 || entityType > 13) return;
+    const gun = entityType - 8 + Gun.Shotgun;
+    const player = this.players.get(clientNumber);
+    if (!player || gun < Gun.Shotgun || gun > Gun.Pistol) return;
+    const pickup = this.weapons.controller.inventory.pickup(gun);
+    player.ammo[gun] = Math.min(pickup.max, player.ammo[gun] + pickup.add);
+    if (clientNumber === this.clientNumber) this.weapons.controller.inventory.ammo[gun] = player.ammo[gun];
+  }
+
+  // Original: src/fpsgame/capture.h
+  // Function: parsepacketclient(), N_BASEREGEN
+  // Sauerbraten reference: SVN r6488
+  private parseBaseRegen(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), health = packet.getInt(), armour = packet.getInt(), gun = packet.getInt() as Gun,
+      ammo = packet.getInt(), player = this.players.get(clientNumber);
+    if (!player) return;
+    player.health = health;
+    player.armourType = 1;
+    player.armour = armour;
+    if (gun >= Gun.Shotgun && gun <= Gun.Pistol) player.ammo[gun] = ammo;
+    if (clientNumber === this.clientNumber) {
+      this.physics.player.health = health;
+      this.physics.player.armourType = 1;
+      this.physics.player.armour = armour;
+      if (gun >= Gun.Shotgun && gun <= Gun.Pistol) this.weapons.controller.inventory.ammo[gun] = ammo;
+    }
+  }
+
+  // Original: src/fpsgame/client.cpp
+  // Function: parsepacketclient(), N_DIED
+  // Sauerbraten reference: SVN r6488
   private parseDied(packet: PacketReader): void {
     const victimNumber = packet.getInt(), actor = this.playerFor(packet.getInt());
     actor.frags = packet.getInt(); packet.getInt(); this.setDead(victimNumber);
   }
 
-  private setDead(clientNumber: number): void {
+  private setDead(clientNumber: number, countDeath = true): void {
     const player = this.playerFor(clientNumber);
-    player.state = ClientState.Dead; player.alive = false; player.deaths++; player.deadAt = performance.now();
+    const wasDead = player.state === ClientState.Dead;
+    player.state = ClientState.Dead; player.alive = false;
+    if (countDeath && !wasDead) player.deaths++;
+    player.deadAt = performance.now();
     if (clientNumber === this.clientNumber) {
       this.physics.player.alive = false;
       this.physics.player.clientState = ClientState.Dead;
@@ -436,24 +555,12 @@ export class MultiplayerClient extends EventTarget {
 
   private handleWeaponEvent(event: WeaponEvent): void {
     if (!this.connected) return;
-    if (event.type === "damage" && event.target.id.startsWith("client:")) {
-      const player = this.players.get(Number(event.target.id.slice(7)));
-      if (player) this.pendingHits.push(player);
+    if (event.type === "selected") {
+      this.transport.send(1, new PacketWriter().putInt(NetworkMessage.GunSelect).putInt(event.gun).finish(), true);
       return;
     }
     if (event.type !== "shot") return;
-    const packet = new PacketWriter().putInt(NetworkMessage.Shoot).putInt(Math.trunc(performance.now() - this.mapStarted)).putInt(event.gun)
-      .putInt(Math.trunc(event.from.x * DMF)).putInt(Math.trunc(event.from.y * DMF)).putInt(Math.trunc(event.from.z * DMF))
-      .putInt(Math.trunc(event.to.x * DMF)).putInt(Math.trunc(event.to.y * DMF)).putInt(Math.trunc(event.to.z * DMF))
-      .putInt(this.pendingHits.length);
-    for (const target of this.pendingHits) {
-      const direction = subtract(target.position, event.from), distance = magnitude(direction);
-      normalize(direction);
-      packet.putInt(target.clientNumber).putInt(target.lifeSequence).putInt(Math.trunc(distance * DMF)).putInt(1)
-        .putInt(Math.trunc(direction.x * DNF)).putInt(Math.trunc(direction.y * DNF)).putInt(Math.trunc(direction.z * DNF));
-    }
-    this.pendingHits = [];
-    this.transport.send(1, packet.finish(), true);
+    this.transport.send(1, serializeShoot(event, Math.trunc(event.millis - this.mapStarted)), true);
   }
 
   private playerFor(clientNumber: number): NetworkPlayer {
@@ -463,8 +570,9 @@ export class MultiplayerClient extends EventTarget {
       clientNumber, name: clientNumber === this.clientNumber ? this.endpoint?.playerName ?? "unnamed" : "unnamed", team: "", model: 0,
       lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, ping: 0, yaw: 0, pitch: 0, roll: 0, move: 0 as const,
       strafe: 0 as const, physicsState: PhysicsState.Fall, selectedGun: Gun.Pistol, ammo: new Int32Array(12),
-      lastAction: 0, lastPain: 0, deadAt: 0,
+      lastAction: 0, gunWait: 0, lastAttackGun: -1, lastPain: 0, deadAt: 0,
     });
+    player.alive = false;
     this.players.set(clientNumber, player);
     this.syncTargets();
     return player;
@@ -476,6 +584,27 @@ export class MultiplayerClient extends EventTarget {
   }
 
   private emit(detail: MultiplayerEvent): void { this.dispatchEvent(new CustomEvent<MultiplayerEvent>("multiplayer", { detail })); }
+
+  private weaponDelay(gun: number): number {
+    return gun >= Gun.Fist && gun <= Gun.Pistol ? WEAPONS[gun].attackDelay : 0;
+  }
+}
+
+// Original: src/fpsgame/weapon.cpp
+// Function: shoot(), addmsg(N_SHOOT, "rci2i6iv", ...)
+// Sauerbraten reference: SVN r6488
+export function serializeShoot(event: Extract<WeaponEvent, { type: "shot" }>, shotMillis: number): Uint8Array {
+  const packet = new PacketWriter().putInt(NetworkMessage.Shoot).putInt(shotMillis).putInt(event.gun)
+    .putInt(Math.trunc(event.from.x * DMF)).putInt(Math.trunc(event.from.y * DMF)).putInt(Math.trunc(event.from.z * DMF))
+    .putInt(Math.trunc(event.to.x * DMF)).putInt(Math.trunc(event.to.y * DMF)).putInt(Math.trunc(event.to.z * DMF));
+  const hits = event.hits.filter((hit): hit is WeaponHit & { target: NetworkPlayer } => hit.target.id.startsWith("client:"));
+  packet.putInt(hits.length);
+  for (const hit of hits) {
+    const target = hit.target;
+    packet.putInt(target.clientNumber).putInt(target.lifeSequence).putInt(Math.trunc(hit.distance * DMF)).putInt(hit.rays)
+      .putInt(Math.trunc(hit.direction.x * DNF)).putInt(Math.trunc(hit.direction.y * DNF)).putInt(Math.trunc(hit.direction.z * DNF));
+  }
+  return packet.finish();
 }
 
 function directionVector(yaw: number, pitch: number, length: number): Vec3 {

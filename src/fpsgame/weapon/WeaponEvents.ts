@@ -2,10 +2,18 @@ import type { Vec3 } from "../../engine/octa";
 import type { Damageable } from "./DamageSystem";
 import type { Gun } from "./WeaponDefinitions";
 
+export interface WeaponHit {
+  target: Damageable;
+  distance: number;
+  rays: number;
+  direction: Vec3;
+}
+
 export type WeaponEvent =
   | { type: "selected"; gun: Gun }
   | { type: "no-ammo"; gun: Gun }
-  | { type: "shot"; gun: Gun; from: Vec3; to: Vec3; rays: Vec3[] }
+  | { type: "shot"; gun: Gun; millis: number; from: Vec3; to: Vec3; rays: Vec3[]; hits: WeaponHit[] }
+  | { type: "shot-effect"; gun: Gun; from: Vec3; to: Vec3; rays: Vec3[] }
   | { type: "projectile-spawned"; gun: Gun; id: number; position: Vec3 }
   | { type: "projectile-moved"; gun: Gun; id: number; position: Vec3 }
   | { type: "explosion"; gun: Gun; position: Vec3; radius: number }

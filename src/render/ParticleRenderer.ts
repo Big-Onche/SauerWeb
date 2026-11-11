@@ -198,12 +198,15 @@ export class ParticleRenderer {
   }
 
   private handleWeaponEvent(event: WeaponEvent): void {
-    if (event.type === "shot") this.shot(event.gun, event.from, event.to, event.rays);
+    if (event.type === "shot" || event.type === "shot-effect") this.shot(event.gun, event.from, event.to, event.rays);
     else if (event.type === "projectile-spawned") this.spawnProjectile(event.id, event.gun, event.position);
     else if (event.type === "projectile-moved") this.moveProjectile(event.id, event.position);
     else if (event.type === "explosion") this.explosion(event.gun, event.position, event.radius);
   }
 
+  // Original: src/fpsgame/weapon.cpp
+  // Function: shoteffects()
+  // Sauerbraten reference: SVN r6488
   private shot(gun: Gun, from: Vec3, to: Vec3, rays: Vec3[]): void {
     const endpoints = rays.length ? rays : [to];
     const muzzle = this.muzzlePosition(from);

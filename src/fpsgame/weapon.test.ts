@@ -108,6 +108,28 @@ describe("Sauerbraten weapon parity", () => {
     expect(target.alive).toBe(false);
   });
 
+  it("reports an exact rifle-cylinder intersection without applying server-authoritative damage locally", () => {
+    const player = createDamageable("player", vector());
+    const target = createDamageable("client:7", vector(0, 50));
+    target.health = 1;
+    const system = new WeaponSystem(emptyWorld, player);
+    system.targets.push(target);
+    system.controller.serverAuthoritative = true;
+    system.controller.inventory.ammo[Gun.Rifle] = 1;
+    system.controller.select(Gun.Rifle);
+    system.controller.setAttacking(true);
+    let shot: Extract<Parameters<typeof system.events.emit>[0], { type: "shot" }> | undefined;
+    system.events.on((event) => { if (event.type === "shot") shot = event; });
+
+    system.update(1000, vector(0, 100));
+
+    expect(target).toMatchObject({ health: 1, alive: true });
+    expect(shot?.hits).toHaveLength(1);
+    expect(shot?.hits[0]).toMatchObject({ target, rays: 1, direction: { x: 0, y: 1, z: 0 } });
+    expect(shot?.hits[0].distance).toBeCloseTo(50 - target.radius);
+    expect(shot?.to.y).toBeCloseTo(50 - target.radius);
+  });
+
   it("detonates grenades on their native 1500 ms fuse", () => {
     const player = createDamageable("player", vector());
     const system = new WeaponSystem(emptyWorld, player);

@@ -22,7 +22,7 @@ export class WeaponAudio {
 
   private handle(event: WeaponEvent): void {
     let path: string | undefined;
-    if (event.type === "shot") path = SHOT_SOUNDS[event.gun];
+    if (event.type === "shot" || event.type === "shot-effect") path = SHOT_SOUNDS[event.gun];
     else if (event.type === "selected") path = "sounds/aard/weapload.wav";
     else if (event.type === "no-ammo") path = "sounds/aard/outofammo.wav";
     else if (event.type === "explosion") path = event.gun === Gun.Grenade ? "sounds/q009/grenade.ogg" : "sounds/q009/ren.ogg";

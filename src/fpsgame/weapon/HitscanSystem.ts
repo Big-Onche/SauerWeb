@@ -3,6 +3,7 @@ import { dot, magnitude, normalize, subtract } from "../../engine/physics/vector
 import type { Damageable } from "./DamageSystem";
 import { DamageSystem } from "./DamageSystem";
 import { WEAPONS, type Gun } from "./WeaponDefinitions";
+import type { WeaponHit } from "./WeaponEvents";
 
 export interface WorldHit {
   position: Vec3;
@@ -16,21 +17,24 @@ export interface WeaponWorld {
 
 export interface HitscanResult {
   endpoints: Vec3[];
-  hits: Array<{ target: Damageable; pellets: number }>;
+  hits: WeaponHit[];
 }
 
 export class HitscanSystem {
   constructor(private readonly world: WeaponWorld, private readonly damage: DamageSystem,
               private readonly random: () => number = Math.random) {}
 
-  fire(gun: Gun, attacker: Damageable, from: Vec3, target: Vec3, damageMultiplier: number,
-       targets: readonly Damageable[]): HitscanResult {
+  // Original: src/fpsgame/weapon.cpp
+  // Function: raydamage()
+  // Sauerbraten reference: SVN r6488
+  fire(gun: Gun, attacker: Damageable, from: Vec3, target: Vec3, damageMultiplier: number, targets: readonly Damageable[],
+       applyDamage = true): HitscanResult {
     const definition = WEAPONS[gun];
     const baseDirection = subtract(target, from);
     const range = Math.min(definition.range, magnitude(baseDirection));
     normalize(baseDirection);
     const endpoints: Vec3[] = [];
-    const targetHits = new Map<Damageable, number>();
+    const targetHits = new Map<Damageable, { rays: number; endpoint: Vec3 }>();
     for (let ray = 0; ray < definition.rays; ray++) {
       const endpoint = definition.spread
         ? this.spreadEndpoint(from, baseDirection, range, definition.spread)
@@ -49,15 +53,20 @@ export class HitscanSystem {
           bestTarget = candidate;
         }
       }
-      endpoints.push(addDistance(from, direction, bestDistance));
-      if (bestTarget) targetHits.set(bestTarget, (targetHits.get(bestTarget) ?? 0) + 1);
+      const hitEndpoint = addDistance(from, direction, bestDistance);
+      endpoints.push(hitEndpoint);
+      if (bestTarget) {
+        const grouped = targetHits.get(bestTarget);
+        targetHits.set(bestTarget, { rays: (grouped?.rays ?? 0) + 1, endpoint: grouped?.endpoint ?? hitEndpoint });
+      }
     }
-    const hits: Array<{ target: Damageable; pellets: number }> = [];
-    targetHits.forEach((pellets, hitTarget) => {
-      const direction = subtract(target, from);
+    const hits: WeaponHit[] = [];
+    targetHits.forEach(({ rays: rayCount, endpoint }, hitTarget) => {
+      const hitTo = definition.rays > 1 ? target : endpoint;
+      const direction = subtract(hitTo, from), distance = magnitude(direction);
       normalize(direction);
-      this.damage.damage(hitTarget, attacker, definition.damage * damageMultiplier * pellets, direction, gun);
-      hits.push({ target: hitTarget, pellets });
+      if (applyDamage) this.damage.damage(hitTarget, attacker, definition.damage * damageMultiplier * rayCount, direction, gun);
+      hits.push({ target: hitTarget, distance, rays: rayCount, direction });
     });
     return { endpoints, hits };
   }
@@ -81,31 +90,34 @@ export class HitscanSystem {
 
 export function lineCylinderIntersection(origin: Vec3, direction: Vec3, maximumDistance: number,
                                          target: Damageable): number | undefined {
-  const dx = origin.x - target.position.x, dy = origin.y - target.position.y;
-  const a = direction.x * direction.x + direction.y * direction.y;
-  const b = 2 * (dx * direction.x + dy * direction.y);
-  const c = dx * dx + dy * dy - target.radius * target.radius;
-  const candidates: number[] = [];
-  const discriminant = b * b - 4 * a * c;
-  if (a >= 1e-12 && discriminant >= 0) {
-    const root = Math.sqrt(discriminant);
-    candidates.push((-b - root) / (2 * a), (-b + root) / (2 * a));
+  const to = addDistance(origin, direction, maximumDistance);
+  const start = { x: target.position.x, y: target.position.y, z: target.position.z - target.eyeHeight };
+  const end = { x: target.position.x, y: target.position.y, z: target.position.z + target.aboveEye };
+  const d = subtract(end, start), m = subtract(origin, start), n = subtract(to, origin);
+  const md = dot(m, d), nd = dot(n, d), dd = dot(d, d);
+  if (md < 0 && md + nd < 0 || md > dd && md + nd > dd) return undefined;
+  const nn = dot(n, n), mn = dot(m, n), a = dd * nn - nd * nd;
+  const k = dot(m, m) - target.radius * target.radius, c = dd * k - md * md;
+  let fraction: number;
+  if (Math.abs(a) < 0.005) {
+    if (c > 0) return undefined;
+    fraction = md < 0 ? -mn / nn : md > dd ? (nd - mn) / nn : 0;
+  } else if (c > 0) {
+    const b = dd * mn - nd * md, discriminant = b * b - a * c;
+    if (discriminant < 0) return undefined;
+    fraction = (-b - Math.sqrt(discriminant)) / a;
+  } else fraction = 0;
+  const offset = md + fraction * nd;
+  if (offset < 0) {
+    if (nd <= 0) return undefined;
+    fraction = -md / nd;
+    if (k + fraction * (2 * mn + fraction * nn) > 0) return undefined;
+  } else if (offset > dd) {
+    if (nd >= 0) return undefined;
+    fraction = (dd - md) / nd;
+    if (k + dd - 2 * md + fraction * (2 * (mn - nd) + fraction * nn) > 0) return undefined;
   }
-  if (Math.abs(direction.z) >= 1e-12) {
-    candidates.push((target.position.z - target.eyeHeight - origin.z) / direction.z,
-      (target.position.z + target.aboveEye - origin.z) / direction.z);
-  }
-  candidates.sort((first, second) => first - second);
-  for (const distance of candidates) {
-    if (distance < 0 || distance > maximumDistance) continue;
-    const z = origin.z + direction.z * distance;
-    const x = origin.x + direction.x * distance - target.position.x;
-    const y = origin.y + direction.y * distance - target.position.y;
-    if (z >= target.position.z - target.eyeHeight && z <= target.position.z + target.aboveEye && x * x + y * y <= target.radius * target.radius) {
-      return distance;
-    }
-  }
-  return undefined;
+  return fraction >= 0 && fraction <= 1 ? fraction * maximumDistance : undefined;
 }
 
 export function addDistance(origin: Vec3, direction: Vec3, distance: number): Vec3 {
