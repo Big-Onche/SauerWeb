@@ -26,7 +26,7 @@ import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRend
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 import { toBabylonDirection, toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 import { resolveMapLighting } from "./MapLighting";
-import { loadMapModels } from "./MapModelLoader";
+import { animateEntityModels, loadMapModels, type EntityModelAnimation } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { installSauerFogDistance } from "./SauerFogShader";
@@ -101,6 +101,7 @@ export class MapScene {
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
+  private readonly entityModelAnimations: EntityModelAnimation[] = [];
   private currentMap?: SauerMap;
   private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
   private debugLoadout = false;
@@ -167,7 +168,7 @@ export class MapScene {
 
   async loadMap(map: SauerMap, textures: ResolvedTexture[], skyOverrides?: MapSkyOverrides,
                 lightingOverrides?: MapLightingOverrides, fogOverrides?: MapFogOverrides,
-                mapModels: MapModelAsset[] = []): Promise<SceneStats> {
+                mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
     this.currentMap = map;
     const lighting = resolveMapLighting(map, lightingOverrides);
@@ -181,6 +182,7 @@ export class MapScene {
     this.entityMaterials.forEach((material) => material.dispose());
     this.entityMaterials.clear();
     this.mapModelMeshes.length = 0;
+    this.entityModelAnimations.length = 0;
     this.materialCache.dispose();
     this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
     this.fallbackMaterial?.dispose(true, true);
@@ -236,9 +238,10 @@ export class MapScene {
     map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
     this.particleRenderer.loadMap(map.entityRegistry);
     const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
-      () => generation === this.loadGeneration);
+      () => generation === this.loadGeneration, teleporter);
     this.physics.setMapModels(loadedMapModels.collisions);
     this.mapModelMeshes.push(...loadedMapModels.meshes);
+    this.entityModelAnimations.push(...loadedMapModels.animations);
     triangles += loadedMapModels.triangles;
     vertices += loadedMapModels.vertices;
     this.materialCache.setWireframe(this.wireframe);
@@ -711,6 +714,7 @@ export class MapScene {
   }
 
   private updatePhysics(nowMilliseconds: number): void {
+    animateEntityModels(this.entityModelAnimations, nowMilliseconds);
     if (this.cameraMode !== "player") return;
     const wasDead = this.localDeadAt > 0;
     if (!this.physics.player.alive && !wasDead) this.localDeadAt = nowMilliseconds;

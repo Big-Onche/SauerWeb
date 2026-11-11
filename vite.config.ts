@@ -86,6 +86,7 @@ function readTextureManifest(mapName: string): {
   lighting: ConfigState["lighting"];
   fog: ConfigState["fog"];
   mapModels: ReturnType<typeof resolveMapModels>;
+  entityModels: { teleporter: ReturnType<typeof resolveMapModels>[number] };
 } {
   const state: ConfigState = {
     slots: [],
@@ -110,6 +111,7 @@ function readTextureManifest(mapName: string): {
     lighting: state.lighting,
     fog: state.fog,
     mapModels: resolveMapModels(state.mapModels),
+    entityModels: { teleporter: resolveMapModels(["teleporter"])[0] },
   };
 }
 

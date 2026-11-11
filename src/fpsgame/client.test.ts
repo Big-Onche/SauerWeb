@@ -5,6 +5,7 @@ import { DMF, DNF, NetworkMessage } from "./game";
 import { createDamageable } from "./weapon/DamageSystem";
 import { Gun } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent } from "./weapon/WeaponEvents";
+import { createFpsEntityRegistry } from "./entities";
 
 describe("Sauerbraten rifle protocol", () => {
   it("serializes the exact native N_SHOOT fields and hit record", () => {
@@ -119,6 +120,27 @@ describe("native server message framing", () => {
     expect(() => Reflect.apply(Reflect.get(client, "parsePositions"), client, [new PacketReader(packet)])).not.toThrow();
   });
 
+  it("sends position before a reliable channel-0 jumppad event", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    client.multiplayer.clientNumber = 4;
+    client.multiplayer.setMapEntities(createMovementEntities());
+    client.physics.player.position = { x: 1, y: 2, z: 3 + client.physics.player.eyeHeight };
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+
+    client.multiplayer.update(1000);
+
+    expect(new PacketReader(send.mock.calls[0][1]).getInt()).toBe(NetworkMessage.Pos);
+    expect(send.mock.calls[0][0]).toBe(0);
+    const effect = send.mock.calls.find(([, bytes]) => new PacketReader(bytes).getInt() === NetworkMessage.JumpPad);
+    expect(effect?.[0]).toBe(0);
+    expect(effect?.[2]).toBe(true);
+    const packet = new PacketReader(effect?.[1] ?? new Uint8Array());
+    expect([packet.getInt(), packet.getInt(), packet.getInt()]).toEqual([NetworkMessage.JumpPad, 4, 0]);
+    expect(packet.remaining).toBe(0);
+  });
+
   it("consumes the complete edit-entity payload before the following message", () => {
     const client = createClient().multiplayer;
     const consoleLines: string[] = [];
@@ -134,6 +156,10 @@ describe("native server message framing", () => {
     expect(consoleLines).toEqual(["aligned"]);
   });
 });
+
+function createMovementEntities() {
+  return createFpsEntityRegistry([{ type: 23, position: { x: 1, y: 2, z: 3 }, attributes: [8, 0, 0, 0, 0] }]);
+}
 
 function readVector(packet: PacketReader, scale: number): { x: number; y: number; z: number } {
   return { x: packet.getInt() / scale, y: packet.getInt() / scale, z: packet.getInt() / scale };

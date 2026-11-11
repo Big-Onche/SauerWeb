@@ -1,7 +1,7 @@
 import { PhysicsSimulation } from "../engine/physics";
 import { ClientState, PhysicsState } from "../engine/physics/types";
 import { copyVec3, magnitude } from "../engine/physics/vector";
-import type { Vec3 } from "../engine/octa";
+import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
 import { EnetClient, type EnetEvent, ENET_PACKET_FLAG_UNSEQUENCED } from "../network/enet";
 import { PacketReader, PacketWriter } from "../network/protocol";
 import { CtfClientMode, ctfTeamFlag } from "./ctf";
@@ -12,6 +12,7 @@ import { Gun, WEAPONS } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponHit } from "./weapon/WeaponEvents";
 import type { ConsoleLineType } from "../platform/browser/GameConsole";
 import { applyNetworkPosition, createNetworkInterpolation, resetNetworkInterpolation, type NetworkInterpolation } from "./networkInterpolation";
+import { FpsEntities, type EntityEffect } from "./entities";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -67,6 +68,7 @@ export type MultiplayerEvent =
   | { type: "spawn" }
   | { type: "console"; text: string; consoleType: ConsoleLineType }
   | { type: "remote-shot"; clientNumber: number; gun: Gun; from: Vec3; to: Vec3 }
+  | { type: "entity-effect"; effect: EntityEffect; local: boolean }
   | { type: "disconnect"; reason: number };
 
 export function createClient(physics = new PhysicsSimulation()): FpsClient {
@@ -83,6 +85,7 @@ export class MultiplayerClient extends EventTarget {
   readonly players = new Map<number, NetworkPlayer>();
   readonly transport = new EnetClient();
   readonly ctfMode = new CtfClientMode();
+  readonly entities: FpsEntities;
   readonly teamScores = new Map<string, number>();
   connected = false;
   clientNumber = -1;
@@ -105,6 +108,11 @@ export class MultiplayerClient extends EventTarget {
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
     super();
+    this.entities = new FpsEntities(physics, {
+      effect: (effect, local) => this.emit({ type: "entity-effect", effect, local }),
+      send: (effect) => this.sendEntityEffect(effect),
+      warning: (message) => this.console(message, "error"),
+    });
     this.transport.addEventListener("enet", (event) => this.handleEnet((event as CustomEvent<EnetEvent>).detail));
     this.weapons.events.on((event) => this.handleWeaponEvent(event));
   }
@@ -140,6 +148,7 @@ export class MultiplayerClient extends EventTarget {
   // Functions: sendmessages(), respawnself()
   // Sauerbraten reference: SVN r6488
   update(nowMilliseconds: number): void {
+    this.entities.checkitems(nowMilliseconds);
     if (this.clientNumber < 0 || nowMilliseconds - this.lastUpdate < 33) return;
     this.lastUpdate = nowMilliseconds;
     if (this.physics.player.alive) this.transport.send(0, this.buildPosition());
@@ -232,9 +241,10 @@ export class MultiplayerClient extends EventTarget {
     this.mapInfoPending = true;
   }
 
-  setMapEntities(entities: readonly { index: number; type: number; typeName: string; position: Vec3; attributes: number[] }[]): void {
+  setMapEntities(entities: readonly RegisteredMapEntity[]): void {
     this.mapEntities = entities.map((entity) => ({ ...entity, position: { ...entity.position }, attributes: [...entity.attributes] }));
     this.ctfMode.setup(entities, this.gameMode);
+    this.entities.setMap(entities);
   }
 
   switchTeam(): void {
@@ -281,14 +291,17 @@ export class MultiplayerClient extends EventTarget {
       const type = packet.getInt();
       if (type === NetworkMessage.DemoPacket) continue;
       if (type === NetworkMessage.Teleport) {
-        packet.getInt();
-        packet.getInt();
-        packet.getInt();
+        const clientNumber = packet.getInt(), teleport = packet.getInt(), teledest = packet.getInt();
+        const player = this.players.get(clientNumber);
+        if (player && player.lifeSequence >= 0 && player.state !== ClientState.Dead) {
+          this.entities.teleporteffects(teleport, teledest, false);
+        }
         continue;
       }
       if (type === NetworkMessage.JumpPad) {
-        packet.getInt();
-        packet.getInt();
+        const clientNumber = packet.getInt(), jumppad = packet.getInt();
+        const player = this.players.get(clientNumber);
+        if (player && player.lifeSequence >= 0 && player.state !== ClientState.Dead) this.entities.jumppadeffects(jumppad, false);
         continue;
       }
       if (type !== NetworkMessage.Pos) throw new Error(`Unexpected channel 0 message ${type}.`);
@@ -822,6 +835,17 @@ export class MultiplayerClient extends EventTarget {
       if (flags & (1 << 6)) { const fallingDirection = yawPitch(player.falling); putDirection(packet, fallingDirection.yaw, fallingDirection.pitch); }
     }
     return packet.finish();
+  }
+
+  private sendEntityEffect(effect: EntityEffect): void {
+    if (!this.connected || this.clientNumber < 0) return;
+    this.transport.send(0, this.buildPosition());
+    const packet = new PacketWriter().putInt(effect.type === "teleport" ? NetworkMessage.Teleport : NetworkMessage.JumpPad)
+      .putInt(this.clientNumber);
+    if (effect.type === "teleport") packet.putInt(effect.teleport).putInt(effect.teledest);
+    else packet.putInt(effect.jumppad);
+    this.transport.send(0, packet.finish(), true);
+    this.transport.flush();
   }
 
   private handleWeaponEvent(event: WeaponEvent): void {

@@ -58,6 +58,16 @@ export class PhysicsSimulation {
     this.spawn(this.spawnPosition, this.spawnYaw, nowMilliseconds);
   }
 
+  // Original: src/engine/physics.cpp
+  // Function: entinmap()
+  // Sauerbraten reference: SVN r6488
+  entinmap(position: Vec3): void {
+    this.player.position = { ...position, z: position.z + this.player.eyeHeight };
+    this.player.previousPosition = copyVec3(this.player.position);
+    this.groundMover?.initialize(this.player);
+    this.renderPosition = copyVec3(this.player.position);
+  }
+
   setPaused(paused: boolean, nowMilliseconds: number): void {
     this.paused = paused;
     this.scheduler.reset(nowMilliseconds);

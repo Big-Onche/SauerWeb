@@ -20,14 +20,22 @@ export interface LoadedMapModels {
   triangles: number;
   vertices: number;
   collisions: MapModelCollision[];
+  animations: EntityModelAnimation[];
+}
+
+export interface EntityModelAnimation {
+  meshes: Mesh[];
+  entity: RegisteredMapEntity;
+  asset: MapModelAsset;
 }
 export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[], assets: MapModelAsset[], wireframe: boolean,
-                                    generationIsCurrent: () => boolean): Promise<LoadedMapModels> {
+                                    generationIsCurrent: () => boolean, teleporter?: MapModelAsset): Promise<LoadedMapModels> {
   const meshes: Mesh[] = [];
   const issues: string[] = [];
   let triangles = 0;
   let vertices = 0;
   const collisions: MapModelCollision[] = [];
+  const animations: EntityModelAnimation[] = [];
   const referenced = new Map<number, RegisteredMapEntity[]>();
   for (const entity of entities) {
     if (entity.typeName !== "mapmodel") continue;
@@ -36,8 +44,20 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
     instances.push(entity);
     referenced.set(index, instances);
   }
-  await Promise.all([...referenced].map(async ([index, instances]) => {
-    const asset = assets[index];
+  const teleports = new Map<number, RegisteredMapEntity[]>();
+  for (const entity of entities) {
+    if (entity.typeName !== "teleport" || (entity.attributes[1] ?? 0) < 0) continue;
+    const index = entity.attributes[1] ?? 0;
+    const instances = teleports.get(index) ?? [];
+    instances.push(entity);
+    teleports.set(index, instances);
+  }
+  const jobs: Array<{ index: number; instances: RegisteredMapEntity[]; asset: MapModelAsset | undefined; animated: boolean }> =
+    [...referenced].map(([index, instances]) => ({ index, instances, asset: assets[index], animated: false }));
+  jobs.push(...[...teleports].map(([index, instances]) => ({
+    index, instances, asset: index > 0 ? assets[index] : teleporter, animated: true,
+  })));
+  await Promise.all(jobs.map(async ({ index, instances, asset, animated }) => {
     if (!asset || asset.status !== "ready" || !asset.geometryPath) {
       for (const entity of instances) issues.push(modelIssue(entity, index, asset));
       return;
@@ -46,7 +66,7 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
       const geometry = await fetchModelGeometry(asset);
       if (!generationIsCurrent()) return;
       const materials = new Map<string, StandardMaterial>();
-      if (asset.collide !== false) {
+      if (!animated && asset.collide !== false) {
         const bounds = collisionBounds(geometry, asset);
         for (const entity of instances) {
           if (!mapModelInitiallyCollides(entity.attributes[2])) continue;
@@ -61,12 +81,15 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
         }
       }
       for (const entity of instances) {
+        const animation: EntityModelAnimation = { meshes: [], entity, asset };
         for (const source of geometry.meshes) {
-          const mesh = createModelMesh(scene, source, asset, entity, materials, wireframe);
+          const mesh = createModelMesh(scene, source, asset, entity, materials, wireframe, animated);
           meshes.push(mesh);
+          animation.meshes.push(mesh);
           triangles += source.indices.length / 3;
           vertices += source.positions.length / 3;
         }
+        if (animated) animations.push(animation);
       }
     } catch (caught) {
       const reason = caught instanceof Error ? caught.message : String(caught);
@@ -74,7 +97,22 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
     }
   }));
   issues.forEach((issue) => console.warn(issue));
-  return { meshes, issues, triangles, vertices, collisions };
+  return { meshes, issues, triangles, vertices, collisions, animations };
+}
+
+// Original: src/fpsgame/entities.cpp
+// Function: renderentities()
+// Sauerbraten reference: SVN r6488
+export function animateEntityModels(animations: readonly EntityModelAnimation[], lastmillis: number): void {
+  for (const animation of animations) {
+    const position = { ...animation.entity.position,
+      z: animation.entity.position.z + 1 + Math.sin(lastmillis / 100 + animation.entity.position.x + animation.entity.position.y) / 20 };
+    const yaw = lastmillis / 10 + (animation.asset.yaw ?? 0);
+    for (const mesh of animation.meshes) {
+      mesh.position.copyFrom(toBabylonPosition(position));
+      mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(-yaw * Math.PI / 180, -(animation.asset.pitch ?? 0) * Math.PI / 180, 0);
+    }
+  }
 }
 
 function mapModelInitiallyCollides(triggerType: number): boolean {
@@ -110,7 +148,7 @@ function collisionBounds(geometry: ModelGeometry, asset: MapModelAsset): {
 }
 
 function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapModelAsset, entity: RegisteredMapEntity,
-                         materials: Map<string, StandardMaterial>, wireframe: boolean): Mesh {
+                         materials: Map<string, StandardMaterial>, wireframe: boolean, animated = false): Mesh {
   const mesh = new Mesh(`mapmodel-${entity.index}-${asset.name}-${source.name}`, scene);
   const data = new VertexData();
   const translated = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
@@ -135,7 +173,7 @@ function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapMode
   mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(-yaw * Math.PI / 180, -(asset.pitch ?? 0) * Math.PI / 180, 0);
   mesh.metadata = { entityIndex: entity.index, entityType: entity.typeName, mapModelIndex: asset.index, mapModelName: asset.name };
   mesh.isPickable = true;
-  mesh.freezeWorldMatrix();
+  if (!animated) mesh.freezeWorldMatrix();
   return mesh;
 }
 

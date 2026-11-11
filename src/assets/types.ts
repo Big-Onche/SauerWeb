@@ -37,6 +37,7 @@ export interface TextureManifest {
   lighting?: MapLightingOverrides;
   fog?: MapFogOverrides;
   mapModels: MapModelAsset[];
+  entityModels?: { teleporter?: MapModelAsset };
 }
 
 export interface HudGunAsset {
