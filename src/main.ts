@@ -11,6 +11,7 @@ const app = required<HTMLDivElement>("#app");
 let availableMaps: Map<string, MapListItem> | undefined;
 let selectedPage = "ffa-1";
 let previewMap = "aard3c";
+const backgroundDecals = createBackgroundDecals();
 
 route();
 window.addEventListener("popstate", route);
@@ -32,9 +33,8 @@ function route(): void {
 function renderMainMenu(): void {
   app.innerHTML = `
     <main class="sauer-screen">
-      <div class="menu-vignette"></div>
+      ${backgroundMarkup(true)}
       <section class="sauer-dialog main-dialog" aria-labelledby="main-menu-title">
-        <img class="cube-logo" src="/api/packages/textures/fatum/cube2logo.jpg" alt="Cube 2: Sauerbraten" />
         <h1 id="main-menu-title" class="sr-only">Sauerbraten main menu</h1>
         <div class="identity-row">
           <button class="portrait" type="button" aria-label="Choose player model" disabled>
@@ -81,7 +81,7 @@ function renderMapsMenu(): void {
   const preview = availableMaps?.get(previewMap);
   app.innerHTML = `
     <main class="sauer-screen maps-screen">
-      <div class="menu-vignette"></div>
+      ${backgroundMarkup(false)}
       <section class="sauer-dialog maps-dialog" aria-labelledby="maps-title">
         <header class="maps-heading">
           <div><p>bot match</p><h1 id="maps-title">choose a map</h1></div>
@@ -97,6 +97,7 @@ function renderMapsMenu(): void {
           <aside class="map-preview" aria-live="polite">
             <div class="preview-frame">
               <img src="/api/packages/base/${encodeURIComponent(previewMap)}.jpg" alt="${escapeHtml(previewMap)} map preview" />
+              <img class="preview-overlay" src="/api/data/guioverlay.png" alt="" />
             </div>
             <strong>${escapeHtml(previewMap)}</strong>
             <span>${availableMaps === undefined ? "checking map…" : preview?.supported ? "ready to play" : "unavailable in this build"}</span>
@@ -153,6 +154,30 @@ function launchMap(name: string): void {
 
 function menuButton(label: string, action: string, enabled: boolean, icon = "menu"): string {
   return `<button type="button" data-action="${action}" ${enabled ? "" : "disabled"}><img src="/api/packages/icons/${icon}.jpg" alt="" /><span>${label}</span></button>`;
+}
+
+function backgroundMarkup(showLogo: boolean): string {
+  return `<div class="sauer-background" aria-hidden="true">
+    <div class="background-base"></div>
+    <div class="background-detail"></div>
+    <div class="background-decals">${backgroundDecals}</div>
+    <div class="background-shade"></div>
+  </div>
+  ${showLogo ? `<img class="sauer-logo" src="/api/data/logo_1024.png" alt="Cube 2: Sauerbraten" />` : ""}`;
+}
+
+function createBackgroundDecals(): string {
+  const count = 4 + Math.floor(Math.random() * 9);
+  const maximumSize = Math.min(window.innerWidth, window.innerHeight) / 8;
+  return Array.from({ length: count }, () => {
+    const size = maximumSize / 2 + Math.random() * maximumSize / 2;
+    const halfWidth = size / window.innerWidth * 50;
+    const halfHeight = size / window.innerHeight * 50;
+    const x = halfWidth + Math.random() * (100 - 2 * halfWidth);
+    const y = halfHeight + Math.random() * (100 - 2 * halfHeight);
+    const flip = Math.random() < 0.5 ? -1 : 1;
+    return `<img src="/api/data/background_decal.png" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%;width:${size.toFixed(1)}px;--flip:${flip}" alt="" />`;
+  }).join("");
 }
 
 function navigate(path: string): void {

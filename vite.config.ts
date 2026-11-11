@@ -666,6 +666,26 @@ function sauerMapsPlugin(): Plugin {
         response.setHeader("Cache-Control", "no-cache");
         fs.createReadStream(filePath).pipe(response);
       });
+      server.middlewares.use("/api/data", (request, response, next) => {
+        let requestedPath: string;
+        try {
+          requestedPath = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname.replace(/^\/+/, ""));
+        } catch {
+          response.statusCode = 400;
+          response.end("Invalid data asset path");
+          return;
+        }
+        const dataDirectory = path.join(sauerRoot, "data");
+        const filePath = path.resolve(dataDirectory, requestedPath);
+        if (!requestedPath || !isWithin(dataDirectory, filePath) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+          next();
+          return;
+        }
+        response.setHeader("Content-Type", mimeTypes[path.extname(filePath).toLowerCase()] ?? "application/octet-stream");
+        response.setHeader("Content-Length", fs.statSync(filePath).size);
+        response.setHeader("Cache-Control", "no-cache");
+        fs.createReadStream(filePath).pipe(response);
+      });
       server.middlewares.use("/api/maps", (request, response, next) => {
         const requestUrl = new URL(request.url ?? "/", "http://localhost");
         const requestedName = requestUrl.pathname.replace(/^\/+/, "");

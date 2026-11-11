@@ -7,13 +7,16 @@ body { overflow: hidden; }
 button, input { font: inherit; }
 button { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-.sauer-screen { position: relative; display: grid; place-items: center; width: 100%; height: 100%; overflow: hidden; background: radial-gradient(circle at 50% 45%, #344042 0, #13191a 42%, #050607 100%); }
-.sauer-screen::before { content: ""; position: absolute; inset: -30px; background: linear-gradient(#06101270, #030506e8), url("/api/packages/base/sauerbraten.jpg") center / cover; filter: blur(8px) saturate(.65); transform: scale(1.08); }
-.sauer-screen::after { content: ""; position: absolute; inset: 0; opacity: .18; background-image: repeating-linear-gradient(0deg, transparent 0 2px, #000 3px); pointer-events: none; }
-.menu-vignette { position: absolute; inset: 0; z-index: 1; background: radial-gradient(ellipse, transparent 28%, #000b 100%); }
+.sauer-screen { position: relative; display: grid; place-items: center; width: 100%; height: 100%; overflow: hidden; background: #252b2b; }
+.sauer-background { position: absolute; inset: 0; overflow: hidden; }
+.background-base, .background-detail, .background-decals, .background-shade { position: absolute; inset: 0; }
+.background-base { background: url("/api/data/background.png") repeat; background-size: 382px 382px; }
+.background-detail { opacity: .72; background: url("/api/data/background_detail.png") repeat; background-size: 640px 640px; mix-blend-mode: screen; }
+.background-decals img { position: absolute; height: auto; transform: translate(-50%, -50%) scaleX(var(--flip)); }
+.background-shade { background: radial-gradient(ellipse at center, transparent 22%, #00000030 66%, #0000008c 100%); }
+.sauer-logo { position: absolute; top: clamp(0px, 1.5vh, 16px); left: 50%; z-index: 1; width: min(900px, 94vw, 100vh); height: auto; transform: translateX(-50%); pointer-events: none; }
 .sauer-dialog { position: relative; z-index: 2; border: 1px solid #b8c2c466; border-radius: 5px; background: linear-gradient(135deg, #2d3638e8, #111718ed); box-shadow: 0 25px 80px #000d, inset 0 1px #fff2, inset 0 0 32px #0007; backdrop-filter: blur(10px); }
-.main-dialog { width: min(430px, calc(100vw - 30px)); padding: 22px 30px 18px; }
-.cube-logo { display: block; width: 100%; height: 116px; margin-bottom: 17px; border: 1px solid #788082; object-fit: cover; box-shadow: 0 4px 14px #000a; }
+.main-dialog { width: min(430px, calc(100vw - 30px)); margin-top: min(34vh, 310px); padding: 22px 30px 18px; }
 .identity-row { display: grid; grid-template-columns: 88px 1fr; gap: 16px; }
 .portrait { width: 88px; height: 88px; padding: 4px; border: 1px solid #a6b0ae; border-radius: 2px; background: #111; opacity: 1 !important; }
 .portrait img { width: 100%; height: 100%; image-rendering: auto; }
@@ -57,13 +60,14 @@ button { color: inherit; }
 .map-columns button:hover, .map-columns button:focus-visible, .map-columns button.selected { border-color: #d48e3d77; outline: none; background: linear-gradient(90deg, #bc671d66, transparent); color: #ffd39a; }
 .map-columns button:disabled { opacity: .28; cursor: not-allowed; }
 .map-preview { align-self: start; padding: 10px; border-left: 1px solid #81898955; text-align: center; }
-.preview-frame { position: relative; width: 100%; aspect-ratio: 1; padding: 5px; border: 1px solid #919a98; background: #080b0c; box-shadow: 0 8px 25px #0009; }
-.preview-frame::after { content: ""; position: absolute; inset: 5px; border: 1px solid #fff2; pointer-events: none; }
-.preview-frame img { width: 100%; height: 100%; object-fit: cover; }
+.preview-frame { position: relative; width: 100%; aspect-ratio: 1; background: #080b0c; box-shadow: 0 8px 25px #0009; }
+.preview-frame > img:first-child { width: 100%; height: 100%; object-fit: cover; }
+.preview-frame .preview-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .map-preview strong { display: block; margin-top: 10px; overflow-wrap: anywhere; color: #f4c083; font-size: 24px; font-weight: 600; }
 .map-preview span { display: block; min-height: 20px; color: #899494; font-size: 13px; }
 .map-preview button { width: 100%; margin-top: 11px; padding: 8px; font-size: 17px; text-transform: uppercase; }
 .map-preview button:disabled { opacity: .35; cursor: not-allowed; }
 .maps-dialog footer { display: flex; justify-content: space-between; padding-top: 9px; border-top: 1px solid #69737477; color: #7f898a; font-size: 12px; letter-spacing: .1em; }
 @media (max-width: 800px) { .maps-dialog { height: calc(100vh - 18px); width: calc(100vw - 18px); padding: 14px; }.map-browser { grid-template-columns: 1fr 180px; gap: 10px; }.map-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }.map-columns > div:last-child { display: none; } }
-@media (max-width: 540px) { .map-browser { grid-template-columns: 1fr; }.map-preview { display: none; }.map-columns { grid-template-columns: 1fr 1fr; }.maps-heading h1 { font-size: 23px; }.maps-dialog footer span:last-child { display: none; } }
+@media (max-height: 760px) { .sauer-logo { width: min(660px, 82vw, 86vh); }.main-dialog { margin-top: 26vh; } }
+@media (max-width: 540px) { .sauer-logo { width: 100vw; }.main-dialog { margin-top: 24vh; }.map-browser { grid-template-columns: 1fr; }.map-preview { display: none; }.map-columns { grid-template-columns: 1fr 1fr; }.maps-heading h1 { font-size: 23px; }.maps-dialog footer span:last-child { display: none; } }
