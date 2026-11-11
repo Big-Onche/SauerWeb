@@ -35,6 +35,7 @@ import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics"
 import { createClient, type MultiplayerEvent, type ServerEndpoint } from "../fpsgame/client";
 import { BrowserWeaponInput } from "../platform/browser/WeaponInput";
 import { WeaponHUD } from "../platform/browser/WeaponHUD";
+import { CrosshairHUD } from "../platform/browser/CrosshairHUD";
 import { WeaponRenderer } from "../platform/browser/WeaponRenderer";
 import { WeaponAudio } from "../platform/browser/WeaponAudio";
 import { ParticleRenderer } from "./ParticleRenderer";
@@ -45,6 +46,8 @@ import { ClientState } from "../engine/physics/types";
 import { ctfTeamFlag } from "../fpsgame/ctf";
 import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
 import type { RuntimeMode } from "../runtime";
+import { lineCylinderIntersection } from "../fpsgame/weapon/HitscanSystem";
+import { magnitude, normalize, subtract } from "../engine/physics/vector";
 
 export type CameraMode = "free" | "player";
 
@@ -75,6 +78,7 @@ export class MapScene {
   private readonly weapons = this.fpsClient.weapons;
   private readonly weaponInput: BrowserWeaponInput;
   private readonly weaponHUD: WeaponHUD;
+  private readonly crosshairHUD: CrosshairHUD;
   private readonly weaponRenderer: WeaponRenderer;
   private readonly particleRenderer: ParticleRenderer;
   private readonly multiplayerHUD: MultiplayerHUD;
@@ -132,12 +136,14 @@ export class MapScene {
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
+    this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
     this.playerRenderer = new PlayerRenderer(this.scene);
     this.ctfRenderer = new CtfRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
     this.weaponInput.enabled = runtimeMode === "game";
     this.weaponHUD.setVisible(runtimeMode === "game");
+    this.crosshairHUD.setVisible(runtimeMode === "game");
     this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera);
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
@@ -282,6 +288,7 @@ export class MapScene {
     this.physicsInput.enabled = playerMode;
     this.weaponInput.enabled = playerMode;
     this.weaponHUD.setVisible(playerMode);
+    this.crosshairHUD.setVisible(playerMode && !this.isLocalPlayerDead());
     this.multiplayerHUD.setVisible(playerMode && this.fpsClient.multiplayer.clientNumber >= 0);
     this.weaponRenderer.setHudGunVisible(playerMode && !this.thirdperson);
     if (playerMode) {
@@ -362,6 +369,7 @@ export class MapScene {
     this.fpsClient.multiplayer.disconnect();
     this.physicsInput.dispose();
     this.weaponInput.dispose();
+    this.crosshairHUD.dispose();
     this.multiplayerHUD.dispose();
     this.resizeObserver.disconnect();
     window.removeEventListener("resize", this.resize);
@@ -703,17 +711,13 @@ export class MapScene {
     if (!this.physics.player.alive && !wasDead) this.localDeadAt = nowMilliseconds;
     else if (this.physics.player.alive && wasDead) this.localDeadAt = 0;
     const renderPosition = this.physics.update(nowMilliseconds, this.physicsInput.sample());
-    const yaw = this.physics.player.yaw * Math.PI / 180;
-    const pitch = this.physics.player.pitch * Math.PI / 180;
-    this.weapons.update(nowMilliseconds, {
-      x: this.physics.player.position.x - Math.sin(yaw) * Math.cos(pitch) * 2048,
-      y: this.physics.player.position.y + Math.cos(yaw) * Math.cos(pitch) * 2048,
-      z: this.physics.player.position.z + Math.sin(pitch) * 2048,
-    });
+    this.updatePlayerCamera(renderPosition);
+    const aimTarget = this.aimTarget();
+    this.crosshairHUD.update(this.aimingAtTeammate(aimTarget));
+    this.weapons.update(nowMilliseconds, aimTarget);
     this.fpsClient.multiplayer.update(nowMilliseconds);
     this.multiplayerHUD.render();
     this.updateNetworkPlayers();
-    this.updatePlayerCamera(renderPosition);
   }
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
@@ -817,11 +821,49 @@ export class MapScene {
     this.playerCamera.rotation.set(pitch, Math.PI - yaw, 0);
   }
 
+  // Original: src/engine/rendergl.cpp
+  // Function: setcammatrix() worldpos ray
+  private aimTarget(): RegisteredMapEntity["position"] {
+    const camera = this.playerCamera.position;
+    const forward = this.playerCamera.getForwardRay().direction;
+    const origin = { x: camera.x, y: camera.z, z: camera.y };
+    const direction = { x: forward.x, y: forward.z, z: forward.y };
+    const maximumDistance = 2 * (this.currentMap?.header.worldSize ?? 1024);
+    const hit = this.physics.raycast(origin, direction, maximumDistance, 0, true);
+    return hit?.position ?? {
+      x: origin.x + direction.x * maximumDistance,
+      y: origin.y + direction.y * maximumDistance,
+      z: origin.z + direction.z * maximumDistance,
+    };
+  }
+
+  private aimingAtTeammate(target: RegisteredMapEntity["position"]): boolean {
+    const multiplayer = this.fpsClient.multiplayer;
+    const local = multiplayer.players.get(multiplayer.clientNumber);
+    if (!local?.team) return false;
+    const origin = this.physics.player.position;
+    const direction = subtract(target, origin);
+    const maximumDistance = magnitude(direction);
+    if (maximumDistance <= 0) return false;
+    normalize(direction);
+    let closestDistance = maximumDistance;
+    let closestTeam = "";
+    for (const player of multiplayer.players.values()) {
+      if (player === local || !player.alive) continue;
+      const distance = lineCylinderIntersection(origin, direction, closestDistance, player);
+      if (distance === undefined || distance >= closestDistance) continue;
+      closestDistance = distance;
+      closestTeam = player.team;
+    }
+    return closestTeam === local.team;
+  }
+
   private readonly resize = (): void => this.engine.resize();
 
   private syncDeathView(): void {
     const dead = this.isLocalPlayerDead();
     this.weaponHUD.setVisible(this.runtimeMode === "game" && !dead);
+    this.crosshairHUD.setVisible(this.runtimeMode === "game" && !dead);
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson && !dead);
   }
 

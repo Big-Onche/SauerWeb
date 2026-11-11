@@ -31,16 +31,16 @@ export class HitscanSystem {
        applyDamage = true): HitscanResult {
     const definition = WEAPONS[gun];
     const baseDirection = subtract(target, from);
-    const range = Math.min(definition.range, magnitude(baseDirection));
+    const aimedDistance = magnitude(baseDirection);
     normalize(baseDirection);
     const endpoints: Vec3[] = [];
     const targetHits = new Map<Damageable, { rays: number; endpoint: Vec3 }>();
     for (let ray = 0; ray < definition.rays; ray++) {
       const endpoint = definition.spread
-        ? this.spreadEndpoint(from, baseDirection, range, definition.spread)
-        : addDistance(from, baseDirection, range);
+        ? this.spreadEndpoint(target, aimedDistance, definition.spread)
+        : addDistance(from, baseDirection, aimedDistance);
       const direction = subtract(endpoint, from);
-      const maximumDistance = magnitude(direction);
+      const maximumDistance = definition.spread ? definition.range : magnitude(direction);
       normalize(direction);
       const worldDistance = this.world.raycast(from, direction, maximumDistance)?.distance ?? maximumDistance;
       let bestTarget: Damageable | undefined;
@@ -71,16 +71,16 @@ export class HitscanSystem {
     return { endpoints, hits };
   }
 
-  private spreadEndpoint(from: Vec3, direction: Vec3, range: number, spread: number): Vec3 {
+  private spreadEndpoint(target: Vec3, aimedDistance: number, spread: number): Vec3 {
     let offset: Vec3;
     do {
       offset = { x: this.random() - 0.5, y: this.random() - 0.5, z: this.random() - 0.5 };
     } while (dot(offset, offset) > 0.25);
-    const scale = range / 1024 * spread;
+    const scale = aimedDistance / 1024 * spread;
     offset.x *= scale;
     offset.y *= scale;
     offset.z *= scale / 2;
-    const endpoint = addDistance(from, direction, range);
+    const endpoint = { ...target };
     endpoint.x += offset.x;
     endpoint.y += offset.y;
     endpoint.z += offset.z;

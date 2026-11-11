@@ -42,7 +42,7 @@ export class WeaponController {
     const aimedDistance = Math.min(definition.range, magnitude(subtract(target, from)));
     let to = { x: from.x + direction.x * aimedDistance, y: from.y + direction.y * aimedDistance, z: from.z + direction.z * aimedDistance };
     const barrier = this.world.raycast(from, direction, aimedDistance);
-    if (barrier) to = copyVec3(barrier.position);
+    if (barrier && barrier.distance > 0 && barrier.distance < aimedDistance) to = copyVec3(barrier.position);
     addScaled(this.owner.velocity, direction, definition.kickAmount * -2.5);
     const multiplier = this.quadMilliseconds > 0 ? 4 : 1;
     let rays: Vec3[] = [], hits: WeaponHit[] = [];

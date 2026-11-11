@@ -34,6 +34,7 @@ const FACE_VERTICES = [
 /** Physics-only octree queries. No Babylon mesh or picking data enters this class. */
 export class OctreeCollisionWorld {
   private readonly planeCache = new WeakMap<OctreeCube, Plane[]>();
+  private readonly rayPlaneCache = new WeakMap<OctreeCube, Plane[]>();
   private readonly hiddenFaces: WeakMap<OctreeCube, number>;
 
   constructor(private readonly map: SauerMap) {
@@ -62,14 +63,14 @@ export class OctreeCollisionWorld {
     return 0;
   }
 
-  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0): RaycastResult | undefined {
-    return this.raycube(origin, direction, maximumDistance, radius);
+  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0, skipFirst = false): RaycastResult | undefined {
+    return this.raycube(origin, direction, maximumDistance, radius, skipFirst);
   }
 
   // Original: src/engine/physics.cpp
   // Function: raycube()
   // Sauerbraten reference: SVN r6488
-  raycube(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0): RaycastResult | undefined {
+  raycube(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0, skipFirst = false): RaycastResult | undefined {
     let best: RaycastResult | undefined;
     const visit = (cube: OctreeCube): void => {
       if (!rayIntersectsBounds(origin, direction, cube.origin, cube.size, best?.distance ?? maximumDistance, radius)) return;
@@ -77,15 +78,16 @@ export class OctreeCollisionWorld {
         cube.children.forEach(visit);
         return;
       }
-      const clip = cube.material & MATF_CLIP;
-      if (clip === MAT_NOCLIP || cube.kind === "empty") return;
-      const result = rayIntersectsPlanes(origin, direction, this.planes(cube), best?.distance ?? maximumDistance, radius);
-      if (result) best = result;
+      const clippedGlass = (cube.material & MATF_VOLUME) === MAT_GLASS;
+      if (cube.kind === "empty" && !clippedGlass) return;
+      const planes = clippedGlass && cube.kind === "empty" ? axisPlanes(cube) : this.planes(cube, false);
+      const result = rayIntersectsPlanes(origin, direction, planes, best?.distance ?? maximumDistance, radius);
+      if (result && (!skipFirst || result.distance > 0)) best = result;
     };
     this.map.world.forEach(visit);
     for (const model of this.mapModels) {
       const result = rayIntersectsMapModel(origin, direction, model, best?.distance ?? maximumDistance, radius);
-      if (result) best = result;
+      if (result && (!skipFirst || result.distance > 0)) best = result;
     }
     return best;
   }
@@ -152,19 +154,20 @@ export class OctreeCollisionWorld {
     return best;
   }
 
-  private planes(cube: OctreeCube): Plane[] {
-    const cached = this.planeCache.get(cube);
+  private planes(cube: OctreeCube, hideCoincidentFaces = true): Plane[] {
+    const cache = hideCoincidentFaces ? this.planeCache : this.rayPlaneCache;
+    const cached = cache.get(cube);
     if (cached) return cached;
     if (cube.kind === "solid") {
-      const planes = axisPlanes(cube, this.hiddenFaces.get(cube) ?? 0);
-      this.planeCache.set(cube, planes);
+      const planes = axisPlanes(cube, hideCoincidentFaces ? this.hiddenFaces.get(cube) ?? 0 : 0);
+      cache.set(cube, planes);
       return planes;
     }
     const vertices = cubeVertices(cube);
     const center = vertices.reduce((sum, vertex) => ({ x: sum.x + vertex.x / 8, y: sum.y + vertex.y / 8, z: sum.z + vertex.z / 8 }),
       { x: 0, y: 0, z: 0 });
     const planes: Plane[] = [];
-    const hidden = this.hiddenFaces.get(cube) ?? 0;
+    const hidden = hideCoincidentFaces ? this.hiddenFaces.get(cube) ?? 0 : 0;
     FACE_VERTICES.forEach((face, orientation) => {
       if (hidden & (1 << orientation)) return;
       const corners = face.map((index) => vertices[index]);
@@ -179,7 +182,7 @@ export class OctreeCollisionWorld {
         addTrianglePlane(planes, first, third, fourth, center);
       }
     });
-    this.planeCache.set(cube, planes);
+    cache.set(cube, planes);
     return planes;
   }
 }

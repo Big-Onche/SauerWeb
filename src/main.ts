@@ -5,6 +5,7 @@ import { MAP_MENU_PAGES } from "./menuData";
 import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
 import { gameModeName } from "./fpsgame/game";
 import { guiSkinMarkup } from "./guiSkin";
+import { bindCrosshairSettings, CROSSHAIRS, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 
 interface MapListItem {
   name: string;
@@ -62,7 +63,8 @@ function renderMainMenu(): void {
             <label for="player-name">player name</label>
             <input id="player-name" maxlength="15" value="${escapeHtml(savedPlayerName())}" autocomplete="nickname" />
             <div class="model-row"><button type="button" data-action="player-model">${playerModelInfo.name}</button>
-              <img src="/api/packages/crosshairs/cross_normal.png" alt="Current crosshair" /></div>
+              <button class="crosshair-shortcut" type="button" data-action="crosshair" aria-label="Customize crosshair">
+                <img src="${currentCrosshair().normal}" alt="Current crosshair" /></button></div>
           </div>
         </div>
         <div class="menu-rule"></div>
@@ -71,7 +73,7 @@ function renderMainMenu(): void {
           ${menuButton("bot match..", "bot", true)}
           ${menuButton("campaign..", "campaign", false)}
           <div class="menu-rule compact"></div>
-          ${menuButton("options..", "options", false)}
+          ${menuButton("options..", "crosshair", true)}
           ${menuButton("about..", "about", true)}
           ${menuButton("quit", "quit", false, "exit")}
         </nav>
@@ -92,6 +94,12 @@ function renderMainMenu(): void {
           </section>
         </div>
         <footer><span>Choose your player model</span><button type="button" data-action="close-playermodel">back</button></footer>
+      </dialog>
+      <dialog id="crosshair-dialog" class="crosshair-dialog" aria-labelledby="crosshair-title">
+        ${guiSkinMarkup()}
+        <h2 id="crosshair-title">crosshair</h2>
+        ${crosshairSettingsMarkup(loadCrosshairSettings())}
+        <footer><span>Vanilla Sauerbraten crosshairs</span><button type="button" data-action="close-crosshair">back</button></footer>
       </dialog>
       <dialog id="about-dialog" class="about-dialog">
         ${guiSkinMarkup()}
@@ -148,9 +156,22 @@ function renderMainMenu(): void {
   });
   required<HTMLButtonElement>("[data-action='bot']").addEventListener("click", () => navigate("/maps"));
   required<HTMLButtonElement>("[data-action='server']").addEventListener("click", () => navigate("/servers"));
+  const crosshairDialog = required<HTMLDialogElement>("#crosshair-dialog");
+  bindCrosshairSettings(crosshairDialog, (settings) => {
+    const preview = document.querySelector<HTMLImageElement>(".crosshair-shortcut img");
+    if (preview) preview.src = currentCrosshair(settings.selected).normal;
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-action='crosshair']").forEach((button) => {
+    button.addEventListener("click", () => crosshairDialog.showModal());
+  });
+  required<HTMLButtonElement>("[data-action='close-crosshair']").addEventListener("click", () => crosshairDialog.close());
   const about = required<HTMLDialogElement>("#about-dialog");
   required<HTMLButtonElement>("[data-action='about']").addEventListener("click", () => about.showModal());
   about.querySelector("button")?.addEventListener("click", () => about.close());
+}
+
+function currentCrosshair(selected = loadCrosshairSettings().selected) {
+  return CROSSHAIRS[selected] ?? CROSSHAIRS[0];
 }
 
 function renderServersMenu(): void {

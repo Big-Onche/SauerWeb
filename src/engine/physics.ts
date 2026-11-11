@@ -41,8 +41,8 @@ export class PhysicsSimulation {
     this.collisionWorld?.setMapModels(mapModels);
   }
 
-  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0): RaycastResult | undefined {
-    return this.collisionWorld?.raycast(origin, direction, maximumDistance, radius);
+  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0, skipFirst = false): RaycastResult | undefined {
+    return this.collisionWorld?.raycast(origin, direction, maximumDistance, radius, skipFirst);
   }
 
   spawn(position: Vec3, yaw: number, nowMilliseconds: number): void {

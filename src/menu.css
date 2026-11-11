@@ -29,6 +29,8 @@ button { color: inherit; }
 .model-row { display: flex; align-items: center; justify-content: space-between; height: 37px; color: #e1e5df; font-size: 18px; }
 .model-row button { padding: 3px 8px 3px 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .model-row button:hover, .model-row button:focus-visible { outline: none; color: #ffd49b; text-shadow: 0 2px 2px #000; }
+.model-row .crosshair-shortcut { display: grid; place-items: center; width: 31px; height: 31px; padding: 3px; border: 1px solid transparent; }
+.model-row .crosshair-shortcut:hover, .model-row .crosshair-shortcut:focus-visible { border-color: #d9953d88; }
 .model-row img { width: 25px; height: 25px; image-rendering: pixelated; }
 .menu-rule { height: 1px; margin: 15px 0 12px; background: linear-gradient(90deg, transparent, #a4acad88 8%, #a4acad88 92%, transparent); }
 .menu-rule.compact { margin: 8px 0; }

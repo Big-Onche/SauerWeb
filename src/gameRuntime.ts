@@ -7,6 +7,7 @@ import { gameModeName } from "./fpsgame/game";
 import { guiSkinMarkup } from "./guiSkin";
 import { GameConsole } from "./platform/browser/GameConsole";
 import { MapScene } from "./render/MapScene";
+import { bindCrosshairSettings, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 
 const app = required<HTMLDivElement>("#app");
 const parameters = new URLSearchParams(location.search);
@@ -39,10 +40,18 @@ app.innerHTML = `
             <button type="button" data-action="switch-team" ${server ? "" : "hidden"}>
               <img src="/api/packages/icons/menu.jpg" alt="" /><span>switch team</span>
             </button>
+            <button type="button" data-action="crosshair"><img src="/api/packages/crosshairs/cross_normal.png" alt="" />
+              <span>crosshair..</span></button>
             <button type="button" data-action="menu"><img src="/api/packages/icons/exit.jpg" alt="" /><span>main menu</span></button>
           </div>
         </div>
       </section>
+      <dialog id="crosshair-dialog" class="crosshair-dialog game-crosshair-dialog" aria-labelledby="crosshair-title">
+        ${guiSkinMarkup()}
+        <h2 id="crosshair-title">crosshair</h2>
+        ${crosshairSettingsMarkup(loadCrosshairSettings())}
+        <footer><span>Vanilla Sauerbraten crosshairs</span><button type="button" data-action="close-crosshair">back</button></footer>
+      </dialog>
     </section>
   </main>`;
 
@@ -75,6 +84,10 @@ scene.onMultiplayer((event) => {
 respawnButton.addEventListener("click", requestRespawn);
 required<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => setPaused(false));
 required<HTMLButtonElement>("[data-action='switch-team']").addEventListener("click", () => { scene.switchTeam(); setPaused(false); });
+const crosshairDialog = required<HTMLDialogElement>("#crosshair-dialog");
+bindCrosshairSettings(crosshairDialog);
+required<HTMLButtonElement>("[data-action='crosshair']").addEventListener("click", () => crosshairDialog.showModal());
+required<HTMLButtonElement>("[data-action='close-crosshair']").addEventListener("click", () => crosshairDialog.close());
 required<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => location.assign("/"));
 chat.addEventListener("submit", (event) => {
   event.preventDefault();
