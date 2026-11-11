@@ -134,6 +134,7 @@ export class MapScene {
     this.weaponHUD.setVisible(runtimeMode === "game");
     this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera);
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
+    this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
     new WeaponAudio(this.weapons.events);
     this.fpsClient.multiplayer.addEventListener("multiplayer", (event) =>
       this.handleMultiplayerEvent((event as CustomEvent<MultiplayerEvent>).detail));
