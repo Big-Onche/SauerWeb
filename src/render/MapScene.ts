@@ -1,7 +1,9 @@
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Engine } from "@babylonjs/core/Engines/engine";
+import { Constants } from "@babylonjs/core/Engines/constants";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Material } from "@babylonjs/core/Materials/material";
 import { CubeTexture } from "@babylonjs/core/Materials/Textures/cubeTexture";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
@@ -17,7 +19,7 @@ import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import "@babylonjs/core/Shaders/postprocess.vertex";
 import type { RegisteredMapEntity, SauerMap } from "../map/types";
-import type { MapLightingOverrides, MapModelAsset, MapSkyOverrides, ResolvedTexture } from "../assets/types";
+import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverrides, ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "./geometry";
 import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
@@ -26,6 +28,7 @@ import { toBabylonDirection, toBabylonPosition, toBabylonYawDirection } from "./
 import { resolveMapLighting } from "./MapLighting";
 import { loadMapModels } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
+import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { BrowserPhysicsInput } from "../physics/input";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../physics/simulation";
 import { WeaponSystem } from "../weapons/WeaponSystem";
@@ -69,6 +72,7 @@ export class MapScene {
   private materialCache: MaterialCache;
   private fallbackMaterial?: StandardMaterial;
   private skyboxMaterial?: StandardMaterial;
+  private fogDomeMaterial?: Material;
   private skyboxObjectUrls: string[] = [];
   private loadGeneration = 0;
   private wireframe = false;
@@ -122,7 +126,8 @@ export class MapScene {
   }
 
   async loadMap(map: SauerMap, textures: ResolvedTexture[], skyOverrides?: MapSkyOverrides,
-                lightingOverrides?: MapLightingOverrides, mapModels: MapModelAsset[] = []): Promise<SceneStats> {
+                lightingOverrides?: MapLightingOverrides, fogOverrides?: MapFogOverrides,
+                mapModels: MapModelAsset[] = []): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
     const lighting = resolveMapLighting(map, lightingOverrides);
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
@@ -139,6 +144,8 @@ export class MapScene {
     this.fallbackMaterial = undefined;
     this.skyboxMaterial?.dispose(true, true);
     this.skyboxMaterial = undefined;
+    this.fogDomeMaterial?.dispose();
+    this.fogDomeMaterial = undefined;
     this.skyboxObjectUrls.forEach((url) => URL.revokeObjectURL(url));
     this.skyboxObjectUrls = [];
     this.scene.onBeforeRenderObservable.clear();
@@ -190,7 +197,11 @@ export class MapScene {
     triangles += loadedMapModels.triangles;
     vertices += loadedMapModels.vertices;
     this.materialCache.setWireframe(this.wireframe);
+    const fog = resolveMapFog(map, fogOverrides);
+    this.applyFog(fog);
+    this.setMapFarPlane(map);
     await this.createSkybox(map, resolveMapSky(map, skyOverrides), generation);
+    this.createFogDome(fog);
     await this.weaponRenderer.loadHudGuns();
     this.placeCamera(map, batches);
     return {
@@ -428,6 +439,8 @@ export class MapScene {
     material.specularColor = Color3.Black();
     material.emissiveColor = Color3.Black();
     material.reflectionTexture = cubeTexture;
+    material.disableDepthWrite = true;
+    material.fogEnabled = false;
     this.skyboxMaterial = material;
     const mesh = MeshBuilder.CreateBox("map-skybox", { size: map.header.worldSize * 4 }, this.scene);
     mesh.material = material;
@@ -440,6 +453,72 @@ export class MapScene {
         cubeTexture.rotationY = skyTextureRotationRadians(skybox.yaw, skybox.spin, (performance.now() - started) / 1000);
       });
     }
+  }
+
+  private applyFog(fog: MapFog): void {
+    this.scene.fogEnabled = true;
+    this.scene.fogMode = Scene.FOGMODE_LINEAR;
+    this.scene.fogStart = fog.start;
+    this.scene.fogEnd = fog.distance;
+    this.scene.fogColor = new Color3(...fog.color);
+    this.scene.clearColor = new Color4(...fog.color, 1);
+  }
+
+  private setMapFarPlane(map: SauerMap): void {
+    const farPlane = Math.max(50_000, map.header.worldSize * 2.1);
+    this.freeCamera.maxZ = farPlane;
+    this.playerCamera.maxZ = farPlane;
+  }
+
+  private createFogDome(fog: MapFog): void {
+    if (fog.domeMax <= 0) return;
+    const geometry = createFogDomeGeometry(fog, this.freeCamera.maxZ * 2 * 0.999);
+    const mesh = new Mesh("map-fog-dome", this.scene);
+    const vertexData = new VertexData();
+    vertexData.positions = geometry.positions;
+    vertexData.indices = geometry.indices;
+    vertexData.colors = geometry.colors;
+    vertexData.applyToMesh(mesh, true);
+    const material = new ShaderMaterial("map-fog-dome-material", this.scene, {
+      vertexSource: `
+        precision highp float;
+        attribute vec3 position;
+        attribute vec4 color;
+        uniform mat4 worldViewProjection;
+        varying vec4 vertexColor;
+
+        void main(void) {
+          gl_Position = worldViewProjection * vec4(position, 1.0);
+          gl_Position.z = gl_Position.w;
+          vertexColor = color;
+        }
+      `,
+      fragmentSource: `
+        precision highp float;
+        varying vec4 vertexColor;
+
+        void main(void) {
+          gl_FragColor = vertexColor;
+        }
+      `,
+    }, {
+      attributes: ["position", "color"],
+      uniforms: ["worldViewProjection"],
+      needAlphaBlending: true,
+    });
+    material.backFaceCulling = false;
+    mesh.useVertexColors = true;
+    mesh.hasVertexAlpha = true;
+    material.disableDepthWrite = true;
+    material.depthFunction = Constants.LEQUAL;
+    mesh.material = material;
+    mesh.infiniteDistance = true;
+    mesh.isPickable = false;
+    // Rendering groups clear depth by default. Keep the dome with world geometry so its
+    // transparent pass can test against the terrain instead of covering it.
+    mesh.renderingGroupId = 0;
+    mesh.metadata = { fogDomeClouds: fog.domeClouds };
+    this.fogDomeMaterial = material;
   }
 
   private placeCamera(map: SauerMap, batches: GeometryBatch[]): void {

@@ -35,6 +35,7 @@ export interface TextureManifest {
   sources: string[];
   skybox?: MapSkyOverrides;
   lighting?: MapLightingOverrides;
+  fog?: MapFogOverrides;
   mapModels: MapModelAsset[];
 }
 
@@ -106,6 +107,18 @@ export interface MapSkyOverrides {
   yaw?: number;
   spin?: number;
   color?: number;
+}
+
+export interface MapFogOverrides {
+  distance?: number;
+  color?: number;
+  domeColor?: number;
+  domeHeight?: number;
+  domeMin?: number;
+  domeMax?: number;
+  domeCap?: number;
+  domeClip?: number;
+  domeClouds?: number;
 }
 
 export interface ResolvedTexture {

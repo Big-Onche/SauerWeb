@@ -42,6 +42,7 @@ interface ConfigState {
   skySpin?: number;
   skyColor?: number;
   lighting: { ambient?: number; skylight?: number };
+  fog: ServerFog;
   shaderName: string;
   shaderParameters: Record<string, number[]>;
   mapModels: string[];
@@ -52,6 +53,18 @@ interface ServerSkybox {
   yaw?: number;
   spin?: number;
   color?: number;
+}
+
+interface ServerFog {
+  distance?: number;
+  color?: number;
+  domeColor?: number;
+  domeHeight?: number;
+  domeMin?: number;
+  domeMax?: number;
+  domeCap?: number;
+  domeClip?: number;
+  domeClouds?: number;
 }
 
 const textureKinds: Record<string, TextureKind> = {
@@ -70,6 +83,7 @@ function readTextureManifest(mapName: string): {
   sources: string[];
   skybox?: ServerSkybox;
   lighting: ConfigState["lighting"];
+  fog: ConfigState["fog"];
   mapModels: ReturnType<typeof resolveMapModels>;
 } {
   const state: ConfigState = {
@@ -80,6 +94,7 @@ function readTextureManifest(mapName: string): {
     visited: new Set(),
     commands: 0,
     lighting: {},
+    fog: {},
     shaderName: "stdworld",
     shaderParameters: {},
     mapModels: [],
@@ -92,6 +107,7 @@ function readTextureManifest(mapName: string): {
     sources: state.sources,
     skybox: resolveSkyOverrides(state),
     lighting: state.lighting,
+    fog: state.fog,
     mapModels: resolveMapModels(state.mapModels),
   };
 }
@@ -173,6 +189,22 @@ function executeStatement(text: string, source: string, line: number, state: Con
   }
   if (command === "ambient" || command === "skylight") {
     state.lighting[command] = sauerColorArg(args, command === "ambient" ? 1 : 0);
+    return;
+  }
+  if (command === "fog") {
+    state.fog.distance = clamp(numberArg(args[0], 4000), 16, 1_000_024);
+    return;
+  }
+  if (command === "fogcolour" || command === "fogdomecolour") {
+    state.fog[command === "fogcolour" ? "color" : "domeColor"] = sauerColorArg(args, 0);
+    return;
+  }
+  const fogDomeNumbers: Record<string, keyof ServerFog> = {
+    fogdomeheight: "domeHeight", fogdomemin: "domeMin", fogdomemax: "domeMax", fogdomecap: "domeCap", fogdomeclip: "domeClip",
+    fogdomeclouds: "domeClouds",
+  };
+  if (command in fogDomeNumbers) {
+    state.fog[fogDomeNumbers[command]] = numberArg(args[0], command === "fogdomeheight" ? -0.5 : command === "fogdomeclip" ? 1 : 0);
     return;
   }
   if (["texscale", "texrotate", "texoffset", "texscroll", "texlayer", "texalpha", "texcolor"].includes(command)) {
