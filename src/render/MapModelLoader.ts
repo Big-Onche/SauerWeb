@@ -10,6 +10,7 @@ import type { MapModelAsset, MapModelMeshSettings, MapModelSkin } from "../asset
 import { packageAssetUrl } from "../assets/TextureResolver";
 import type { RegisteredMapEntity } from "../engine/octa";
 import { toBabylonPosition } from "./coordinates";
+import { selectModelSkin } from "./modelSkin";
 import type { MapModelCollision } from "../engine/physics/collision";
 import { parseIqm, parseMd2, parseMd3, parseMd5, parseObj, type ModelGeometry, type ModelGeometryMesh } from "../engine/rendermodel";
 
@@ -120,7 +121,7 @@ function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapMode
   VertexData.ComputeNormals(translated, source.indices, normals);
   data.normals = normals;
   data.applyToMesh(mesh, true);
-  const skin = selectSkin(asset.skins ?? [], source.name);
+  const skin = selectModelSkin(asset.skins ?? [], source.name);
   const meshSettings = selectMeshSettings(asset.meshSettings ?? [], source.name);
   const materialKey = `${source.name}:${skin?.diffusePath ?? ""}:${meshSettings?.cullFace ?? asset.cullFace ?? true}`;
   let material = materials.get(materialKey);
@@ -172,10 +173,6 @@ function createModelMaterial(scene: Scene, asset: MapModelAsset, skin: MapModelS
     material.alphaCutOff = asset.alphaTest ?? 0.9;
   }
   return material;
-}
-
-function selectSkin(skins: MapModelSkin[], meshName: string): MapModelSkin | undefined {
-  return skins.find((skin) => skin.mesh === meshName) ?? skins.find((skin) => skin.mesh === "*") ?? skins[0];
 }
 
 function selectMeshSettings(settings: MapModelMeshSettings[], meshName: string): MapModelMeshSettings | undefined {

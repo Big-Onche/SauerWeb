@@ -6,12 +6,13 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
-import type { MapModelAsset, MapModelSkin, PlayerModelAsset } from "../../assets/types";
+import type { MapModelAsset, PlayerModelAsset } from "../../assets/types";
 import { packageAssetUrl } from "../../assets/TextureResolver";
 import { iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd5, type ModelGeometry, type ModelGeometryMesh } from "../../engine/rendermodel";
 import type { Vec3 } from "../../engine/octa";
 import { getplayermodelinfo, playerSkin, renderclient, type RenderClientState } from "../../fpsgame/render";
 import { toBabylonPosition } from "../../render/coordinates";
+import { selectModelSkin } from "../../render/modelSkin";
 
 export interface RenderPlayer extends RenderClientState {
   id: number;
@@ -166,7 +167,7 @@ export class PlayerRenderer {
   }
 
   private material(definition: PlayerModelAsset, asset: MapModelAsset, meshName: string): StandardMaterial {
-    const skin = selectSkin(asset.skins ?? [], meshName);
+    const skin = selectModelSkin(asset.skins ?? [], meshName);
     const key = `${definition.index}:${asset.name}:${meshName}:${skin?.diffusePath ?? ""}`;
     const cached = this.materials.get(key);
     if (cached) return cached;
@@ -214,10 +215,6 @@ export class PlayerRenderer {
     instance.meshes.forEach((mesh) => mesh.dispose());
     instance.root.dispose();
   }
-}
-
-function selectSkin(skins: MapModelSkin[], meshName: string): MapModelSkin | undefined {
-  return skins.find((skin) => skin.mesh === meshName) ?? skins.find((skin) => skin.mesh === "*") ?? skins[0];
 }
 
 function translateAndScale(positions: number[], translate: [number, number, number], scale: number): number[] {
