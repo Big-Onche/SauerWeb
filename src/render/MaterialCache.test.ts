@@ -1,4 +1,6 @@
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTexture } from "../assets/types";
@@ -46,6 +48,9 @@ describe("MaterialCache", () => {
     const cache = new MaterialCache(scene, [lightmap]);
     const material = cache.get(describeSauerMaterial(resolvedTexture(), 0, 6, true));
 
+    expect(material).toBeInstanceOf(StandardMaterial);
+    if (!(material instanceof StandardMaterial)) throw new Error("Expected a standard world material.");
+
     expect(material.lightmapTexture?.coordinatesIndex).toBe(1);
     expect(material.opacityTexture).toBe(material.lightmapTexture);
     expect(material.useLightmapAsShadowmap).toBe(true);
@@ -61,7 +66,47 @@ describe("MaterialCache", () => {
 
     expect(describeSauerMaterial(texture, 0, 0)).toMatchObject({ shaderName: "stdworld", surfaceMode: "opaque" });
   });
+
+  it("uses the Sauer bump shader for normal and specular slots", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const texture = resolvedTexture("bumpspecmapworld");
+    texture.normalUrl = "/normal.png";
+    texture.specularUrl = "/specular.png";
+    const cache = new MaterialCache(scene);
+
+    expect(cache.get(describeSauerMaterial(texture, 0, 0))).toBeInstanceOf(ShaderMaterial);
+
+    cache.dispose();
+    engine.dispose();
+  });
+
+  it("binds the direction atlas paired with a Sauer bump lightmap", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const texture = resolvedTexture("bumpworld");
+    texture.normalUrl = "/normal.png";
+    const bumpColor = lightmap(1);
+    const bumpDirection = lightmap(2);
+    const cache = new MaterialCache(scene, [bumpColor, bumpDirection]);
+    const material = cache.get(describeSauerMaterial(texture, 0, 6));
+
+    expect(material.getActiveTextures().map((active) => active.name)).toContain("sauer-lightmap-1");
+
+    cache.dispose();
+    engine.dispose();
+  });
 });
+
+function lightmap(type: number): Lightmap {
+  return {
+    type,
+    bytesPerPixel: 3,
+    width: 512,
+    height: 512,
+    data: new Uint8Array(512 * 512 * 3),
+  };
+}
 
 function resolvedTexture(shaderName = "stdworld"): ResolvedTexture {
   return {

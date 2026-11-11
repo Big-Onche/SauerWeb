@@ -169,6 +169,7 @@ export class MapScene {
       const normals: number[] = [];
       VertexData.ComputeNormals(batch.positions, batch.indices, normals);
       vertexData.normals = normals;
+      vertexData.tangents = computeTangents(batch.positions, normals, batch.uvs, batch.indices);
       vertexData.applyToMesh(mesh, true);
       const texture = textures[batch.textureIndex];
       mesh.material = texture
@@ -615,6 +616,69 @@ export class MapScene {
     return Number.isFinite(minimum.x) ? minimum.add(maximum).scale(0.5) : undefined;
   }
 
+}
+
+export function computeTangents(positions: number[], normals: number[], uvs: number[], indices: number[]): number[] {
+  const vertexCount = positions.length / 3;
+  const tangents = new Array<number>(vertexCount * 3).fill(0);
+  const bitangents = new Array<number>(vertexCount * 3).fill(0);
+  for (let index = 0; index < indices.length; index += 3) {
+    const first = indices[index], second = indices[index + 1], third = indices[index + 2];
+    const edge1 = subtractPosition(positions, second, first), edge2 = subtractPosition(positions, third, first);
+    const du1 = uvs[second * 2] - uvs[first * 2], dv1 = uvs[second * 2 + 1] - uvs[first * 2 + 1];
+    const du2 = uvs[third * 2] - uvs[first * 2], dv2 = uvs[third * 2 + 1] - uvs[first * 2 + 1];
+    const determinant = du1 * dv2 - du2 * dv1;
+    if (Math.abs(determinant) < 1e-12) continue;
+    const inverse = 1 / determinant;
+    const tangent = [
+      (edge1[0] * dv2 - edge2[0] * dv1) * inverse,
+      (edge1[1] * dv2 - edge2[1] * dv1) * inverse,
+      (edge1[2] * dv2 - edge2[2] * dv1) * inverse,
+    ];
+    const bitangent = [
+      (edge2[0] * du1 - edge1[0] * du2) * inverse,
+      (edge2[1] * du1 - edge1[1] * du2) * inverse,
+      (edge2[2] * du1 - edge1[2] * du2) * inverse,
+    ];
+    for (const vertex of [first, second, third]) {
+      for (let component = 0; component < 3; component++) {
+        tangents[vertex * 3 + component] += tangent[component];
+        bitangents[vertex * 3 + component] += bitangent[component];
+      }
+    }
+  }
+  const result: number[] = [];
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    const offset = vertex * 3;
+    const normal = normals.slice(offset, offset + 3);
+    const accumulated = tangents.slice(offset, offset + 3);
+    const projection = dot3(normal, accumulated);
+    let tangent = accumulated.map((component, componentIndex) => component - normal[componentIndex] * projection);
+    let length = Math.hypot(...tangent);
+    if (length < 1e-12) {
+      const axis = Math.abs(normal[2]) < 0.999 ? [0, 0, 1] : [0, 1, 0];
+      tangent = cross3(axis, normal);
+      length = Math.hypot(...tangent);
+    }
+    tangent = tangent.map((component) => component / length);
+    const handedness = dot3(cross3(normal, tangent), bitangents.slice(offset, offset + 3)) < 0 ? -1 : 1;
+    result.push(tangent[0], tangent[1], tangent[2], handedness);
+  }
+  return result;
+}
+
+function subtractPosition(positions: number[], left: number, right: number): number[] {
+  return [positions[left * 3] - positions[right * 3], positions[left * 3 + 1] - positions[right * 3 + 1],
+    positions[left * 3 + 2] - positions[right * 3 + 2]];
+}
+
+function dot3(left: number[], right: number[]): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+function cross3(left: number[], right: number[]): number[] {
+  return [left[1] * right[2] - left[2] * right[1], left[2] * right[0] - left[0] * right[2],
+    left[0] * right[1] - left[1] * right[0]];
 }
 
 async function loadSkyFace(basePath: string, suffix: string): Promise<Blob> {
