@@ -2,14 +2,19 @@ import dgram from "node:dgram";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 
 const MAX_DATAGRAM_BYTES = 65_535;
+const RETRIEVELIMIT = 20_000;
+const MAX_MASTER_RESPONSE_BYTES = 1_048_576;
 const MAX_CONNECTIONS = 64;
 const MAX_CONNECTIONS_PER_ADDRESS = 4;
 const MAX_PACKETS_PER_SECOND = 256;
 const MAX_BYTES_PER_SECOND = 1_048_576;
+const DEFAULT_MASTER_NAME = "master.sauerbraten.org";
+const DEFAULT_MASTER_PORT = 28787;
 
 export function configuredServers(environment = process.env) {
   const value = environment.SAUER_RELAY_SERVERS || "127.0.0.1:28785";
@@ -25,7 +30,6 @@ export function configuredServers(environment = process.env) {
 
 export function attachSauerRelay(httpServer, options = {}) {
   const servers = options.servers || configuredServers();
-  const allowed = new Map(servers.map((server) => [`${server.host}:${server.port}`, server]));
   const allowedOrigins = new Set((process.env.SAUER_RELAY_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean));
   const connectionsByAddress = new Map();
   const webSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_DATAGRAM_BYTES, perMessageDeflate: false });
@@ -37,7 +41,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     const remoteAddress = request.socket.remoteAddress || "unknown";
     const remoteConnections = connectionsByAddress.get(remoteAddress) || 0;
     const key = `${url.searchParams.get("server") || ""}:${Number(url.searchParams.get("port"))}`;
-    const target = allowed.get(key);
+    const target = servers.find((server) => `${server.host}:${server.port}` === key);
     if (!target || webSockets.clients.size >= MAX_CONNECTIONS || remoteConnections >= MAX_CONNECTIONS_PER_ADDRESS ||
         (allowedOrigins.size && !allowedOrigins.has(origin))) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
@@ -97,9 +101,79 @@ export async function queryConfiguredServers(servers = configuredServers()) {
   return Promise.all(servers.map(async (server) => ({ ...server, ...await queryServer(server) })));
 }
 
-export function serverListMiddleware(servers = configuredServers()) {
+// Original: src/engine/serverbrowser.cpp, retrieveservers()
+export function retrieveservers(environment = process.env) {
+  const mastername = environment.SAUER_MASTER_SERVER || DEFAULT_MASTER_NAME;
+  const masterport = parsePort(environment.SAUER_MASTER_PORT, DEFAULT_MASTER_PORT, "SAUER_MASTER_PORT");
+  const timeout = parsePositiveInteger(environment.SAUER_MASTER_TIMEOUT, RETRIEVELIMIT, "SAUER_MASTER_TIMEOUT");
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0;
+    let settled = false;
+    const socket = net.createConnection({ host: mastername, port: masterport });
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      if (error) reject(error);
+      else resolve(Buffer.concat(chunks, length).toString("utf8"));
+    };
+    socket.setTimeout(timeout, () => finish(new Error(`Master server ${mastername}:${masterport} timed out.`)));
+    socket.once("connect", () => socket.write("list\n"));
+    socket.on("data", (chunk) => {
+      length += chunk.length;
+      if (length > MAX_MASTER_RESPONSE_BYTES) {
+        finish(new Error(`Master server ${mastername}:${masterport} returned too much data.`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    socket.once("end", () => finish());
+    socket.once("error", (error) => finish(error));
+  });
+}
+
+export function parseMasterServerList(data) {
+  const servers = [];
+  const seen = new Set();
+  for (const line of data.split("\n")) {
+    const match = /^addserver\s+(\S+)\s+(\d+)\s*$/.exec(line.trim());
+    if (!match) continue;
+    const host = match[1];
+    const port = Number(match[2]);
+    if (!validMasterHost(host) || !Number.isInteger(port) || port < 1 || port > 65_534) continue;
+    const key = `${host}:${port}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    servers.push({ host, port, label: host });
+  }
+  return servers;
+}
+
+// Original: src/engine/serverbrowser.cpp, updatefrommaster()
+export async function updatefrommaster(keepservers = configuredServers(), environment = process.env) {
+  const discovered = parseMasterServerList(await retrieveservers(environment));
+  const result = [];
+  const seen = new Set();
+  for (const server of [...keepservers, ...discovered]) {
+    const key = `${server.host}:${server.port}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(server);
+  }
+  return result;
+}
+
+export function serverListMiddleware(servers = configuredServers(), environment = process.env) {
+  const keepservers = [...servers];
   return async (_request, response) => {
     try {
+      try {
+        const updated = await updatefrommaster(keepservers, environment);
+        servers.splice(0, servers.length, ...updated);
+      } catch (error) {
+        console.warn(`Could not update from Sauerbraten master server: ${error instanceof Error ? error.message : String(error)}`);
+      }
       response.setHeader("Content-Type", "application/json; charset=utf-8");
       response.setHeader("Cache-Control", "no-store");
       response.end(JSON.stringify(await queryConfiguredServers(servers)));
@@ -108,6 +182,25 @@ export function serverListMiddleware(servers = configuredServers()) {
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     }
   };
+}
+
+function validMasterHost(host) {
+  return host.length <= 253 && !/[\s/\\?#@\[\]]/.test(host) && (net.isIP(host) !== 0 ||
+    host.split(".").every((label) => label.length > 0 && label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)));
+}
+
+function parsePort(value, fallback, name) {
+  if (value === undefined || value === "") return fallback;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Invalid ${name}: ${value}`);
+  return port;
+}
+
+function parsePositiveInteger(value, fallback, name) {
+  if (value === undefined || value === "") return fallback;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 1) throw new Error(`Invalid ${name}: ${value}`);
+  return number;
 }
 
 async function queryServer(server) {
@@ -159,15 +252,17 @@ function packetReader(bytes) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.SAUER_RELAY_PORT || 8080);
+  const servers = configuredServers();
+  const listServers = serverListMiddleware(servers);
   const handler = (request, response) => {
     const url = new URL(request.url || "/", "http://relay.invalid");
-    if (url.pathname === "/api/servers") void serverListMiddleware()(request, response);
+    if (url.pathname === "/api/servers") void listServers(request, response);
     else if (url.pathname === "/health") { response.statusCode = 204; response.end(); }
     else { response.statusCode = 404; response.end("Not found"); }
   };
   const server = process.env.SAUER_RELAY_TLS_KEY && process.env.SAUER_RELAY_TLS_CERT ? https.createServer({
     key: fs.readFileSync(process.env.SAUER_RELAY_TLS_KEY), cert: fs.readFileSync(process.env.SAUER_RELAY_TLS_CERT),
   }, handler) : http.createServer(handler);
-  attachSauerRelay(server);
+  attachSauerRelay(server, { servers });
   server.listen(port, () => console.log(`SauerWeb relay listening on ${port}`));
 }

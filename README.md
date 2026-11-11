@@ -28,7 +28,8 @@ protocol 260, map format 33, and ENet 1.3.17. The original ENet C implementation
 to it and forwards its output as binary WebSocket frames. The relay never parses or modifies ENet traffic and creates a separate UDP socket for every
 browser connection.
 
-Relay destinations must be explicitly allowed. Configure the same list used by the server browser before starting Vite or the standalone relay:
+The relay retrieves the public server list from Sauerbraten's master server and adds those destinations to the server browser and relay allowlist.
+`SAUER_RELAY_SERVERS` adds kept servers (for example a local or unlisted server) alongside the master list:
 
 ```powershell
 $env:SAUER_RELAY_SERVERS = "127.0.0.1:28785=Local server,play.example.net:28785=Public server"
@@ -38,7 +39,8 @@ npm run dev
 For production, run `npm run build` and `npm run relay`. The standalone process serves `/api/servers`, `/health`, and `/relay`; its port defaults to 8080
 and can be changed with `SAUER_RELAY_PORT`. Put it behind the same HTTPS reverse proxy as the static site, or configure native TLS with
 `SAUER_RELAY_TLS_KEY` and `SAUER_RELAY_TLS_CERT`. `SAUER_RELAY_ORIGINS` accepts a comma-separated browser-origin allowlist. Connection, message-size,
-packet-rate, and byte-rate limits are enforced in the relay.
+packet-rate, and byte-rate limits are enforced in the relay. The master defaults to `master.sauerbraten.org:28787`; override it with
+`SAUER_MASTER_SERVER`, `SAUER_MASTER_PORT`, or `SAUER_MASTER_TIMEOUT` (milliseconds).
 
 Precompiled ENet JavaScript and WebAssembly artifacts are committed, so Emscripten is not needed for ordinary development or deployment. To reproduce
 them with an activated emsdk:
@@ -81,7 +83,8 @@ Large systems retain focused implementation modules beneath their native entry p
 - Connects to unmodified protocol-260 Sauerbraten servers with native ENet channels, reliability, sequencing, retransmission, and disconnect behavior.
 - Implements the native client handshake, map changes, spawn/death lifecycle, position updates, rifle shots, hit reports, damage, score state, pings, and
   instagib HUD/scoreboard flow.
-- Provides an HTML/CSS server browser backed by native server-info queries. Only configured relay destinations are exposed and connectable.
+- Provides an HTML/CSS server browser backed by the original master-server list and native server-info queries. Only discovered or explicitly configured
+  relay destinations are exposed and connectable.
 
 - Discovers all 331 bundled maps and reports their real format versions.
 - Decompresses and validates native `.ogz` files in the browser.

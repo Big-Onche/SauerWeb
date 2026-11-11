@@ -6,4 +6,8 @@ export function configuredServers(environment?: NodeJS.ProcessEnv): RelayServer[
 export function attachSauerRelay(server: Server | Http2SecureServer,
                                  options?: { servers?: RelayServer[] }): { servers: RelayServer[]; close(): void };
 export function queryConfiguredServers(servers?: RelayServer[]): Promise<unknown[]>;
-export function serverListMiddleware(servers?: RelayServer[]): (request: IncomingMessage, response: ServerResponse) => Promise<void>;
+export function retrieveservers(environment?: NodeJS.ProcessEnv): Promise<string>;
+export function parseMasterServerList(data: string): RelayServer[];
+export function updatefrommaster(keepservers?: RelayServer[], environment?: NodeJS.ProcessEnv): Promise<RelayServer[]>;
+export function serverListMiddleware(servers?: RelayServer[], environment?: NodeJS.ProcessEnv):
+  (request: IncomingMessage, response: ServerResponse) => Promise<void>;

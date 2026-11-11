@@ -1,5 +1,5 @@
 // Original: src/engine/serverbrowser.cpp
-// Functions: refreshservers(), serverinfostartcolumn()
+// Functions: retrieveservers(), updatefrommaster(), refreshservers(), serverinfostartcolumn()
 // Sauerbraten reference: SVN r6488
 
 export interface ServerListItem {
@@ -14,10 +14,18 @@ export interface ServerListItem {
   description?: string;
 }
 
-export async function refreshservers(): Promise<ServerListItem[]> {
+export async function retrieveservers(): Promise<ServerListItem[]> {
   const response = await fetch("/api/servers", { cache: "no-store" });
   if (!response.ok) throw new Error(`Server index returned ${response.status}.`);
   return response.json() as Promise<ServerListItem[]>;
+}
+
+export async function updatefrommaster(): Promise<ServerListItem[]> {
+  return retrieveservers();
+}
+
+export async function refreshservers(): Promise<ServerListItem[]> {
+  return updatefrommaster();
 }
 
 export function servermodename(mode: number | undefined): string {
