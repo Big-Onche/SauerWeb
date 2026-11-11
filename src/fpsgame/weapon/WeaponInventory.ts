@@ -1,4 +1,4 @@
-import { GUN_COUNT, Gun, PLAYER_GUN_COUNT } from "./WeaponDefinitions";
+import { AMMO_PICKUPS, GUN_COUNT, Gun, PLAYER_GUN_COUNT } from "./WeaponDefinitions";
 
 export class WeaponInventory {
   readonly ammo = new Int32Array(GUN_COUNT);
@@ -14,6 +14,13 @@ export class WeaponInventory {
     this.ammo[Gun.Pistol] = 40;
     this.ammo[Gun.Grenade] = 1;
     this.selectedGun = Gun.Pistol;
+  }
+
+  grantMaximumAmmo(): void {
+    this.ammo[Gun.Fist] = 1;
+    AMMO_PICKUPS.forEach((pickup, index) => {
+      this.ammo[Gun.Shotgun + index] = pickup.max;
+    });
   }
 
   hasAmmo(gun: Gun): boolean {

@@ -85,6 +85,7 @@ export class MapScene {
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
   private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
+  private debugLoadout = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -271,6 +272,7 @@ export class MapScene {
   resetPlayer(): void {
     this.physics.reset(performance.now());
     this.weapons.controller.respawn(performance.now());
+    if (this.debugLoadout) this.weapons.controller.inventory.grantMaximumAmmo();
     this.weapons.projectiles.clear();
     this.weaponHUD.render();
     this.updatePlayerCamera(this.physics.player.position);
@@ -282,6 +284,12 @@ export class MapScene {
 
   currentCameraMode(): CameraMode {
     return this.cameraMode;
+  }
+
+  enableDebugLoadout(): void {
+    this.debugLoadout = true;
+    this.weapons.controller.inventory.grantMaximumAmmo();
+    this.weaponHUD.render();
   }
 
   private createEntityMarker(entity: RegisteredMapEntity): void {
@@ -529,6 +537,7 @@ export class MapScene {
     const spawnYaw = playerStart?.attributes[0] ?? 0;
     this.physics.spawn(spawn, spawnYaw, performance.now());
     this.weapons.controller.respawn(performance.now());
+    if (this.debugLoadout) this.weapons.controller.inventory.grantMaximumAmmo();
     this.weaponHUD.render();
     this.freeCamera.position.copyFrom(toBabylonPosition(spawn));
     const target = this.geometryCenter(batches);

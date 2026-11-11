@@ -35,6 +35,12 @@ describe("Sauerbraten weapon parity", () => {
     expect(inventory.automaticSwitch()).toBe(Gun.Chaingun);
   });
 
+  it("can grant the complete maximum-ammo debug loadout", () => {
+    const inventory = new WeaponInventory();
+    inventory.grantMaximumAmmo();
+    expect(Array.from(inventory.ammo.slice(0, 7))).toEqual([1, 30, 60, 15, 15, 30, 120]);
+  });
+
   it("creates configurable debug targets for local damage tests", () => {
     const target = createDebugTarget("dummy", vector(1, 2, 3), { health: 250, radius: 6, eyeHeight: 18, aboveEye: 3, weight: 150 });
     expect(target).toMatchObject({ health: 250, maxHealth: 250, radius: 6, eyeHeight: 18, aboveEye: 3, weight: 150, alive: true });
