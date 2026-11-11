@@ -64,7 +64,7 @@ interface CaptureBase {
 export type MultiplayerEvent =
   | { type: "status"; status: string; error?: boolean }
   | { type: "map-change"; map: string; mode: number }
-  | { type: "players" }
+  | { type: "players"; disconnectedClientNumber?: number }
   | { type: "spawn" }
   | { type: "console"; text: string; consoleType: ConsoleLineType }
   | { type: "remote-shot"; clientNumber: number; gun: Gun; from: Vec3; to: Vec3 }
@@ -182,7 +182,7 @@ export class MultiplayerClient extends EventTarget {
       if (itemBytes.length) this.transport.send(1, itemBytes, true);
       this.mapInfoPending = false;
     }
-    if (!this.physics.player.alive && (this.respawnRequested || this.weapons.controller.attacking) &&
+    if (!this.isSpectator && !this.physics.player.alive && (this.respawnRequested || this.weapons.controller.attacking) &&
         nowMilliseconds - this.lastSpawnAttempt >= 1000) {
       this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TrySpawn).finish(), true);
       this.lastSpawnAttempt = nowMilliseconds;
@@ -208,6 +208,10 @@ export class MultiplayerClient extends EventTarget {
     });
   }
 
+  get isSpectator(): boolean {
+    return this.players.get(this.clientNumber)?.state === ClientState.Spectator;
+  }
+
   getTeamScore(team: string): number {
     if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) return this.ctfMode.scores[ctfTeamFlag(team) - 1] ?? 0;
     return this.teamScores.get(team) ?? 0;
@@ -226,7 +230,7 @@ export class MultiplayerClient extends EventTarget {
   // Function: respawn() / respawnself()
   // Sauerbraten reference: SVN r6488
   requestRespawn(): boolean {
-    if (!this.connected || this.physics.player.alive) return false;
+    if (!this.connected || this.physics.player.alive || this.isSpectator) return false;
     if (!this.respawnRequested) this.lastSpawnAttempt = Number.NEGATIVE_INFINITY;
     this.respawnRequested = true;
     return true;
@@ -247,6 +251,10 @@ export class MultiplayerClient extends EventTarget {
     this.entities.setMap(entities);
   }
 
+  synchronizeLocalState(): void {
+    this.syncLocalState();
+  }
+
   switchTeam(): void {
     if (!this.connected) return;
     const player = this.players.get(this.clientNumber);
@@ -255,8 +263,16 @@ export class MultiplayerClient extends EventTarget {
     this.transport.flush();
   }
 
+  // Original: src/fpsgame/client.cpp, togglespectator(). The server remains authoritative and may reject this request.
+  setSpectator(spectating: boolean): boolean {
+    if (!this.connected || this.clientNumber < 0 || this.isSpectator === spectating) return false;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Spectator).putInt(this.clientNumber).putInt(spectating ? 1 : 0).finish(), true);
+    this.transport.flush();
+    return true;
+  }
+
   tryDropFlag(): void {
-    if (!this.connected || !gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
+    if (!this.connected || this.isSpectator || !gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
     if (!this.ctfMode.flags.some((flag) => flag.owner === this.clientNumber)) return;
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TryDropFlag).finish(), true);
     this.transport.flush();
@@ -382,7 +398,10 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.ClientDisconnect: {
           const clientNumber = packet.getInt(), player = this.players.get(clientNumber);
           if (player) this.console(`leave: ${this.displayName(player)}`);
-          this.players.delete(clientNumber); this.syncTargets(); this.emit({ type: "players" }); break;
+          this.players.delete(clientNumber);
+          this.syncTargets();
+          this.emit({ type: "players", disconnectedClientNumber: clientNumber });
+          break;
         }
         case NetworkMessage.SpawnState: this.parseSpawnState(packet); break;
         case NetworkMessage.Spawn: {
@@ -459,17 +478,16 @@ export class MultiplayerClient extends EventTarget {
           break;
         }
         case NetworkMessage.SetTeam: {
-          const player = this.players.get(packet.getInt()), team = packet.getString();
+          const player = this.playerFor(packet.getInt()), team = packet.getString();
           const reason = packet.getInt();
-          if (player) { this.console(`${this.displayName(player)} ${reason === 1 ? "was forced" : "switched"} to team ${team}`); player.team = team; }
+          if (reason >= 0) this.console(`${this.displayName(player)} ${reason === 1 ? "was forced" : "switched"} to team ${team}`);
+          player.team = team;
           this.emit({ type: "players" }); break;
         }
         case NetworkMessage.PauseGame: packet.getInt(); packet.getInt(); break;
         case NetworkMessage.GameSpeed: packet.getInt(); packet.getInt(); break;
         case NetworkMessage.Spectator: {
-          const player = this.playerFor(packet.getInt());
-          player.state = packet.getInt() ? ClientState.Spectator : ClientState.Dead;
-          player.alive = false;
+          this.setSpectatorState(packet.getInt(), packet.getInt() !== 0);
           break;
         }
         case NetworkMessage.EditEntity:
@@ -558,6 +576,7 @@ export class MultiplayerClient extends EventTarget {
       if (clientNumber < 0) break;
       this.parseState(this.playerFor(clientNumber), packet, true);
     }
+    this.syncLocalState();
     this.emit({ type: "players" });
   }
 
@@ -611,7 +630,10 @@ export class MultiplayerClient extends EventTarget {
     const armour = packet.getInt(), health = packet.getInt(), target = this.playerFor(targetNumber);
     target.armour = armour; target.health = health;
     target.lastPain = performance.now();
-    if (targetNumber === this.clientNumber) { this.physics.player.armour = armour; this.physics.player.health = health; }
+    if (targetNumber === this.clientNumber && !this.isSpectator) {
+      this.physics.player.armour = armour;
+      this.physics.player.health = health;
+    }
   }
 
   // Original: src/fpsgame/client.cpp
@@ -622,7 +644,9 @@ export class MultiplayerClient extends EventTarget {
     const direction = { x: packet.getInt() / DNF, y: packet.getInt() / DNF, z: packet.getInt() / DNF };
     const target = this.players.get(targetNumber);
     if (target) hitpush(target, damage * (target.health <= 0 ? 2 : 1), direction, gun);
-    if (targetNumber === this.clientNumber) hitpush(this.physics.player, damage * (this.physics.player.health <= 0 ? 2 : 1), direction, gun);
+    if (targetNumber === this.clientNumber && !this.isSpectator) {
+      hitpush(this.physics.player, damage * (this.physics.player.health <= 0 ? 2 : 1), direction, gun);
+    }
   }
 
   // Original: src/fpsgame/capture.h
@@ -849,7 +873,7 @@ export class MultiplayerClient extends EventTarget {
   }
 
   private handleWeaponEvent(event: WeaponEvent): void {
-    if (!this.connected) return;
+    if (!this.connected || this.isSpectator) return;
     if (event.type === "selected") {
       this.transport.send(1, new PacketWriter().putInt(NetworkMessage.GunSelect).putInt(event.gun).finish(), true);
       return;
@@ -903,6 +927,28 @@ export class MultiplayerClient extends EventTarget {
 
   private weaponDelay(gun: number): number {
     return gun >= Gun.Fist && gun <= Gun.Pistol ? WEAPONS[gun].attackDelay : 0;
+  }
+
+  private setSpectatorState(clientNumber: number, spectating: boolean): void {
+    const player = this.playerFor(clientNumber);
+    player.state = spectating ? ClientState.Spectator : ClientState.Dead;
+    player.alive = false;
+    resetNetworkInterpolation(player);
+    if (clientNumber === this.clientNumber) {
+      this.respawnRequested = false;
+      this.physics.player.alive = false;
+      this.physics.player.clientState = player.state;
+      this.weapons.controller.setAttacking(false);
+    }
+    this.emit({ type: "players" });
+  }
+
+  private syncLocalState(): void {
+    const player = this.players.get(this.clientNumber);
+    if (!player) return;
+    this.physics.player.clientState = player.state;
+    this.physics.player.alive = player.state === ClientState.Alive;
+    if (player.state !== ClientState.Alive) this.weapons.controller.setAttacking(false);
   }
 }
 

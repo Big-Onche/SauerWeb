@@ -122,6 +122,9 @@ button { color: inherit; }
   transform: translate(-50%, -50%); }
 .game-crosshair[hidden] { display: none; }
 .game-pause:not([hidden]) ~ .game-crosshair { display: none; }
+.spectator-hud { position: absolute; right: 22px; bottom: 82px; z-index: 19; display: grid; justify-items: end; color: #fff;
+  font: 500 16px/1.25 "DM Mono"; text-shadow: 1px 2px 2px #000; pointer-events: none; }
+.spectator-hud[hidden] { display: none; }.spectator-hud strong { color: #ffff80; font-size: 18px; }.spectator-hud span { color: #fff; }
 @media (max-width: 760px) { .shell { grid-template-columns: 230px 1fr; }.sidebar { position: absolute; width: 230px; height: 100%; transform: translateX(-194px); transition: transform .2s; }.sidebar:hover, .sidebar:focus-within { transform: none; }.stats div { min-width: 70px; }.stats div:nth-child(2) { display: none; }.controls { display: none; } }
 .multiplayer-hud { position: absolute; inset: 0; z-index: 20; pointer-events: none; color: #fff; text-shadow: 0 2px 3px #000; }
 .multiplayer-status { position: absolute; top: 82px; left: 50%; display: flex; gap: 13px; align-items: center; padding: 6px 14px; transform: translateX(-50%); border: 1px solid #ffffff25; background: #071010a8; font-size: 13px; }

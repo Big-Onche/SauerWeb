@@ -6,6 +6,7 @@ import { createDamageable } from "./weapon/DamageSystem";
 import { Gun } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent } from "./weapon/WeaponEvents";
 import { createFpsEntityRegistry } from "./entities";
+import { ClientState } from "../engine/physics/types";
 
 describe("Sauerbraten rifle protocol", () => {
   it("serializes the exact native N_SHOOT fields and hit record", () => {
@@ -67,6 +68,22 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.remaining).toBe(0);
   });
 
+  it("requests spectator changes without changing state before server confirmation", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    client.multiplayer.clientNumber = 4;
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+
+    expect(client.multiplayer.setSpectator(true)).toBe(true);
+    expect(client.multiplayer.isSpectator).toBe(false);
+    const packet = new PacketReader(send.mock.calls[0][1]);
+    expect(send.mock.calls[0][0]).toBe(1);
+    expect(send.mock.calls[0][2]).toBe(true);
+    expect([packet.getInt(), packet.getInt(), packet.getInt()]).toEqual([NetworkMessage.Spectator, 4, 1]);
+    expect(packet.remaining).toBe(0);
+  });
+
   it("sends the loaded map CRC reliably before spawning", () => {
     const client = createClient();
     client.multiplayer.connected = true;
@@ -110,6 +127,28 @@ describe("Sauerbraten rifle protocol", () => {
 });
 
 describe("native server message framing", () => {
+  it("applies server-authoritative spectator transitions to local physics", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    client.multiplayer.clientNumber = 4;
+    const enter = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(1).finish();
+    Reflect.apply(Reflect.get(client.multiplayer, "parseMessages"), client.multiplayer, [-1, new PacketReader(enter)]);
+
+    expect(client.multiplayer.isSpectator).toBe(true);
+    expect(client.physics.player.clientState).toBe(ClientState.Spectator);
+    expect(client.physics.player.alive).toBe(false);
+    expect(client.multiplayer.requestRespawn()).toBe(false);
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+    client.multiplayer.update(0);
+    expect(send.mock.calls.some(([channel]) => channel === 0)).toBe(false);
+
+    const leave = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(0).finish();
+    Reflect.apply(Reflect.get(client.multiplayer, "parseMessages"), client.multiplayer, [-1, new PacketReader(leave)]);
+    expect(client.multiplayer.isSpectator).toBe(false);
+    expect(client.physics.player.clientState).toBe(ClientState.Dead);
+  });
+
   it("consumes teleport and jumppad records on the position channel", () => {
     const client = createClient().multiplayer;
     const packet = new PacketWriter()

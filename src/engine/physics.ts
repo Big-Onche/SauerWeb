@@ -81,7 +81,7 @@ export class PhysicsSimulation {
   // Function: physicsframe()
   // Sauerbraten reference: SVN r6488
   physicsframe(nowMilliseconds: number, input: PhysicsInputState): Vec3 {
-    if (!this.player.alive) this.player.clientState = ClientState.Dead;
+    if (!this.player.alive && this.player.clientState !== ClientState.Spectator) this.player.clientState = ClientState.Dead;
     this.applyInput(input);
     if (this.paused) return this.renderPosition;
     this.lastSchedule = this.scheduler.schedule(nowMilliseconds, this.timeScale);
@@ -95,7 +95,7 @@ export class PhysicsSimulation {
   }
 
   private applyInput(input: PhysicsInputState): void {
-    if (!this.player.alive) {
+    if (!this.player.alive && this.player.clientState !== ClientState.Spectator) {
       this.player.move = this.player.strafe = 0;
       this.player.jumping = false;
       return;
@@ -115,6 +115,7 @@ export class PhysicsSimulation {
     const player = this.player;
     player.previousPosition = copyVec3(player.position);
     const seconds = milliseconds / 1000;
+    const floating = player.clientState === ClientState.Editing || player.clientState === ClientState.Spectator;
     const materialPosition = {
       x: player.position.x,
       y: player.position.y,
@@ -124,54 +125,61 @@ export class PhysicsSimulation {
     const volume = material & MATF_VOLUME;
     const water = volume === MAT_WATER || volume === MAT_LAVA;
     const enteredWater = water && player.inWater === 0;
-    if (player.physicsState === PhysicsState.Fall) {
-      if (!water || (player.move === 0 && player.strafe === 0)) player.falling.z -= GRAVITY * seconds;
-      player.timeInAir = Math.min(player.timeInAir + milliseconds, 1000);
-    } else if (player.floor.z > 0 && player.floor.z < FLOOR_Z) {
-      const slopeGravity = vec3(0, 0, -1);
-      projectAgainst(slopeGravity, player.floor);
-      normalize(slopeGravity);
-      if (!water || (player.move === 0 && player.strafe === 0)) addScaled(player.falling, slopeGravity, GRAVITY * seconds);
+    if (!floating) {
+      if (player.physicsState === PhysicsState.Fall) {
+        if (!water || (player.move === 0 && player.strafe === 0)) player.falling.z -= GRAVITY * seconds;
+        player.timeInAir = Math.min(player.timeInAir + milliseconds, 1000);
+      } else if (player.floor.z > 0 && player.floor.z < FLOOR_Z) {
+        const slopeGravity = vec3(0, 0, -1);
+        projectAgainst(slopeGravity, player.floor);
+        normalize(slopeGravity);
+        if (!water || (player.move === 0 && player.strafe === 0)) addScaled(player.falling, slopeGravity, GRAVITY * seconds);
+      }
     }
-    if (water || player.physicsState >= PhysicsState.Slope) {
+    if (!floating && (water || player.physicsState >= PhysicsState.Slope)) {
       const coefficient = water ? 1 : Math.min(1, Math.max(0, (player.floor.z - SLOPE_Z) / (FLOOR_Z - SLOPE_Z)));
       scaleVec3(player.falling, Math.pow(1 - coefficient / (water ? 2 : 6), milliseconds / 20));
     }
-    if (enteredWater) scaleVec3(player.velocity, 1 / 8);
-    if (player.jumping && (player.physicsState >= PhysicsState.Slope || water)) {
+    if (!floating && enteredWater) scaleVec3(player.velocity, 1 / 8);
+    if (player.jumping && (floating || player.physicsState >= PhysicsState.Slope || water)) {
       player.jumping = false;
       player.velocity.z = Math.max(player.velocity.z, JUMP_VELOCITY);
-      if (water) { player.velocity.x /= 8; player.velocity.y /= 8; }
+      if (!floating && water) { player.velocity.x /= 8; player.velocity.y /= 8; }
     }
     const yaw = player.yaw * Math.PI / 180;
-    const pitch = water ? player.pitch * Math.PI / 180 : 0;
+    const pitch = floating || water ? player.pitch * Math.PI / 180 : 0;
     const desired = vec3(
       player.move * -Math.sin(yaw) * Math.cos(pitch) + player.strafe * Math.cos(yaw),
       player.move * Math.cos(yaw) * Math.cos(pitch) + player.strafe * Math.sin(yaw),
       player.move * Math.sin(pitch),
     );
     normalize(desired);
-    if (player.physicsState >= PhysicsState.Slope && player.floor.z > 0 && player.floor.z < 1) {
+    if (!floating && player.physicsState >= PhysicsState.Slope && player.floor.z > 0 && player.floor.z < 1) {
       const slopeZ = -(desired.x * player.floor.x + desired.y * player.floor.y) / player.floor.z;
       desired.z = water ? Math.max(desired.z, slopeZ) : slopeZ;
       normalize(desired);
     }
-    const speedScale = water ? 1 : (player.move !== 0 && player.strafe === 0 ? 1.3 : 1) *
+    const speedScale = floating || water ? 1 : (player.move !== 0 && player.strafe === 0 ? 1.3 : 1) *
       (player.physicsState < PhysicsState.Slope ? 1.3 : 1);
     scaleVec3(desired, player.maxSpeed * speedScale);
-    const friction = water ? 20 : player.physicsState >= PhysicsState.Slope ? 6 : 30;
+    const friction = floating || player.physicsState >= PhysicsState.Slope ? 6 : water ? 20 : 30;
     const blend = 1 - Math.pow(1 - 1 / friction, milliseconds / 20);
     player.velocity.x += (desired.x - player.velocity.x) * blend;
     player.velocity.y += (desired.y - player.velocity.y) * blend;
     player.velocity.z += (desired.z - player.velocity.z) * blend;
     const displacement = copyVec3(player.velocity);
-    if (water) scaleVec3(displacement, 0.5);
+    if (!floating && water) scaleVec3(displacement, 0.5);
     displacement.x += player.falling.x;
     displacement.y += player.falling.y;
     displacement.z += player.falling.z;
     scaleVec3(displacement, seconds / 10);
     player.blocked = false;
-    if (this.groundMover) {
+    if (floating) {
+      player.physicsState = PhysicsState.Float;
+      player.timeInAir = 0;
+      player.falling = vec3();
+      addScaled(player.position, player.velocity, seconds);
+    } else if (this.groundMover) {
       for (let index = 0; index < 10; index++) {
         let retries = 0;
         while (!this.groundMover.move(player, displacement) && ++retries < 5) {}
@@ -180,7 +188,7 @@ export class PhysicsSimulation {
       addScaled(player.position, player.velocity, seconds);
       addScaled(player.position, player.falling, seconds);
     }
-    player.inWater = water ? volume : 0;
+    player.inWater = !floating && water ? volume : 0;
     if (player.clientState === ClientState.Alive && (player.position.z < 0 || (material & MAT_DEATH) !== 0)) {
       player.clientState = ClientState.Dead;
       player.move = player.strafe = 0;

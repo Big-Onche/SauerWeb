@@ -32,7 +32,7 @@ import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { installSauerFogDistance } from "./SauerFogShader";
 import { BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics";
-import { createClient, type MultiplayerEvent, type ServerEndpoint } from "../fpsgame/client";
+import { createClient, type MultiplayerEvent, type NetworkPlayer, type ServerEndpoint } from "../fpsgame/client";
 import { BrowserWeaponInput } from "../platform/browser/WeaponInput";
 import { WeaponHUD } from "../platform/browser/WeaponHUD";
 import { CrosshairHUD } from "../platform/browser/CrosshairHUD";
@@ -40,9 +40,10 @@ import { WeaponRenderer } from "../platform/browser/WeaponRenderer";
 import { WeaponAudio } from "../platform/browser/WeaponAudio";
 import { ParticleRenderer } from "./ParticleRenderer";
 import { MultiplayerHUD } from "../platform/browser/MultiplayerHUD";
+import { SpectatorHUD } from "../platform/browser/SpectatorHUD";
 import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platform/browser/PlayerRenderer";
 import { CtfRenderer } from "../platform/browser/CtfRenderer";
-import { ClientState } from "../engine/physics/types";
+import { ClientState, PhysicsState } from "../engine/physics/types";
 import { ctfTeamFlag } from "../fpsgame/ctf";
 import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
 import type { RuntimeMode } from "../runtime";
@@ -82,6 +83,7 @@ export class MapScene {
   private readonly weaponRenderer: WeaponRenderer;
   private readonly particleRenderer: ParticleRenderer;
   private readonly multiplayerHUD: MultiplayerHUD;
+  private readonly spectatorHUD: SpectatorHUD;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
   private cameraMode: CameraMode = "free";
@@ -108,6 +110,8 @@ export class MapScene {
   private playerModel = 0;
   private localGameMode = 0;
   private localDeadAt = 0;
+  private following = -1;
+  private followDirection = 0;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
@@ -139,6 +143,7 @@ export class MapScene {
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
+    this.spectatorHUD = new SpectatorHUD(viewport);
     this.playerRenderer = new PlayerRenderer(this.scene, (from, to, radius) => {
       const direction = { x: to.x - from.x, y: to.z - from.z, z: to.y - from.y };
       const distance = Math.hypot(direction.x, direction.y, direction.z);
@@ -165,6 +170,9 @@ export class MapScene {
     new WeaponAudio(this.weapons.events);
     this.fpsClient.multiplayer.addEventListener("multiplayer", (event) =>
       this.handleMultiplayerEvent((event as CustomEvent<MultiplayerEvent>).detail));
+    canvas.addEventListener("pointerdown", this.onSpectatorPointerDown, { capture: true });
+    canvas.addEventListener("contextmenu", this.onSpectatorContextMenu);
+    window.addEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
 
     this.engine.runRenderLoop(() => {
       this.updatePhysics(performance.now());
@@ -261,6 +269,8 @@ export class MapScene {
     this.createFogDome(fog);
     await this.weaponRenderer.loadHudGuns();
     this.placeCamera(map, batches);
+    this.fpsClient.multiplayer.synchronizeLocalState();
+    this.syncPlayerView();
     return {
       meshes: batches.length + materialBatches.length + loadedMapModels.meshes.length,
       faces,
@@ -388,6 +398,10 @@ export class MapScene {
     this.weaponInput.dispose();
     this.crosshairHUD.dispose();
     this.multiplayerHUD.dispose();
+    this.spectatorHUD.dispose();
+    this.canvas.removeEventListener("pointerdown", this.onSpectatorPointerDown, { capture: true });
+    this.canvas.removeEventListener("contextmenu", this.onSpectatorContextMenu);
+    window.removeEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
     this.resizeObserver.disconnect();
     window.removeEventListener("resize", this.resize);
     if (document.pointerLockElement === this.canvas) void document.exitPointerLock();
@@ -413,12 +427,22 @@ export class MapScene {
     this.fpsClient.multiplayer.switchTeam();
   }
 
+  setSpectator(spectating: boolean): boolean {
+    return this.fpsClient.multiplayer.setSpectator(spectating);
+  }
+
+  isLocalPlayerSpectator(): boolean {
+    return this.fpsClient.multiplayer.isSpectator;
+  }
+
   tryDropFlag(): void {
     this.fpsClient.multiplayer.tryDropFlag();
   }
 
   isLocalPlayerDead(): boolean {
-    return this.fpsClient.multiplayer.clientNumber >= 0 && !this.physics.player.alive;
+    const multiplayer = this.fpsClient.multiplayer;
+    if (multiplayer.clientNumber >= 0) return multiplayer.players.get(multiplayer.clientNumber)?.state === ClientState.Dead;
+    return !this.physics.player.alive;
   }
 
   requestRespawn(): boolean {
@@ -725,13 +749,30 @@ export class MapScene {
   private updatePhysics(nowMilliseconds: number): void {
     animateEntityModels(this.entityModelAnimations, nowMilliseconds);
     if (this.cameraMode !== "player") return;
-    const wasDead = this.localDeadAt > 0;
-    if (!this.physics.player.alive && !wasDead) this.localDeadAt = nowMilliseconds;
-    else if (this.physics.player.alive && wasDead) this.localDeadAt = 0;
-    const renderPosition = this.physics.update(nowMilliseconds, this.physicsInput.sample());
+    const dead = this.isLocalPlayerDead(), wasDead = this.localDeadAt > 0;
+    if (dead && !wasDead) this.localDeadAt = nowMilliseconds;
+    else if (!dead && wasDead) this.localDeadAt = 0;
+    const input = this.physicsInput.sample();
+    const followed = this.followedPlayer();
+    let renderPosition: RegisteredMapEntity["position"];
+    if (followed) {
+      interpolateNetworkEntity(followed, nowMilliseconds);
+      const player = this.physics.player;
+      player.position = { ...followed.position };
+      player.previousPosition = { ...followed.position };
+      player.falling = { x: 0, y: 0, z: 0 };
+      player.yaw = followed.yaw;
+      player.pitch = followed.state === ClientState.Dead ? 0 : followed.pitch;
+      player.roll = followed.roll;
+      player.move = player.strafe = 0;
+      player.physicsState = PhysicsState.Float;
+      renderPosition = player.position;
+    } else renderPosition = this.physics.update(nowMilliseconds, input);
     this.updatePlayerCamera(renderPosition);
     const aimTarget = this.aimTarget();
     this.crosshairHUD.update(this.aimingAtTeammate(aimTarget));
+    this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
+    if (followed) this.weaponHUD.render({ health: followed.health, selectedGun: followed.selectedGun, ammo: followed.ammo });
     this.weapons.update(nowMilliseconds, aimTarget);
     this.fpsClient.multiplayer.update(nowMilliseconds);
     this.multiplayerHUD.render();
@@ -740,9 +781,19 @@ export class MapScene {
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
     if (event.type === "spawn") {
+      this.stopFollowing();
       this.spawnNetworkPlayer();
-      this.syncDeathView();
-    } else if (event.type === "players") this.syncDeathView();
+      this.syncPlayerView();
+    } else if (event.type === "players") {
+      if (event.disconnectedClientNumber === this.following) {
+        if (this.followDirection) this.nextFollow(this.followDirection);
+        else this.stopFollowing();
+      } else this.validateFollowing();
+      this.syncPlayerView();
+    } else if (event.type === "disconnect") {
+      this.stopFollowing();
+      this.syncPlayerView();
+    }
   }
 
   private spawnNetworkPlayer(): void {
@@ -763,13 +814,15 @@ export class MapScene {
   private updateNetworkPlayers(): void {
     const multiplayer = this.fpsClient.multiplayer;
     const nowMilliseconds = performance.now();
-    const thirdPersonView = this.thirdperson || this.isLocalPlayerDead();
+    const followed = this.followedPlayer();
+    const thirdPersonView = this.thirdperson || this.isLocalPlayerDead() || followed?.state === ClientState.Dead;
     const players: RenderPlayer[] = [];
     const localNetworkPlayer = multiplayer.players.get(multiplayer.clientNumber);
     for (const [clientNumber, player] of multiplayer.players) {
       const local = clientNumber === multiplayer.clientNumber;
       if (!local) interpolateNetworkEntity(player, nowMilliseconds);
       if (local && !thirdPersonView) continue;
+      if (!local && clientNumber === this.following && multiplayer.isSpectator && !thirdPersonView) continue;
       const source = local ? this.physics.player : player;
       players.push({
         id: clientNumber,
@@ -840,7 +893,7 @@ export class MapScene {
     const yaw = this.physics.player.yaw * Math.PI / 180;
     const pitch = this.physics.player.pitch * Math.PI / 180;
     let cameraPosition = toBabylonPosition(position);
-    if (this.thirdperson || this.isLocalPlayerDead()) {
+    if (this.thirdperson || this.isLocalPlayerDead() || this.followedPlayer()?.state === ClientState.Dead) {
       const desired = thirdpersoncamera(position, this.physics.player.yaw, this.physics.player.pitch);
       const offset = desired.subtract(cameraPosition);
       const distance = offset.length();
@@ -894,13 +947,90 @@ export class MapScene {
     return closestTeam === local.team;
   }
 
+  // Original: src/fpsgame/fps.cpp, nextfollow(), followingplayer(), stopfollowing(), setupcamera().
+  private nextFollow(direction: number): void {
+    const multiplayer = this.fpsClient.multiplayer;
+    if (!multiplayer.isSpectator) {
+      this.stopFollowing();
+      return;
+    }
+    const step = direction < 0 ? -1 : 1;
+    const length = Math.max(0, ...multiplayer.players.keys()) + 1;
+    let current = this.following >= 0 ? this.following : step < 0 ? length - 1 : 0;
+    for (let index = 0; index < length; index++) {
+      current = (current + step + length) % length;
+      const candidate = multiplayer.players.get(current);
+      if (!candidate || candidate.clientNumber === multiplayer.clientNumber || candidate.state === ClientState.Spectator) continue;
+      this.following = candidate.clientNumber;
+      this.followDirection = step;
+      this.physics.player.velocity = { x: 0, y: 0, z: 0 };
+      this.physics.player.falling = { x: 0, y: 0, z: 0 };
+      this.physics.scheduler.reset(performance.now());
+      this.syncPlayerView();
+      return;
+    }
+    this.stopFollowing();
+  }
+
+  private stopFollowing(): void {
+    if (this.following < 0) return;
+    this.following = -1;
+    this.followDirection = 0;
+    this.physics.scheduler.reset(performance.now());
+    this.syncPlayerView();
+  }
+
+  private followedPlayer(): NetworkPlayer | undefined {
+    if (!this.fpsClient.multiplayer.isSpectator || this.following < 0) return undefined;
+    const player = this.fpsClient.multiplayer.players.get(this.following);
+    return player && player.state !== ClientState.Spectator ? player : undefined;
+  }
+
+  private validateFollowing(): void {
+    const spectator = this.fpsClient.multiplayer.isSpectator;
+    if (!spectator) {
+      this.stopFollowing();
+      return;
+    }
+    if (this.following < 0 || this.fpsClient.multiplayer.players.has(this.following)) return;
+    this.stopFollowing();
+  }
+
+  private readonly onSpectatorPointerDown = (event: PointerEvent): void => {
+    if (!this.isLocalPlayerSpectator() || document.pointerLockElement !== this.canvas) return;
+    if (event.button === 0) this.nextFollow(1);
+    else if (event.button === 2) this.nextFollow(-1);
+    else if (event.button === 1) this.stopFollowing();
+    else return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  private readonly onSpectatorContextMenu = (event: MouseEvent): void => {
+    if (this.isLocalPlayerSpectator()) event.preventDefault();
+  };
+
+  private readonly onSpectatorKeyDown = (event: KeyboardEvent): void => {
+    if (!this.isLocalPlayerSpectator() || document.pointerLockElement !== this.canvas || event.code !== "Space") return;
+    this.stopFollowing();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
   private readonly resize = (): void => this.engine.resize();
 
-  private syncDeathView(): void {
+  private syncPlayerView(): void {
     const dead = this.isLocalPlayerDead();
-    this.weaponHUD.setVisible(this.runtimeMode === "game" && !dead);
-    this.crosshairHUD.setVisible(this.runtimeMode === "game" && !dead);
-    this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson && !dead);
+    const spectator = this.isLocalPlayerSpectator();
+    const followed = this.followedPlayer();
+    this.physicsInput.enabled = this.runtimeMode === "game";
+    this.weaponInput.enabled = this.runtimeMode === "game" && !dead && !spectator;
+    this.weaponHUD.setVisible(this.runtimeMode === "game" && !dead && (!spectator || Boolean(followed)));
+    this.crosshairHUD.setVisible(this.runtimeMode === "game" && !dead && (!spectator || followed?.state !== ClientState.Dead && Boolean(followed)));
+    this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
+    this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson && !dead &&
+      (!spectator || followed?.state !== ClientState.Dead && Boolean(followed)));
+    this.spectatorHUD.render(spectator, followed);
   }
 
   private geometryCenter(batches: GeometryBatch[]): Vector3 | undefined {

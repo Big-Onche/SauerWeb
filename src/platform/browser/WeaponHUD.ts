@@ -13,11 +13,12 @@ export class WeaponHUD {
     this.render();
   }
 
-  render(): void {
-    const gun = this.controller.inventory.selectedGun;
-    const owner = this.controller.owner;
-    this.element.innerHTML = `<span class="weapon-health">${Math.max(0, owner.health)}</span><span class="weapon-name">${WEAPONS[gun].name}</span>` +
-      `<strong class="weapon-ammo">${gun === 0 ? "∞" : this.controller.inventory.ammo[gun]}</strong>`;
+  render(view?: { health: number; selectedGun: number; ammo: ArrayLike<number> }): void {
+    const gun = Math.max(0, Math.min(WEAPONS.length - 1, view?.selectedGun ?? this.controller.inventory.selectedGun));
+    const health = view?.health ?? this.controller.owner.health;
+    const ammo = view?.ammo ?? this.controller.inventory.ammo;
+    this.element.innerHTML = `<span class="weapon-health">${Math.max(0, health)}</span><span class="weapon-name">${WEAPONS[gun].name}</span>` +
+      `<strong class="weapon-ammo">${gun === 0 ? "∞" : ammo[gun]}</strong>`;
   }
 
   setVisible(visible: boolean): void {

@@ -40,6 +40,9 @@ app.innerHTML = `
             <button type="button" data-action="switch-team" ${server ? "" : "hidden"}>
               <img src="/api/packages/icons/menu.jpg" alt="" /><span>switch team</span>
             </button>
+            <button type="button" data-action="spectator" ${server ? "" : "hidden"}>
+              <img src="/api/packages/icons/spectator.jpg" alt="" /><span>spectate</span>
+            </button>
             <button type="button" data-action="crosshair"><img src="/api/packages/crosshairs/cross_normal.png" alt="" />
               <span>crosshair..</span></button>
             <button type="button" data-action="menu"><img src="/api/packages/icons/exit.jpg" alt="" /><span>main menu</span></button>
@@ -61,6 +64,7 @@ const error = required<HTMLDivElement>("#game-error");
 const deathMenu = required<HTMLElement>("#death-menu");
 const respawnButton = required<HTMLButtonElement>("[data-action='respawn']");
 const pauseMenu = required<HTMLElement>("#pause-menu");
+const spectatorButton = required<HTMLButtonElement>("[data-action='spectator']");
 const chat = required<HTMLFormElement>("#chat");
 const chatInput = required<HTMLInputElement>("#chat-input");
 const chatPrompt = required<HTMLLabelElement>("#chat-prompt");
@@ -77,13 +81,20 @@ scene.setLocalGameMode(localGameMode);
 gameConsole.add(`game mode is ${gameModeName(localGameMode)}`, "game-info");
 scene.onMultiplayer((event) => {
   if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMap.toLocaleLowerCase()) void loadMap(event.map);
-  if (event.type === "players" || event.type === "spawn") syncDeathMenu();
+  if (event.type === "players" || event.type === "spawn") {
+    syncDeathMenu();
+    syncSpectatorButton();
+  }
   if (event.type === "console") gameConsole.add(event.text, event.consoleType);
   if (event.type === "status") gameConsole.add(event.status, event.error ? "error" : "info");
 });
 respawnButton.addEventListener("click", requestRespawn);
 required<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => setPaused(false));
 required<HTMLButtonElement>("[data-action='switch-team']").addEventListener("click", () => { scene.switchTeam(); setPaused(false); });
+spectatorButton.addEventListener("click", () => {
+  scene.setSpectator(!scene.isLocalPlayerSpectator());
+  setPaused(false);
+});
 const crosshairDialog = required<HTMLDialogElement>("#crosshair-dialog");
 bindCrosshairSettings(crosshairDialog);
 required<HTMLButtonElement>("[data-action='crosshair']").addEventListener("click", () => crosshairDialog.showModal());
@@ -193,6 +204,11 @@ function syncDeathMenu(): void {
     respawnButton.textContent = "respawn";
     if (wasDead) canvas.focus();
   }
+}
+
+function syncSpectatorButton(): void {
+  const label = spectatorButton.querySelector("span");
+  if (label) label.textContent = scene.isLocalPlayerSpectator() ? "unspectate" : "spectate";
 }
 
 function setPaused(paused: boolean): void {

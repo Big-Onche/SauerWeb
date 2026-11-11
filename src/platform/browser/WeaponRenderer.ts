@@ -20,6 +20,9 @@ export class WeaponRenderer {
   private readonly hudGuns = new Map<Gun, Mesh[]>();
   private readonly hudMuzzles = new Map<Gun, Vector3>();
   private hudVisible = false;
+  private viewedGun?: Gun;
+  private viewedLastAction = 0;
+  private viewedGunWait = 0;
   private recoilStarted = 0;
 
   constructor(private readonly scene: Scene, events: WeaponEvents, private readonly camera: Camera,
@@ -78,8 +81,17 @@ export class WeaponRenderer {
     this.updateHudGunVisibility();
   }
 
+  setViewedGun(gun?: number, lastAction = 0, gunWait = 0): void {
+    const viewed = gun !== undefined && gun >= Gun.Fist && gun <= Gun.Pistol ? gun as Gun : undefined;
+    const changed = viewed !== this.viewedGun;
+    this.viewedGun = viewed;
+    this.viewedLastAction = lastAction;
+    this.viewedGunWait = gunWait;
+    if (changed) this.updateHudGunVisibility();
+  }
+
   muzzlePosition(): { x: number; y: number; z: number } | undefined {
-    const local = this.hudMuzzles.get(this.controller.inventory.selectedGun);
+    const local = this.hudMuzzles.get(this.viewedGun ?? this.controller.inventory.selectedGun);
     if (!local || !this.hudVisible) return undefined;
     const position = Vector3.TransformCoordinates(local, this.hudRoot.computeWorldMatrix(true));
     return { x: position.x, y: position.z, z: position.y };
@@ -173,14 +185,15 @@ export class WeaponRenderer {
   }
 
   private updateHudGun(): void {
-    const elapsed = performance.now() - this.recoilStarted;
-    const delay = WEAPONS[this.controller.inventory.selectedGun].attackDelay;
+    const viewed = this.viewedGun !== undefined;
+    const elapsed = performance.now() - (viewed ? this.viewedLastAction : this.recoilStarted);
+    const delay = viewed ? this.viewedGunWait : WEAPONS[this.controller.inventory.selectedGun].attackDelay;
     const phase = elapsed < delay ? Math.sin(Math.min(1, elapsed / Math.max(1, delay)) * Math.PI) : 0;
     this.hudRoot.position.copyFrom(new Vector3(0, -0.05 * phase, 0.2 * phase));
   }
 
   private updateHudGunVisibility(): void {
-    const selected = this.controller.inventory.selectedGun;
+    const selected = this.viewedGun ?? this.controller.inventory.selectedGun;
     this.hudGuns.forEach((meshes, gun) => meshes.forEach((mesh) => mesh.setEnabled(this.hudVisible && gun === selected)));
   }
 

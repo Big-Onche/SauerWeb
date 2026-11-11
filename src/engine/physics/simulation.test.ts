@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createInputState } from "./input";
 import { runReplay, type PhysicsReplay } from "./replay";
 import { PhysicsSimulation } from "../physics";
+import { ClientState, PhysicsState } from "./types";
 
 describe("PhysicsSimulation", () => {
   it("is deterministic for an input replay", () => {
@@ -32,5 +33,21 @@ describe("PhysicsSimulation", () => {
     expect(simulation.player.position).toEqual({ x: 1, y: 2, z: 3 });
     expect(simulation.player.yaw).toBe(45);
     expect(simulation.player.timeInAir).toBe(0);
+  });
+
+  it("moves spectators freely in view direction without gravity", () => {
+    const simulation = new PhysicsSimulation();
+    simulation.spawn({ x: 0, y: 0, z: 30 }, 0, 0);
+    simulation.player.alive = false;
+    simulation.player.clientState = ClientState.Spectator;
+    simulation.player.pitch = 90;
+    const start = simulation.player.position.z;
+
+    simulation.update(100, { ...createInputState(), forward: true });
+
+    expect(simulation.player.clientState).toBe(ClientState.Spectator);
+    expect(simulation.player.physicsState).toBe(PhysicsState.Float);
+    expect(simulation.player.position.z).toBeGreaterThan(start);
+    expect(simulation.player.falling).toEqual({ x: 0, y: 0, z: 0 });
   });
 });
