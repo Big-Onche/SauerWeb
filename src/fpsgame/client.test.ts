@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PacketReader } from "../network/protocol";
 import { createClient, serializeShoot, type NetworkPlayer } from "./client";
 import { DMF, DNF, NetworkMessage } from "./game";
@@ -44,6 +44,47 @@ describe("Sauerbraten rifle protocol", () => {
     expect(client.multiplayer.requestRespawn()).toBe(false);
     client.physics.player.alive = false;
     expect(client.multiplayer.requestRespawn()).toBe(true);
+  });
+
+  it("sends N_TRYSPAWN as a reliable standalone message", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    client.multiplayer.clientNumber = 4;
+    client.physics.player.alive = false;
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+
+    client.multiplayer.requestRespawn();
+    client.multiplayer.update(0);
+
+    const spawnCall = send.mock.calls.find(([, bytes]) => new PacketReader(bytes).getInt() === NetworkMessage.TrySpawn);
+    expect(spawnCall).toBeDefined();
+    expect(spawnCall?.[0]).toBe(1);
+    expect(spawnCall?.[2]).toBe(true);
+    const packet = new PacketReader(spawnCall?.[1] ?? new Uint8Array());
+    expect(packet.getInt()).toBe(NetworkMessage.TrySpawn);
+    expect(packet.remaining).toBe(0);
+  });
+
+  it("sends the loaded map CRC reliably before spawning", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    client.multiplayer.clientNumber = 4;
+    client.multiplayer.mapName = "complex";
+    client.multiplayer.setMapInfo("complex", 0xcbf43926);
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+
+    client.multiplayer.update(0);
+
+    const mapCall = send.mock.calls.find(([, bytes]) => new PacketReader(bytes).getInt() === NetworkMessage.MapCrc);
+    expect(mapCall?.[0]).toBe(1);
+    expect(mapCall?.[2]).toBe(true);
+    const packet = new PacketReader(mapCall?.[1] ?? new Uint8Array());
+    expect(packet.getInt()).toBe(NetworkMessage.MapCrc);
+    expect(packet.getString()).toBe("complex");
+    expect(packet.getInt()).toBe(0xcbf43926 | 0);
+    expect(packet.remaining).toBe(0);
   });
 });
 

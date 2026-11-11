@@ -80,9 +80,12 @@ export class MultiplayerClient extends EventTarget {
   private lastUpdate = -1000;
   private lastPing = 0;
   private mapStarted = performance.now();
-  private lastSpawnAttempt = 0;
+  private lastSpawnAttempt = Number.NEGATIVE_INFINITY;
   private respawnRequested = false;
   private mapEntityTypes: number[] = [];
+  private loadedMapName = "";
+  private loadedMapCrc = 0;
+  private mapInfoPending = false;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
     super();
@@ -111,10 +114,15 @@ export class MultiplayerClient extends EventTarget {
     this.clientNumber = -1;
     this.players.clear();
     this.respawnRequested = false;
+    this.lastSpawnAttempt = Number.NEGATIVE_INFINITY;
+    this.mapInfoPending = Boolean(this.loadedMapName);
     this.weapons.controller.serverAuthoritative = false;
     this.syncTargets();
   }
 
+  // Original: src/fpsgame/client.cpp, src/fpsgame/fps.cpp
+  // Functions: sendmessages(), respawnself()
+  // Sauerbraten reference: SVN r6488
   update(nowMilliseconds: number): void {
     if (this.clientNumber < 0 || nowMilliseconds - this.lastUpdate < 33) return;
     this.lastUpdate = nowMilliseconds;
@@ -124,9 +132,14 @@ export class MultiplayerClient extends EventTarget {
       messages.putInt(NetworkMessage.Ping).putInt(Math.trunc(nowMilliseconds));
       this.lastPing = nowMilliseconds;
     }
+    if (this.mapInfoPending && this.mapName.toLocaleLowerCase() === this.loadedMapName.toLocaleLowerCase()) {
+      this.transport.send(1, new PacketWriter().putInt(NetworkMessage.MapCrc).putString(this.loadedMapName)
+        .putInt(this.loadedMapCrc).finish(), true);
+      this.mapInfoPending = false;
+    }
     if (!this.physics.player.alive && (this.respawnRequested || this.weapons.controller.attacking) &&
         nowMilliseconds - this.lastSpawnAttempt >= 1000) {
-      messages.putInt(NetworkMessage.TrySpawn);
+      this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TrySpawn).finish(), true);
       this.lastSpawnAttempt = nowMilliseconds;
     }
     const bytes = messages.finish();
@@ -150,8 +163,18 @@ export class MultiplayerClient extends EventTarget {
   // Sauerbraten reference: SVN r6488
   requestRespawn(): boolean {
     if (!this.connected || this.physics.player.alive) return false;
+    if (!this.respawnRequested) this.lastSpawnAttempt = Number.NEGATIVE_INFINITY;
     this.respawnRequested = true;
     return true;
+  }
+
+  // Original: src/fpsgame/client.cpp
+  // Function: sendmapinfo() / sendmessages()
+  // Sauerbraten reference: SVN r6488
+  setMapInfo(name: string, crc: number): void {
+    this.loadedMapName = name;
+    this.loadedMapCrc = crc;
+    this.mapInfoPending = true;
   }
 
   setMapEntities(entities: readonly { type: number }[]): void {
@@ -248,6 +271,7 @@ export class MultiplayerClient extends EventTarget {
           this.mapName = packet.getString();
           this.gameMode = packet.getInt();
           packet.getInt();
+          this.mapInfoPending = this.loadedMapName.toLocaleLowerCase() === this.mapName.toLocaleLowerCase();
           this.mapStarted = performance.now();
           this.emit({ type: "map-change", map: this.mapName, mode: this.gameMode });
           break;

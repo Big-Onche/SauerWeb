@@ -1,5 +1,6 @@
 import "./style.css";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
+import { crc32 } from "./engine/crc32";
 import { SauerMapParser } from "./engine/worldio";
 import { gameModeName } from "./fpsgame/game";
 import { MapScene } from "./render/MapScene";
@@ -81,9 +82,11 @@ async function loadMap(name: string): Promise<void> {
   try {
     const response = await fetch(`/api/maps/${encodeURIComponent(name)}.ogz`);
     if (!response.ok) throw new Error(`Could not fetch ${name}.ogz (${response.status}).`);
-    const map = parser.parse(await decompressGzip(await response.arrayBuffer()), name);
+    const mapData = await decompressGzip(await response.arrayBuffer());
+    const map = parser.parse(mapData, name);
     const manifest = await loadTextureManifest(name);
     await scene.loadMap(map, resolveMapTextures(map, manifest), manifest.skybox, manifest.lighting, manifest.fog, manifest.mapModels ?? []);
+    scene.setMultiplayerMapInfo(name, crc32(new Uint8Array(mapData)));
     activeMap = name;
     document.title = `${name} — SauerWeb`;
   } catch (caught) {

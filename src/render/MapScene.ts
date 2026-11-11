@@ -385,6 +385,10 @@ export class MapScene {
     return this.fpsClient.multiplayer.requestRespawn();
   }
 
+  setMultiplayerMapInfo(name: string, crc: number): void {
+    this.fpsClient.multiplayer.setMapInfo(name, crc);
+  }
+
   private createEntityMarker(entity: RegisteredMapEntity): void {
     if (entity.category === "empty") return;
     const position = toBabylonPosition(entity.position);
