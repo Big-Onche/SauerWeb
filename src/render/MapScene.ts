@@ -41,6 +41,7 @@ import { ParticleRenderer } from "./ParticleRenderer";
 import { MultiplayerHUD } from "../platform/browser/MultiplayerHUD";
 import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platform/browser/PlayerRenderer";
 import { ClientState } from "../engine/physics/types";
+import type { RuntimeMode } from "../runtime";
 
 export type CameraMode = "free" | "player";
 
@@ -96,8 +97,10 @@ export class MapScene {
   private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
   private debugLoadout = false;
   private playerModel = 0;
+  private localGameMode = 0;
+  private readonly resizeObserver: ResizeObserver;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
     this.canvas = canvas;
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
     installSauerFogDistance();
@@ -113,11 +116,12 @@ export class MapScene {
     this.freeCamera.keysDown = [83, 40];
     this.freeCamera.keysLeft = [65, 37];
     this.freeCamera.keysRight = [68, 39];
-    this.freeCamera.attachControl(canvas, true);
+    if (runtimeMode === "debug") this.freeCamera.attachControl(canvas, true);
     this.playerCamera = this.createCamera("player-camera");
     this.createViewportTuningPostProcess(this.freeCamera);
     this.createViewportTuningPostProcess(this.playerCamera);
-    this.scene.activeCamera = this.freeCamera;
+    this.cameraMode = runtimeMode === "debug" ? "free" : "player";
+    this.scene.activeCamera = runtimeMode === "debug" ? this.freeCamera : this.playerCamera;
     this.physicsInput = new BrowserPhysicsInput(canvas);
     this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
     const viewport = canvas.parentElement;
@@ -125,7 +129,9 @@ export class MapScene {
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
     this.playerRenderer = new PlayerRenderer(this.scene);
-    this.weaponHUD.setVisible(false);
+    this.physicsInput.enabled = runtimeMode === "game";
+    this.weaponInput.enabled = runtimeMode === "game";
+    this.weaponHUD.setVisible(runtimeMode === "game");
     this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera);
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
     new WeaponAudio(this.weapons.events);
@@ -136,8 +142,9 @@ export class MapScene {
       this.updatePhysics(performance.now());
       this.scene.render();
     });
-    window.addEventListener("resize", () => this.engine.resize());
-    new ResizeObserver(() => this.engine.resize()).observe(canvas);
+    window.addEventListener("resize", this.resize);
+    this.resizeObserver = new ResizeObserver(this.resize);
+    this.resizeObserver.observe(canvas);
   }
 
   async loadMap(map: SauerMap, textures: ResolvedTexture[], skyOverrides?: MapSkyOverrides,
@@ -259,6 +266,7 @@ export class MapScene {
   }
 
   setCameraMode(mode: CameraMode): void {
+    if (this.runtimeMode === "game" && mode !== "player") return;
     if (mode === this.cameraMode) return;
     this.cameraMode = mode;
     const playerMode = mode === "player";
@@ -302,8 +310,9 @@ export class MapScene {
 
   resetPlayer(): void {
     this.physics.reset(performance.now());
-    this.weapons.controller.respawn(performance.now());
-    if (this.debugLoadout) this.weapons.controller.inventory.grantMaximumAmmo();
+    if (this.runtimeMode === "game") this.weapons.controller.spawnForGameMode(this.localGameMode, performance.now());
+    else this.weapons.controller.respawn(performance.now());
+    if (this.runtimeMode === "debug" && this.debugLoadout) this.weapons.controller.inventory.grantMaximumAmmo();
     this.weapons.projectiles.clear();
     this.weaponHUD.render();
     this.updatePlayerCamera(this.physics.player.position);
@@ -318,6 +327,7 @@ export class MapScene {
   }
 
   enableDebugLoadout(): void {
+    if (this.runtimeMode !== "debug") return;
     this.debugLoadout = true;
     this.weapons.controller.inventory.grantMaximumAmmo();
     this.weaponHUD.render();
@@ -331,10 +341,37 @@ export class MapScene {
     await this.fpsClient.multiplayer.connect({ ...endpoint, playerModel: this.playerModel });
   }
 
+  setLocalGameMode(mode: number): void {
+    if (this.runtimeMode !== "game") return;
+    this.localGameMode = mode;
+    this.fpsClient.multiplayer.gameMode = mode;
+    this.weapons.controller.spawnForGameMode(mode, performance.now());
+    this.weaponHUD.render();
+  }
+
+  dispose(): void {
+    this.fpsClient.multiplayer.disconnect();
+    this.physicsInput.dispose();
+    this.weaponInput.dispose();
+    this.multiplayerHUD.dispose();
+    this.resizeObserver.disconnect();
+    window.removeEventListener("resize", this.resize);
+    if (document.pointerLockElement === this.canvas) void document.exitPointerLock();
+    this.engine.stopRenderLoop();
+    this.playerRenderer.clear();
+    this.particleRenderer.clear();
+    this.weaponRenderer.clear();
+    this.engine.dispose();
+  }
+
   onMultiplayer(listener: (event: MultiplayerEvent) => void): () => void {
     const wrapped = (event: Event): void => listener((event as CustomEvent<MultiplayerEvent>).detail);
     this.fpsClient.multiplayer.addEventListener("multiplayer", wrapped);
     return () => this.fpsClient.multiplayer.removeEventListener("multiplayer", wrapped);
+  }
+
+  sendChat(text: string): void {
+    this.fpsClient.multiplayer.sendChat(text);
   }
 
   private createEntityMarker(entity: RegisteredMapEntity): void {
@@ -581,8 +618,9 @@ export class MapScene {
     const spawn = playerStart ? { ...playerStart.position, z: playerStart.position.z + 14 } : fallback;
     const spawnYaw = playerStart?.attributes[0] ?? 0;
     this.physics.spawn(spawn, spawnYaw, performance.now());
-    this.weapons.controller.respawn(performance.now());
-    if (this.debugLoadout) this.weapons.controller.inventory.grantMaximumAmmo();
+    if (this.runtimeMode === "game") this.weapons.controller.spawnForGameMode(this.localGameMode, performance.now());
+    else this.weapons.controller.respawn(performance.now());
+    if (this.runtimeMode === "debug" && this.debugLoadout) this.weapons.controller.inventory.grantMaximumAmmo();
     this.weaponHUD.render();
     this.freeCamera.position.copyFrom(toBabylonPosition(spawn));
     const target = this.geometryCenter(batches);
@@ -740,6 +778,8 @@ export class MapScene {
     });
     this.playerCamera.setTarget(this.playerCamera.position.add(direction));
   }
+
+  private readonly resize = (): void => this.engine.resize();
 
   private geometryCenter(batches: GeometryBatch[]): Vector3 | undefined {
     const minimum = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);

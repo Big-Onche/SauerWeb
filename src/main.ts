@@ -2,6 +2,7 @@ import "./menu.css";
 import { refreshservers, servercompatible, servermodename, sortservers, type ServerListItem } from "./engine/serverbrowser";
 import { MAP_MENU_PAGES } from "./menuData";
 import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
+import { gameModeName } from "./fpsgame/game";
 
 interface MapListItem {
   name: string;
@@ -12,6 +13,7 @@ const app = required<HTMLDivElement>("#app");
 
 let availableMaps: Map<string, MapListItem> | undefined;
 let selectedPage = "ffa-1";
+let selectedBotMode = 0;
 let previewMap = "aard3c";
 let serverBrowserServers: ServerListItem[] = [];
 let serverBrowserLoaded = false;
@@ -30,6 +32,10 @@ function route(): void {
   const path = normalizePath(location.pathname);
   if (path === "/debug") {
     void import("./debug");
+    return;
+  }
+  if (path === "/game") {
+    void import("./gameRuntime");
     return;
   }
   document.title = path === "/maps" ? "SauerWeb — Maps" : path === "/servers" ? "SauerWeb — Servers" : "SauerWeb";
@@ -235,7 +241,7 @@ function renderServerList(): void {
 
 function launchServer(server: ServerListItem): void {
   const query = new URLSearchParams({ map: server.map ?? "", server: server.host, port: String(server.port) });
-  location.assign(`/debug?${query}`);
+  location.assign(`/game?${query}`);
 }
 
 function renderMapsMenu(): void {
@@ -250,6 +256,7 @@ function renderMapsMenu(): void {
         ${guiSkinMarkup()}
         <header class="maps-heading">
           <div><p>bot match</p><h1 id="maps-title">choose a map</h1></div>
+          <label class="bot-mode">mode <select id="bot-mode">${botModeOptions()}</select></label>
           <button id="maps-back" class="back-button" type="button">‹ main menu</button>
         </header>
         <nav class="map-tabs" aria-label="Map pages">
@@ -274,6 +281,9 @@ function renderMapsMenu(): void {
     </main>`;
 
   required<HTMLButtonElement>("#maps-back").addEventListener("click", () => navigate("/"));
+  required<HTMLSelectElement>("#bot-mode").addEventListener("change", (event) => {
+    selectedBotMode = Number((event.currentTarget as HTMLSelectElement).value);
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-page]").forEach((button) => button.addEventListener("click", () => {
     selectedPage = button.dataset.page ?? selectedPage;
     previewMap = "";
@@ -314,7 +324,13 @@ async function loadAvailableMaps(): Promise<void> {
 
 function launchMap(name: string): void {
   if (!name || (availableMaps && !availableMaps.get(name)?.supported)) return;
-  location.assign(`/debug?map=${encodeURIComponent(name)}`);
+  const query = new URLSearchParams({ map: name, mode: String(selectedBotMode) });
+  location.assign(`/game?${query}`);
+}
+
+function botModeOptions(): string {
+  const modes = [0, 3, 5, 7, 11, 12, 13, 14, 20];
+  return modes.map((mode) => `<option value="${mode}" ${mode === selectedBotMode ? "selected" : ""}>${escapeHtml(gameModeName(mode))}</option>`).join("");
 }
 
 function menuButton(label: string, action: string, enabled: boolean, icon = "menu"): string {

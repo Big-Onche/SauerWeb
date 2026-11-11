@@ -67,6 +67,9 @@ button { color: inherit; }
 .maps-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 13px; }
 .maps-heading p { margin: 0 0 -4px; color: #d89a52; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .22em; }
 .maps-heading h1 { margin: 0; font-size: 30px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.bot-mode { display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 14px; color: #aab1ad; font-size: 10px;
+  text-transform: uppercase; letter-spacing: .1em; }
+.bot-mode select { padding: 6px 9px; border: 1px solid #6f7776; border-radius: 2px; background: #182020; color: #ffd49b; }
 .back-button { padding: 7px 14px; background: #202829aa; border-color: #7f8b8b; }
 .back-button:hover { border-color: #d9953d; color: #ffd49b; }
 .map-tabs { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid #858f8f; }

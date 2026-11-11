@@ -1,11 +1,12 @@
 import type { Vec3 } from "../../engine/octa";
 import { addScaled, copyVec3, magnitude, normalize, subtract } from "../../engine/physics/vector";
-import type { Damageable } from "./DamageSystem";
+import { ArmourType, type Damageable } from "./DamageSystem";
 import { HitscanSystem, type WeaponWorld } from "./HitscanSystem";
 import { ProjectileSystem } from "./ProjectileSystem";
 import { Gun, WEAPONS } from "./WeaponDefinitions";
 import type { WeaponEvents } from "./WeaponEvents";
 import { WeaponInventory } from "./WeaponInventory";
+import { GameModeFlag, gameModeHas } from "../game";
 
 export class WeaponController {
   readonly inventory = new WeaponInventory();
@@ -85,5 +86,17 @@ export class WeaponController {
     this.gunWait = 0;
     this.lastAttackGun = -1;
     this.quadMilliseconds = 0;
+  }
+
+  spawnForGameMode(mode: number, nowMilliseconds = 0): void {
+    this.respawn(nowMilliseconds);
+    this.inventory.spawnForGameMode(mode);
+    this.owner.maxHealth = 100;
+    this.owner.health = gameModeHas(mode, GameModeFlag.Insta) ? 1 : 100;
+    this.owner.armour = gameModeHas(mode, GameModeFlag.Tactics) || gameModeHas(mode, GameModeFlag.Efficiency) ? 100
+      : gameModeHas(mode, GameModeFlag.Regen) ? 25
+        : gameModeHas(mode, GameModeFlag.Ctf) || gameModeHas(mode, GameModeFlag.Collect) ? 50 : 0;
+    this.owner.armourType = gameModeHas(mode, GameModeFlag.Tactics) || gameModeHas(mode, GameModeFlag.Efficiency)
+      ? ArmourType.Green : ArmourType.Blue;
   }
 }

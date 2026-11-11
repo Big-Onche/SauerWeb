@@ -1,4 +1,5 @@
 import { AMMO_PICKUPS, GUN_COUNT, Gun, PLAYER_GUN_COUNT } from "./WeaponDefinitions";
+import { GameModeFlag, gameModeHas } from "../game";
 
 export class WeaponInventory {
   readonly ammo = new Int32Array(GUN_COUNT);
@@ -14,6 +15,32 @@ export class WeaponInventory {
     this.ammo[Gun.Pistol] = 40;
     this.ammo[Gun.Grenade] = 1;
     this.selectedGun = Gun.Pistol;
+  }
+
+  spawnForGameMode(mode: number, random: () => number = Math.random): void {
+    this.ammo.fill(0);
+    this.ammo[Gun.Fist] = 1;
+    this.selectedGun = Gun.Pistol;
+    if (gameModeHas(mode, GameModeFlag.Insta)) {
+      this.selectedGun = Gun.Rifle;
+      this.ammo[Gun.Rifle] = 100;
+    } else if (gameModeHas(mode, GameModeFlag.Tactics)) {
+      this.ammo[Gun.Pistol] = 40;
+      const first = Gun.Shotgun + Math.floor(random() * 5);
+      let second = Gun.Shotgun + Math.floor(random() * 5);
+      while (second === first) second = Gun.Shotgun + Math.floor(random() * 5);
+      this.selectedGun = first;
+      this.grantBaseAmmo(first, gameModeHas(mode, GameModeFlag.NoItems) ? 2 : 1);
+      this.grantBaseAmmo(second, gameModeHas(mode, GameModeFlag.NoItems) ? 2 : 1);
+      if (gameModeHas(mode, GameModeFlag.NoItems)) this.ammo[Gun.Grenade]++;
+    } else if (gameModeHas(mode, GameModeFlag.Efficiency)) {
+      for (let gun = Gun.Shotgun; gun <= Gun.Grenade; gun++) this.grantBaseAmmo(gun, 2);
+      this.selectedGun = Gun.Chaingun;
+      this.ammo[Gun.Chaingun] = Math.floor(this.ammo[Gun.Chaingun] / 2);
+    } else {
+      this.ammo[Gun.Pistol] = 40;
+      this.ammo[Gun.Grenade] = 1;
+    }
   }
 
   grantMaximumAmmo(): void {
@@ -52,5 +79,10 @@ export class WeaponInventory {
   automaticSwitch(): Gun {
     const order = [Gun.Chaingun, Gun.Rocket, Gun.Shotgun, Gun.Rifle, Gun.Grenade, Gun.Pistol];
     return order.find((gun) => gun !== this.selectedGun && this.hasAmmo(gun)) ?? Gun.Fist;
+  }
+
+  private grantBaseAmmo(gun: Gun, multiplier: number): void {
+    const pickup = AMMO_PICKUPS[gun - Gun.Shotgun];
+    if (pickup) this.ammo[gun] = pickup.add * multiplier;
   }
 }

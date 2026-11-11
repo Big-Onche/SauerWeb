@@ -16,11 +16,16 @@ export class MultiplayerHUD {
     viewport.append(this.root);
     this.status = this.required(".multiplayer-status");
     this.scoreboard = this.required(".multiplayer-scoreboard");
-    client.addEventListener("multiplayer", (event) => this.handle((event as CustomEvent<MultiplayerEvent>).detail));
-    window.addEventListener("keydown", (event) => {
-      if (event.code === "Tab" && this.visible) { event.preventDefault(); this.scoreboard.hidden = false; this.render(); }
-    });
-    window.addEventListener("keyup", (event) => { if (event.code === "Tab") this.scoreboard.hidden = true; });
+    client.addEventListener("multiplayer", this.onMultiplayer);
+    window.addEventListener("keydown", this.onKeyDown);
+    window.addEventListener("keyup", this.onKeyUp);
+  }
+
+  dispose(): void {
+    this.client.removeEventListener("multiplayer", this.onMultiplayer);
+    window.removeEventListener("keydown", this.onKeyDown);
+    window.removeEventListener("keyup", this.onKeyUp);
+    this.root.remove();
   }
 
   setVisible(visible: boolean): void {
@@ -52,6 +57,18 @@ export class MultiplayerHUD {
     else if (event.type === "disconnect") this.connectionStatus = `disconnected (${event.reason})`;
     this.render();
   }
+
+  private readonly onMultiplayer = (event: Event): void => {
+    this.handle((event as CustomEvent<MultiplayerEvent>).detail);
+  };
+
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.code === "Tab" && this.visible) { event.preventDefault(); this.scoreboard.hidden = false; this.render(); }
+  };
+
+  private readonly onKeyUp = (event: KeyboardEvent): void => {
+    if (event.code === "Tab") this.scoreboard.hidden = true;
+  };
 
   private required(selector: string): HTMLDivElement {
     const element = this.root.querySelector<HTMLDivElement>(selector);

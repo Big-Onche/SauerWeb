@@ -41,6 +41,24 @@ describe("Sauerbraten weapon parity", () => {
     expect(Array.from(inventory.ammo.slice(0, 7))).toEqual([1, 30, 60, 15, 15, 30, 120]);
   });
 
+  it("uses the native instagib rifle-only spawn state", () => {
+    const player = createDamageable("player", vector());
+    const system = new WeaponSystem(emptyWorld, player);
+    system.controller.spawnForGameMode(3);
+    expect(player.health).toBe(1);
+    expect(system.controller.inventory.selectedGun).toBe(Gun.Rifle);
+    expect(Array.from(system.controller.inventory.ammo.slice(0, 7))).toEqual([1, 0, 0, 0, 100, 0, 0]);
+  });
+
+  it("uses native efficiency health, armour, and weapon ammo", () => {
+    const player = createDamageable("player", vector());
+    const system = new WeaponSystem(emptyWorld, player);
+    system.controller.spawnForGameMode(5);
+    expect(player).toMatchObject({ health: 100, armour: 100, armourType: ArmourType.Green });
+    expect(system.controller.inventory.selectedGun).toBe(Gun.Chaingun);
+    expect(Array.from(system.controller.inventory.ammo.slice(0, 7))).toEqual([1, 20, 20, 10, 10, 20, 0]);
+  });
+
   it("creates configurable debug targets for local damage tests", () => {
     const target = createDebugTarget("dummy", vector(1, 2, 3), { health: 250, radius: 6, eyeHeight: 18, aboveEye: 3, weight: 150 });
     expect(target).toMatchObject({ health: 250, maxHealth: 250, radius: 6, eyeHeight: 18, aboveEye: 3, weight: 150, alive: true });

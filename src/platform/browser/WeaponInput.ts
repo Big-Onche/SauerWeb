@@ -13,6 +13,16 @@ export class BrowserWeaponInput {
     document.addEventListener("pointerlockchange", this.onPointerLockChange);
   }
 
+  dispose(): void {
+    this.canvas.removeEventListener("pointerdown", this.onPointerDown);
+    window.removeEventListener("pointerup", this.onPointerUp);
+    window.removeEventListener("keydown", this.onKeyDown);
+    this.canvas.removeEventListener("wheel", this.onWheel);
+    window.removeEventListener("blur", this.clear);
+    document.removeEventListener("pointerlockchange", this.onPointerLockChange);
+    this.clear();
+  }
+
   private readonly onPointerDown = (event: PointerEvent): void => {
     if (!this.enabled || event.button !== 0 || document.pointerLockElement !== this.canvas) return;
     this.controller.setAttacking(true);

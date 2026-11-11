@@ -25,6 +25,15 @@ export class BrowserPhysicsInput {
     return sampled;
   }
 
+  dispose(): void {
+    window.removeEventListener("keydown", this.onKeyDown);
+    window.removeEventListener("keyup", this.onKeyUp);
+    window.removeEventListener("blur", this.clear);
+    document.removeEventListener("mousemove", this.onMouseMove);
+    this.canvas.removeEventListener("click", this.onCanvasClick);
+    this.clear();
+  }
+
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (!this.enabled) return;
     this.pressed.add(event.code);

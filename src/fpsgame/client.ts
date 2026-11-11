@@ -130,6 +130,13 @@ export class MultiplayerClient extends EventTarget {
     return [...this.players.values()].sort((left, right) => right.frags - left.frags || left.name.localeCompare(right.name));
   }
 
+  sendChat(text: string): void {
+    const message = text.trim();
+    if (!this.connected || !message) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Text).putString(message).finish(), true);
+    this.transport.flush();
+  }
+
   private handleEnet(event: EnetEvent): void {
     if (event.type === "connect") {
       this.emit({ type: "status", status: "ENet connected; waiting for server" });
@@ -201,9 +208,9 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Welcome:
           this.connected = true;
           this.emit({ type: "status", status: this.serverDescription || "connected" });
-          if (!this.mapName && this.endpoint?.map) {
+          if (!this.mapName && this.endpoint?.map && this.endpoint.mode !== undefined) {
             this.transport.send(1, new PacketWriter().putInt(NetworkMessage.MapVote).putString(this.endpoint.map)
-              .putInt(this.endpoint.mode ?? 3).finish(), true);
+              .putInt(this.endpoint.mode).finish(), true);
             this.transport.flush();
           }
           break;
@@ -321,6 +328,10 @@ export class MultiplayerClient extends EventTarget {
       this.physics.player.alive = true;
       this.physics.player.clientState = ClientState.Alive;
       this.weapons.controller.respawn(performance.now());
+      this.physics.player.health = player.health;
+      this.physics.player.maxHealth = player.maxHealth;
+      this.physics.player.armour = player.armour;
+      this.physics.player.armourType = player.armourType;
       this.weapons.controller.inventory.selectedGun = player.selectedGun;
       this.weapons.controller.inventory.ammo.set(player.ammo);
       this.emit({ type: "spawn" });

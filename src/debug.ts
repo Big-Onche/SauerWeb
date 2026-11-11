@@ -125,7 +125,7 @@ const contrastValue = required<HTMLOutputElement>("#contrast-value");
 const gammaValue = required<HTMLOutputElement>("#gamma-value");
 const vibranceValue = required<HTMLOutputElement>("#vibrance-value");
 const parser = new SauerMapParser();
-const mapScene = new MapScene(canvas);
+const mapScene = new MapScene(canvas, "debug");
 const launchParameters = new URLSearchParams(location.search);
 const multiplayerHost = launchParameters.get("server");
 const multiplayerPort = Number(launchParameters.get("port") || 28785);
@@ -190,6 +190,7 @@ window.addEventListener("keydown", (event) => {
   else if (mapScene.currentCameraMode() === "player" && event.code === "KeyR") mapScene.resetPlayer();
 });
 window.setInterval(() => updatePhysicsDebug(), 100);
+window.addEventListener("pagehide", () => mapScene.dispose(), { once: true });
 
 function setSettingsOpen(open: boolean): void {
   settingsPanel.hidden = !open;

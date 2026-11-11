@@ -3,6 +3,16 @@
 :root { color-scheme: dark; font-family: "Manrope", system-ui, sans-serif; background: #0e110f; color: #ecf1e9; font-synthesis: none; }
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+.game-shell { width: 100%; height: 100%; background: #000; }
+.game-shell .viewport-panel { width: 100%; height: 100%; }
+.game-mode-label { position: absolute; top: 18px; left: 50%; z-index: 4; padding: 6px 12px; border: 1px solid #ffffff25;
+  background: #071010a8; color: #ffc47a; font: 500 12px "DM Mono"; text-transform: uppercase; transform: translateX(-50%); }
+.game-mode-label[hidden], .game-chat[hidden], .game-pause[hidden] { display: none; }
+.game-chat { position: absolute; bottom: 82px; left: 50%; z-index: 30; width: min(620px, 80%); transform: translateX(-50%); }
+.game-chat input { width: 100%; padding: 11px 13px; border: 1px solid #a8b2b2; outline: 0; background: #0b1111e8; color: #fff; }
+.game-pause { position: absolute; inset: 0; z-index: 40; display: grid; place-content: center; gap: 10px; background: #050807b8; text-align: center; }
+.game-pause h1 { margin: 0 0 14px; color: #ffc47a; font: 500 28px "DM Mono"; text-transform: uppercase; }
+.game-pause button { min-width: 220px; padding: 10px 20px; border: 1px solid #899b73; background: #182019ed; cursor: pointer; }
 button, input { font: inherit; }
 button { color: inherit; }
 .shell { display: grid; grid-template-columns: 310px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100%; background: #0e110f; }
