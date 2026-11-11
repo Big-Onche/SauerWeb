@@ -98,6 +98,7 @@ export class MapScene {
   private debugLoadout = false;
   private playerModel = 0;
   private localGameMode = 0;
+  private localDeadAt = 0;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
@@ -298,7 +299,7 @@ export class MapScene {
 
   setThirdPerson(enabled: boolean): void {
     this.thirdperson = enabled;
-    this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !enabled);
+    this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !enabled && !this.isLocalPlayerDead());
     if (this.cameraMode === "player") this.updatePlayerCamera(this.physics.player.position);
   }
 
@@ -374,6 +375,14 @@ export class MapScene {
 
   sendChat(text: string): void {
     this.fpsClient.multiplayer.sendChat(text);
+  }
+
+  isLocalPlayerDead(): boolean {
+    return this.fpsClient.multiplayer.clientNumber >= 0 && !this.physics.player.alive;
+  }
+
+  requestRespawn(): boolean {
+    return this.fpsClient.multiplayer.requestRespawn();
   }
 
   private createEntityMarker(entity: RegisteredMapEntity): void {
@@ -671,6 +680,9 @@ export class MapScene {
 
   private updatePhysics(nowMilliseconds: number): void {
     if (this.cameraMode !== "player") return;
+    const wasDead = this.localDeadAt > 0;
+    if (!this.physics.player.alive && !wasDead) this.localDeadAt = nowMilliseconds;
+    else if (this.physics.player.alive && wasDead) this.localDeadAt = 0;
     const renderPosition = this.physics.update(nowMilliseconds, this.physicsInput.sample());
     const yaw = this.physics.player.yaw * Math.PI / 180;
     const pitch = this.physics.player.pitch * Math.PI / 180;
@@ -686,7 +698,10 @@ export class MapScene {
   }
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
-    if (event.type === "spawn") this.spawnNetworkPlayer();
+    if (event.type === "spawn") {
+      this.spawnNetworkPlayer();
+      this.syncDeathView();
+    } else if (event.type === "players") this.syncDeathView();
   }
 
   private spawnNetworkPlayer(): void {
@@ -702,11 +717,12 @@ export class MapScene {
 
   private updateNetworkPlayers(): void {
     const multiplayer = this.fpsClient.multiplayer;
+    const thirdPersonView = this.thirdperson || this.isLocalPlayerDead();
     const players: RenderPlayer[] = [];
     const localNetworkPlayer = multiplayer.players.get(multiplayer.clientNumber);
     for (const [clientNumber, player] of multiplayer.players) {
       const local = clientNumber === multiplayer.clientNumber;
-      if (local && !this.thirdperson) continue;
+      if (local && !thirdPersonView) continue;
       const source = local ? this.physics.player : player;
       players.push({
         id: clientNumber,
@@ -725,10 +741,10 @@ export class MapScene {
         timeInAir: local ? this.physics.player.timeInAir : undefined,
         velocityZ: source.velocity.z + (local ? this.physics.player.falling.z : 0),
         lastPain: player.lastPain,
-        deadAt: player.deadAt,
+        deadAt: player.deadAt || this.localDeadAt,
       });
     }
-    if (this.thirdperson && multiplayer.clientNumber < 0) {
+    if (thirdPersonView && multiplayer.clientNumber < 0) {
       const player = this.physics.player;
       players.push({
         id: -1,
@@ -746,6 +762,7 @@ export class MapScene {
         inWater: player.inWater,
         timeInAir: player.timeInAir,
         velocityZ: player.velocity.z + player.falling.z,
+        deadAt: this.localDeadAt,
       });
     }
     this.playerRenderer.rendergame(players, multiplayer.gameMode, this.teamskins, localNetworkPlayer?.team ?? "", performance.now());
@@ -755,7 +772,7 @@ export class MapScene {
     const yaw = this.physics.player.yaw * Math.PI / 180;
     const pitch = this.physics.player.pitch * Math.PI / 180;
     let cameraPosition = toBabylonPosition(position);
-    if (this.thirdperson) {
+    if (this.thirdperson || this.isLocalPlayerDead()) {
       const desired = thirdpersoncamera(position, this.physics.player.yaw, this.physics.player.pitch);
       const offset = desired.subtract(cameraPosition);
       const distance = offset.length();
@@ -777,6 +794,12 @@ export class MapScene {
   }
 
   private readonly resize = (): void => this.engine.resize();
+
+  private syncDeathView(): void {
+    const dead = this.isLocalPlayerDead();
+    this.weaponHUD.setVisible(this.runtimeMode === "game" && !dead);
+    this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson && !dead);
+  }
 
   private geometryCenter(batches: GeometryBatch[]): Vector3 | undefined {
     const minimum = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);

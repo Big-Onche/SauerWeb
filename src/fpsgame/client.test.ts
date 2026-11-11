@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PacketReader } from "../network/protocol";
-import { serializeShoot, type NetworkPlayer } from "./client";
+import { createClient, serializeShoot, type NetworkPlayer } from "./client";
 import { DMF, DNF, NetworkMessage } from "./game";
 import { createDamageable } from "./weapon/DamageSystem";
 import { Gun } from "./weapon/WeaponDefinitions";
@@ -35,6 +35,15 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.getInt()).toBe(1);
     expect(readVector(packet, DNF)).toEqual({ x: 0, y: 1, z: 0 });
     expect(packet.remaining).toBe(0);
+  });
+
+  it("queues respawn only while connected and dead", () => {
+    const client = createClient();
+    expect(client.multiplayer.requestRespawn()).toBe(false);
+    client.multiplayer.connected = true;
+    expect(client.multiplayer.requestRespawn()).toBe(false);
+    client.physics.player.alive = false;
+    expect(client.multiplayer.requestRespawn()).toBe(true);
   });
 });
 

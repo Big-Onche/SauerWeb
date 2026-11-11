@@ -20,6 +20,11 @@ app.innerHTML = `
       <div id="game-error" class="error" hidden></div>
       <div class="game-mode-label" ${server ? "hidden" : ""}>${escapeHtml(gameModeName(localGameMode))}</div>
       <form id="chat" class="game-chat" hidden><input id="chat-input" maxlength="200" autocomplete="off" aria-label="Chat message" /></form>
+      <section id="death-menu" class="game-death" hidden aria-label="Respawn menu">
+        <p>you died</p>
+        <button type="button" data-action="respawn">respawn</button>
+        <small>press any key to respawn</small>
+      </section>
       <section id="pause-menu" class="game-pause" hidden aria-label="Pause menu">
         <h1>paused</h1>
         <button type="button" data-action="resume">resume game</button>
@@ -31,6 +36,8 @@ app.innerHTML = `
 const canvas = required<HTMLCanvasElement>("#viewport");
 const loading = required<HTMLDivElement>("#game-loading");
 const error = required<HTMLDivElement>("#game-error");
+const deathMenu = required<HTMLElement>("#death-menu");
+const respawnButton = required<HTMLButtonElement>("[data-action='respawn']");
 const pauseMenu = required<HTMLElement>("#pause-menu");
 const chat = required<HTMLFormElement>("#chat");
 const chatInput = required<HTMLInputElement>("#chat-input");
@@ -38,12 +45,15 @@ const scene = new MapScene(canvas, "game");
 const parser = new SauerMapParser();
 let activeMap = "";
 let disposed = false;
+let respawnPending = false;
 
 scene.setPlayerModel(savedPlayerModel());
 scene.setLocalGameMode(localGameMode);
 scene.onMultiplayer((event) => {
   if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMap.toLocaleLowerCase()) void loadMap(event.map);
+  if (event.type === "players" || event.type === "spawn") syncDeathMenu();
 });
+respawnButton.addEventListener("click", requestRespawn);
 required<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => setPaused(false));
 required<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => location.assign("/"));
 chat.addEventListener("submit", (event) => {
@@ -53,7 +63,7 @@ chat.addEventListener("submit", (event) => {
   chat.hidden = true;
   canvas.focus();
 });
-window.addEventListener("keydown", onKeyDown);
+window.addEventListener("keydown", onKeyDown, { capture: true });
 window.addEventListener("pagehide", dispose, { once: true });
 void start();
 
@@ -84,7 +94,11 @@ async function loadMap(name: string): Promise<void> {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  if (event.code === "Escape") {
+  if (!deathMenu.hidden && !event.repeat && event.target !== chatInput) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    requestRespawn();
+  } else if (event.code === "Escape") {
     if (!chat.hidden) { chat.hidden = true; canvas.focus(); }
     else setPaused(pauseMenu.hidden);
   } else if (server && event.code === "KeyT" && chat.hidden && pauseMenu.hidden) {
@@ -92,6 +106,30 @@ function onKeyDown(event: KeyboardEvent): void {
     if (document.pointerLockElement === canvas) void document.exitPointerLock();
     chat.hidden = false;
     chatInput.focus();
+  }
+}
+
+function requestRespawn(): void {
+  if (!scene.requestRespawn()) return;
+  respawnPending = true;
+  respawnButton.disabled = true;
+  respawnButton.textContent = "respawning…";
+}
+
+function syncDeathMenu(): void {
+  const dead = scene.isLocalPlayerDead();
+  const wasDead = !deathMenu.hidden;
+  deathMenu.hidden = !dead;
+  respawnButton.disabled = respawnPending;
+  respawnButton.textContent = respawnPending ? "respawning…" : "respawn";
+  if (dead) {
+    chat.hidden = true;
+    if (document.pointerLockElement === canvas) void document.exitPointerLock();
+  } else {
+    respawnPending = false;
+    respawnButton.disabled = false;
+    respawnButton.textContent = "respawn";
+    if (wasDead) canvas.focus();
   }
 }
 
@@ -105,7 +143,7 @@ function setPaused(paused: boolean): void {
 function dispose(): void {
   if (disposed) return;
   disposed = true;
-  window.removeEventListener("keydown", onKeyDown);
+  window.removeEventListener("keydown", onKeyDown, { capture: true });
   scene.dispose();
 }
 

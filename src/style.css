@@ -7,12 +7,22 @@ html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .game-shell .viewport-panel { width: 100%; height: 100%; }
 .game-mode-label { position: absolute; top: 18px; left: 50%; z-index: 4; padding: 6px 12px; border: 1px solid #ffffff25;
   background: #071010a8; color: #ffc47a; font: 500 12px "DM Mono"; text-transform: uppercase; transform: translateX(-50%); }
-.game-mode-label[hidden], .game-chat[hidden], .game-pause[hidden] { display: none; }
+.game-mode-label[hidden], .game-chat[hidden], .game-death[hidden], .game-pause[hidden] { display: none; }
 .game-chat { position: absolute; bottom: 82px; left: 50%; z-index: 30; width: min(620px, 80%); transform: translateX(-50%); }
 .game-chat input { width: 100%; padding: 11px 13px; border: 1px solid #a8b2b2; outline: 0; background: #0b1111e8; color: #fff; }
 .game-pause { position: absolute; inset: 0; z-index: 40; display: grid; place-content: center; gap: 10px; background: #050807b8; text-align: center; }
 .game-pause h1 { margin: 0 0 14px; color: #ffc47a; font: 500 28px "DM Mono"; text-transform: uppercase; }
 .game-pause button { min-width: 220px; padding: 10px 20px; border: 1px solid #899b73; background: #182019ed; cursor: pointer; }
+.game-death { position: absolute; left: 50%; bottom: 88px; z-index: 30; display: grid; min-width: 250px; padding: 17px 20px 15px;
+  border: 1px solid #7f8b8b; background: linear-gradient(135deg, #151b18ed, #0b0f0ded); box-shadow: 0 18px 55px #000b;
+  text-align: center; transform: translateX(-50%); backdrop-filter: blur(10px); }
+.game-death p { margin: 0 0 12px; color: #ffc47a; font: 500 19px "DM Mono"; text-transform: uppercase; letter-spacing: .08em; }
+.game-death button { min-width: 210px; padding: 8px 20px; border: 1px solid #a66e32; border-radius: 2px; background: #7c461fb8;
+  color: #fff; font-size: 17px; text-transform: uppercase; cursor: pointer; text-shadow: 0 2px 2px #000; }
+.game-death button:hover:not(:disabled), .game-death button:focus-visible { border-color: #d9953d; outline: none;
+  background: linear-gradient(90deg, #9b5725dd, #6d3c1cdd); color: #ffd49b; }
+.game-death button:disabled { cursor: wait; opacity: .65; }
+.game-death small { margin-top: 9px; color: #89958d; font: 400 9px "DM Mono"; text-transform: uppercase; letter-spacing: .06em; }
 button, input { font: inherit; }
 button { color: inherit; }
 .shell { display: grid; grid-template-columns: 310px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100%; background: #0e110f; }

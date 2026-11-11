@@ -81,6 +81,7 @@ export class MultiplayerClient extends EventTarget {
   private lastPing = 0;
   private mapStarted = performance.now();
   private lastSpawnAttempt = 0;
+  private respawnRequested = false;
   private mapEntityTypes: number[] = [];
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
@@ -109,6 +110,7 @@ export class MultiplayerClient extends EventTarget {
     this.connected = false;
     this.clientNumber = -1;
     this.players.clear();
+    this.respawnRequested = false;
     this.weapons.controller.serverAuthoritative = false;
     this.syncTargets();
   }
@@ -122,7 +124,8 @@ export class MultiplayerClient extends EventTarget {
       messages.putInt(NetworkMessage.Ping).putInt(Math.trunc(nowMilliseconds));
       this.lastPing = nowMilliseconds;
     }
-    if (!this.physics.player.alive && this.weapons.controller.attacking && nowMilliseconds - this.lastSpawnAttempt >= 1000) {
+    if (!this.physics.player.alive && (this.respawnRequested || this.weapons.controller.attacking) &&
+        nowMilliseconds - this.lastSpawnAttempt >= 1000) {
       messages.putInt(NetworkMessage.TrySpawn);
       this.lastSpawnAttempt = nowMilliseconds;
     }
@@ -140,6 +143,15 @@ export class MultiplayerClient extends EventTarget {
     if (!this.connected || !message) return;
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Text).putString(message).finish(), true);
     this.transport.flush();
+  }
+
+  // Original: src/fpsgame/fps.cpp
+  // Function: respawn() / respawnself()
+  // Sauerbraten reference: SVN r6488
+  requestRespawn(): boolean {
+    if (!this.connected || this.physics.player.alive) return false;
+    this.respawnRequested = true;
+    return true;
   }
 
   setMapEntities(entities: readonly { type: number }[]): void {
@@ -341,6 +353,7 @@ export class MultiplayerClient extends EventTarget {
     player.alive = true;
     player.deadAt = 0;
     if (clientNumber === this.clientNumber) {
+      this.respawnRequested = false;
       this.physics.player.alive = true;
       this.physics.player.clientState = ClientState.Alive;
       this.weapons.controller.respawn(performance.now());
