@@ -23,6 +23,7 @@ export interface ModelGeometryMesh {
   positions: number[];
   uvs: number[];
   indices: number[];
+  bones?: number[];
 }
 
 // Original: src/engine/md5.h
@@ -63,10 +64,12 @@ export function parseMd5(source: string, animationSource?: string, adjustments: 
     if (!vertices.length || !triangles.length || !weights.length) continue;
     const positions = new Array<number>(vertices.length * 3).fill(0);
     const uvs = new Array<number>(vertices.length * 2).fill(0);
+    const bones = new Array<number>(vertices.length).fill(0);
     for (const vertex of vertices) {
       let x = 0;
       let y = 0;
       let z = 0;
+      let dominantBias = -1;
       for (let offset = 0; offset < vertex.weightCount; offset++) {
         const weight = weights[vertex.firstWeight + offset];
         const joint = weight && joints[weight.joint];
@@ -75,13 +78,17 @@ export function parseMd5(source: string, animationSource?: string, adjustments: 
         x += (joint.position[0] + rotated[0]) * weight.bias;
         y += (joint.position[1] + rotated[1]) * weight.bias;
         z += (joint.position[2] + rotated[2]) * weight.bias;
+        if (weight.bias > dominantBias) {
+          dominantBias = weight.bias;
+          bones[vertex.index] = weight.joint;
+        }
       }
       positions.splice(vertex.index * 3, 3, x, z, y);
       uvs.splice(vertex.index * 2, 2, vertex.uv[0] ?? 0, vertex.uv[1] ?? 0);
     }
     const indices: number[] = [];
     for (const triangle of triangles) indices.push(Number(triangle[1]), Number(triangle[2]), Number(triangle[3]));
-    meshes.push({ name, positions, uvs, indices });
+    meshes.push({ name, positions, uvs, indices, bones });
     meshIndex++;
   }
   if (!meshes.length) throw new Error("MD5 model contains no renderable geometry.");
@@ -469,9 +476,12 @@ export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, ani
       texCoordOffset !== undefined && !rangeWithin(texCoordOffset, vertexCount * 8, fileSize)) {
     throw new Error("IQM model has invalid vertex arrays.");
   }
-  const animatedPositions = animationBuffer && blendIndexOffset !== undefined && blendWeightOffset !== undefined &&
-    rangeWithin(blendIndexOffset, vertexCount * 4, fileSize) && rangeWithin(blendWeightOffset, vertexCount * 4, fileSize)
-    ? skinIqmPositions(view, positionOffset, vertexCount, blendIndexOffset, blendWeightOffset, animationBuffer, animationFrame)
+  const hasBlendData = blendIndexOffset !== undefined && blendWeightOffset !== undefined &&
+    rangeWithin(blendIndexOffset, vertexCount * 4, fileSize) && rangeWithin(blendWeightOffset, vertexCount * 4, fileSize);
+  const blendIndices = hasBlendData ? blendIndexOffset! : 0;
+  const blendWeights = hasBlendData ? blendWeightOffset! : 0;
+  const animatedPositions = animationBuffer && hasBlendData
+    ? skinIqmPositions(view, positionOffset, vertexCount, blendIndices, blendWeights, animationBuffer, animationFrame)
     : undefined;
   const meshes: ModelGeometryMesh[] = [];
   for (let meshIndex = 0; meshIndex < meshCount; meshIndex++) {
@@ -487,11 +497,20 @@ export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, ani
     const positions: number[] = [];
     const uvs: number[] = [];
     const indices: number[] = [];
+    const bones: number[] = [];
     for (let index = 0; index < meshVertexCount; index++) {
       const vertexOffset = positionOffset + (firstVertex + index) * 12;
       const source = animatedPositions?.[firstVertex + index] ?? [view.getFloat32(vertexOffset, true), view.getFloat32(vertexOffset + 4, true),
         view.getFloat32(vertexOffset + 8, true)];
       positions.push(source[0], source[2], -source[1]);
+      if (hasBlendData) {
+        let dominantBlend = 0;
+        for (let blend = 1; blend < 4; blend++) {
+          if (view.getUint8(blendWeights + (firstVertex + index) * 4 + blend) >
+              view.getUint8(blendWeights + (firstVertex + index) * 4 + dominantBlend)) dominantBlend = blend;
+        }
+        bones.push(view.getUint8(blendIndices + (firstVertex + index) * 4 + dominantBlend));
+      }
       if (texCoordOffset !== undefined) {
         const uvOffset = texCoordOffset + (firstVertex + index) * 8;
         uvs.push(view.getFloat32(uvOffset, true), view.getFloat32(uvOffset + 4, true));
@@ -507,6 +526,7 @@ export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, ani
       positions,
       uvs,
       indices,
+      bones: bones.length ? bones : undefined,
     });
   }
   if (!meshes.length) throw new Error("IQM model contains no renderable geometry.");

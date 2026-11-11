@@ -58,7 +58,9 @@ describe("MD5 model loading", () => {
     const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
 
     expect(md5AnimationInfo(animation).frameCount).toBeGreaterThan(1);
-    expect(parseMd5(mesh, animation, [], 1).meshes[0].positions).not.toEqual(parseMd5(mesh, animation, [], 0).meshes[0].positions);
+    const firstFrame = parseMd5(mesh, animation, [], 0).meshes[0];
+    expect(parseMd5(mesh, animation, [], 1).meshes[0].positions).not.toEqual(firstFrame.positions);
+    expect(firstFrame.bones).toHaveLength(firstFrame.positions.length / 3);
   });
 
   it("interpolates skinned player geometry between animation frames", () => {
@@ -82,6 +84,8 @@ describe("MD5 model loading", () => {
     const animation = animationBytes.buffer.slice(animationBytes.byteOffset, animationBytes.byteOffset + animationBytes.byteLength) as ArrayBuffer;
 
     expect(iqmAnimationInfo(animation).frameCount).toBeGreaterThan(1);
-    expect(parseIqm(mesh, animation, 1).meshes[0].positions).not.toEqual(parseIqm(mesh, animation, 0).meshes[0].positions);
+    const firstFrame = parseIqm(mesh, animation, 0).meshes[0];
+    expect(parseIqm(mesh, animation, 1).meshes[0].positions).not.toEqual(firstFrame.positions);
+    expect(firstFrame.bones).toHaveLength(firstFrame.positions.length / 3);
   });
 });

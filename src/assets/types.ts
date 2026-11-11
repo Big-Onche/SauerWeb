@@ -112,6 +112,7 @@ export interface PlayerModelAsset {
   blueTeam: MapModelAsset;
   redTeam: MapModelAsset;
   animations: Record<string, PlayerModelAnimation>;
+  ragdollPath?: string;
 }
 
 export interface PlayerModelAnimation {

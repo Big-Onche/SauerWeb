@@ -9,9 +9,12 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { MapModelAsset, PlayerModelAsset, ViewWeaponAsset } from "../../assets/types";
 import { packageAssetUrl } from "../../assets/TextureResolver";
 import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
+import { parseRagdoll, RAGDOLL_FADE, RAGDOLL_MILLIS, RagdollSimulation, type RagdollCollider,
+  type RagdollSkeleton } from "../../engine/ragdoll";
 import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd5, type ModelGeometry,
   type ModelGeometryMesh, type ModelJointPose } from "../../engine/rendermodel";
 import type { Vec3 } from "../../engine/octa";
+import { ClientState } from "../../engine/physics/types";
 import { getplayermodelinfo, playerSkin, renderclient, type RenderClientState } from "../../fpsgame/render";
 import { toBabylonPosition } from "../../render/coordinates";
 import { selectModelSkin } from "../../render/modelSkin";
@@ -41,38 +44,92 @@ interface PlayerModelInstance {
   animation: string;
   frame: number;
   updateToken: number;
+  ragdoll?: PlayerRagdollState;
 }
 
-// Browser counterpart of src/fpsgame/render.cpp's model batching. Ragdoll state is deliberately not represented yet.
+interface RagdollMeshBinding {
+  positions: number[];
+  joints: number[];
+  jointPositions: number[];
+}
+
+interface RagdollJointTransform {
+  origin: Vector3;
+  axes: [Vector3, Vector3, Vector3];
+}
+
+interface PlayerRagdollState {
+  deadAt: number;
+  simulation: RagdollSimulation;
+  bindings: RagdollMeshBinding[];
+  inverseWorld: ReturnType<TransformNode["computeWorldMatrix"]>;
+}
+
+interface SavedRagdoll {
+  instance: PlayerModelInstance;
+  expiresAt: number;
+}
+
+// Browser counterpart of src/fpsgame/render.cpp's model batching and src/engine/ragdoll.h's death simulation.
 export class PlayerRenderer {
   private readonly instances = new Map<number, PlayerModelInstance>();
+  private readonly savedRagdolls: SavedRagdoll[] = [];
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly textSources = new Map<string, Promise<string>>();
   private readonly binarySources = new Map<string, Promise<ArrayBuffer>>();
   private readonly geometryFrames = new Map<string, ModelGeometry>();
+  private readonly ragdollSkeletons = new Map<string, Promise<RagdollSkeleton>>();
   private assets?: Promise<PlayerModelAsset[]>;
   private viewWeapons?: Promise<ViewWeaponAsset[]>;
 
-  constructor(private readonly scene: Scene) {}
+  constructor(private readonly scene: Scene, private readonly ragdollCollider?: RagdollCollider) {}
 
   rendergame(players: readonly RenderPlayer[], gameMode: number, teamskins: boolean, localTeam: string, nowMilliseconds: number): void {
     const active = new Set<number>();
     for (const player of players) {
       active.add(player.id);
+      const existing = this.instances.get(player.id);
+      if (existing?.ragdoll && (player.state !== ClientState.Dead || existing.ragdoll.deadAt !== (player.deadAt ?? 0))) {
+        this.saveRagdoll(player.id, existing, nowMilliseconds);
+      }
       this.renderplayer(player, gameMode, teamskins, localTeam, nowMilliseconds);
     }
     for (const [id, instance] of this.instances) {
       if (active.has(id)) continue;
-      this.disposeInstance(instance);
+      if (instance.ragdoll) this.saveRagdoll(id, instance, nowMilliseconds);
+      else this.disposeInstance(instance);
       this.instances.delete(id);
+    }
+    for (let index = this.savedRagdolls.length - 1; index >= 0; index--) {
+      const saved = this.savedRagdolls[index];
+      if (nowMilliseconds >= saved.expiresAt) {
+        this.disposeInstance(saved.instance);
+        this.savedRagdolls.splice(index, 1);
+        continue;
+      }
+      saved.instance.ragdoll?.simulation.move(nowMilliseconds);
+      this.applyRagdoll(saved.instance);
+      const visibility = Math.min(1, (saved.expiresAt - nowMilliseconds) / RAGDOLL_FADE);
+      saved.instance.meshes.forEach((mesh) => mesh.visibility = visibility);
     }
   }
 
   clear(): void {
     this.instances.forEach((instance) => this.disposeInstance(instance));
     this.instances.clear();
+    this.savedRagdolls.forEach((saved) => this.disposeInstance(saved.instance));
+    this.savedRagdolls.length = 0;
     this.materials.forEach((material) => material.dispose(true, true));
     this.materials.clear();
+  }
+
+  private saveRagdoll(id: number, instance: PlayerModelInstance, nowMilliseconds: number): void {
+    const deadAt = instance.ragdoll?.deadAt ?? nowMilliseconds;
+    const fadeStart = deadAt + Math.max(RAGDOLL_MILLIS - RAGDOLL_FADE, 0);
+    const expiresAt = nowMilliseconds > fadeStart ? nowMilliseconds + Math.min(RAGDOLL_MILLIS, RAGDOLL_FADE) : deadAt + RAGDOLL_MILLIS;
+    this.instances.delete(id);
+    instance.root.name = `ragdoll-${id}-${deadAt}`;
+    this.savedRagdolls.push({ instance, expiresAt });
   }
 
   flagAttachmentPosition(playerId: number, eyeHeight = 14, aboveEye = 1): Vector3 | undefined {
@@ -99,7 +156,9 @@ export class PlayerRenderer {
     }
     instance.root.setEnabled(player.visible);
     const targetPosition = toBabylonPosition(player.position);
-    instance.root.position.copyFrom(targetPosition);
+    if (!instance.ragdoll || player.state !== ClientState.Dead || instance.ragdoll.deadAt !== (player.deadAt ?? 0)) {
+      instance.root.position.copyFrom(targetPosition);
+    }
     if (!player.visible) return;
     const model = getplayermodelinfo(player.model);
     const skin = playerSkin(gameMode, teamskins, localTeam, player.team, player.local);
@@ -111,11 +170,15 @@ export class PlayerRenderer {
       : animation === "pain" ? Math.max(0, nowMilliseconds - (player.lastPain ?? nowMilliseconds))
         : animation === "jump" ? player.timeInAir ?? 0 : attacking ? Math.max(0, nowMilliseconds - player.lastAction) : nowMilliseconds;
     const loop = !attacking && animation !== "dying" && animation !== "pain" && animation !== "jump";
-    void this.updateModel(instance, model.index, skin, visualKey, animation, animationMilliseconds, loop, player.yaw, player.selectedGun);
+    if (player.state !== ClientState.Dead) instance.ragdoll = undefined;
+    void this.updateModel(instance, model.index, skin, visualKey, animation, animationMilliseconds, loop, player.yaw, player.selectedGun,
+      player.state === ClientState.Dead ? player.deadAt ?? 0 : undefined, nowMilliseconds,
+      player.velocity ?? { x: 0, y: 0, z: player.velocityZ ?? 0 });
   }
 
   private async updateModel(instance: PlayerModelInstance, modelIndex: number, skin: "ffa" | "blueTeam" | "redTeam", visualKey: string,
-                            animation: string, animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number): Promise<void> {
+                            animation: string, animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number,
+                            deadAt: number | undefined, nowMilliseconds: number, velocity: Vec3): Promise<void> {
     const assets = await (this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
       return response.json() as Promise<PlayerModelAsset[]>;
@@ -123,6 +186,11 @@ export class PlayerRenderer {
     const definition = assets[modelIndex] ?? assets[0];
     const asset = definition?.[skin] ?? definition?.ffa;
     if (!definition || !asset || asset.status !== "ready" || !asset.geometryPath) return;
+    if (deadAt !== undefined && instance.ragdoll?.deadAt === deadAt) {
+      instance.ragdoll.simulation.move(nowMilliseconds);
+      this.applyRagdoll(instance);
+      return;
+    }
     const animationSpec = definition.animations[animation] ?? definition.animations.idle;
     const animationPath = animationSpec?.path;
     let position: ModelAnimationPosition = { frame: 0, nextFrame: 0, interpolation: 0 };
@@ -151,9 +219,121 @@ export class PlayerRenderer {
     }
     else this.updateMeshes(instance.meshes, geometry.meshes, asset);
     await this.updateViewWeapon(instance, asset, geometry, selectedGun);
+    if (token !== instance.updateToken) return;
+    if (deadAt !== undefined && definition.ragdollPath) {
+      await this.startRagdoll(instance, definition.ragdollPath, geometry, asset, deadAt, velocity, nowMilliseconds, token);
+      if (token !== instance.updateToken) return;
+      this.disposeWeapon(instance);
+    }
     instance.visualKey = visualKey;
     instance.animation = animation;
     instance.frame = frame;
+  }
+
+  private async startRagdoll(instance: PlayerModelInstance, path: string, geometry: ModelGeometry, asset: MapModelAsset, deadAt: number,
+                             velocity: Vec3, nowMilliseconds: number, token: number): Promise<void> {
+    const skeleton = await this.ragdollSkeleton(path);
+    if (token !== instance.updateToken || !skeleton.vertices.length || instance.ragdoll?.deadAt === deadAt) return;
+    instance.root.computeWorldMatrix(true);
+    const initialLocalVertices = skeleton.vertices.map((vertex) => new Vector3((vertex.x + (asset.translate?.[0] ?? 0)) * (asset.scale ?? 0.25),
+      (vertex.z + (asset.translate?.[2] ?? 0)) * (asset.scale ?? 0.25),
+      (vertex.y + (asset.translate?.[1] ?? 0)) * (asset.scale ?? 0.25)));
+    const worldVertices = initialLocalVertices.map((vertex) => {
+      const point = Vector3.TransformCoordinates(vertex, instance.root.getWorldMatrix());
+      return { x: point.x, y: point.y, z: point.z };
+    });
+    const simulation = new RagdollSimulation(skeleton, worldVertices, { x: velocity.x, y: velocity.z, z: velocity.y }, nowMilliseconds,
+      this.ragdollCollider, asset.scale ?? 0.25);
+    const inverseWorld = instance.root.getWorldMatrix().clone().invert();
+    instance.ragdoll = {
+      deadAt,
+      simulation,
+      inverseWorld,
+      bindings: geometry.meshes.map((mesh) => this.bindRagdollMesh(mesh, asset, skeleton, initialLocalVertices)),
+    };
+  }
+
+  private bindRagdollMesh(mesh: ModelGeometryMesh, asset: MapModelAsset, skeleton: RagdollSkeleton,
+                          particles: readonly Vector3[]): RagdollMeshBinding {
+    const positions = translateAndScale(mesh.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
+    const transforms = this.ragdollJointTransforms(skeleton, particles);
+    const joints: number[] = [];
+    const jointPositions: number[] = [];
+    for (let index = 0; index < positions.length; index += 3) {
+      const vertex = new Vector3(positions[index], positions[index + 1], positions[index + 2]);
+      const bone = mesh.bones?.[index / 3];
+      let closest = bone === undefined ? -1 : skeleton.joints.findIndex((joint) => joint.bone === bone);
+      let closestDistance = Number.POSITIVE_INFINITY;
+      if (closest < 0) transforms.forEach((transform, jointIndex) => {
+        const distance = Vector3.DistanceSquared(vertex, transform.origin);
+        if (distance < closestDistance) {
+          closest = jointIndex;
+          closestDistance = distance;
+        }
+      });
+      closest = Math.max(closest, 0);
+      const transform = transforms[closest];
+      const relative = vertex.subtract(transform.origin);
+      joints.push(closest);
+      jointPositions.push(Vector3.Dot(relative, transform.axes[0]), Vector3.Dot(relative, transform.axes[1]),
+        Vector3.Dot(relative, transform.axes[2]));
+    }
+    return { positions, joints, jointPositions };
+  }
+
+  private applyRagdoll(instance: PlayerModelInstance): void {
+    const ragdoll = instance.ragdoll;
+    if (!ragdoll) return;
+    const currentLocalVertices = ragdoll.simulation.vertices.map((vertex) => Vector3.TransformCoordinates(
+      new Vector3(vertex.position.x, vertex.position.y, vertex.position.z), ragdoll.inverseWorld));
+    const currentJoints = this.ragdollJointTransforms(ragdoll.simulation.skeleton, currentLocalVertices);
+    instance.meshes.forEach((mesh, meshIndex) => {
+      const binding = ragdoll.bindings[meshIndex];
+      if (!binding) return;
+      const positions = binding.positions.slice();
+      for (let vertexIndex = 0; vertexIndex < binding.joints.length; vertexIndex++) {
+        const transform = currentJoints[binding.joints[vertexIndex]];
+        const localOffset = vertexIndex * 3;
+        const point = transform.origin.add(transform.axes[0].scale(binding.jointPositions[localOffset]))
+          .addInPlace(transform.axes[1].scale(binding.jointPositions[localOffset + 1]))
+          .addInPlace(transform.axes[2].scale(binding.jointPositions[localOffset + 2]));
+        const offset = vertexIndex * 3;
+        positions[offset] = point.x;
+        positions[offset + 1] = point.y;
+        positions[offset + 2] = point.z;
+      }
+      const source = { name: mesh.name, positions, indices: Array.from(mesh.getIndices() ?? []),
+        uvs: Array.from(mesh.getVerticesData("uv") ?? []) };
+      this.applyMesh(mesh, source, positions);
+    });
+  }
+
+  private ragdollJointTransforms(skeleton: RagdollSkeleton, vertices: readonly Vector3[]): RagdollJointTransform[] {
+    if (!skeleton.joints.length) {
+      return vertices.map((origin) => ({ origin, axes: [Vector3.Right(), Vector3.Up(), Vector3.Forward()] }));
+    }
+    return skeleton.joints.map((joint) => {
+      const triangle = skeleton.triangles[joint.triangle];
+      const first = vertices[triangle?.vertices[0] ?? 0] ?? Vector3.Zero();
+      const second = vertices[triangle?.vertices[1] ?? 0] ?? first.add(Vector3.Right());
+      const third = vertices[triangle?.vertices[2] ?? 0] ?? first.add(Vector3.Up());
+      const firstAxis = second.subtract(first).normalize();
+      const thirdAxis = Vector3.Cross(firstAxis, third.subtract(first)).normalize();
+      const secondAxis = Vector3.Cross(thirdAxis, firstAxis).normalize();
+      const jointVertices = joint.vertices.filter((index) => index >= 0).map((index) => vertices[index]).filter(Boolean);
+      const origin = jointVertices.length ? jointVertices.reduce((sum, vertex) => sum.addInPlace(vertex), Vector3.Zero())
+        .scaleInPlace(1 / jointVertices.length) : first.add(second).addInPlace(third).scaleInPlace(1 / 3);
+      return { origin, axes: [firstAxis, secondAxis, thirdAxis] };
+    });
+  }
+
+  private ragdollSkeleton(path: string): Promise<RagdollSkeleton> {
+    let skeleton = this.ragdollSkeletons.get(path);
+    if (!skeleton) {
+      skeleton = this.fetchText(path).then(parseRagdoll);
+      this.ragdollSkeletons.set(path, skeleton);
+    }
+    return skeleton;
   }
 
   private async updateViewWeapon(instance: PlayerModelInstance, playerAsset: MapModelAsset, playerGeometry: ModelGeometry,

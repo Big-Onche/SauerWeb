@@ -1,4 +1,5 @@
 import { ClientState, PhysicsState } from "../engine/physics/types";
+import type { Vec3 } from "../engine/octa";
 
 export const PLAYER_MODEL_NAMES = ["mrfixit", "snoutx10k", "ogro2", "inky", "captaincannon"] as const;
 export type PlayerModelName = typeof PLAYER_MODEL_NAMES[number];
@@ -49,6 +50,7 @@ export interface RenderClientState {
   inWater?: number;
   timeInAir?: number;
   velocityZ?: number;
+  velocity?: Vec3;
   lastPain?: number;
   deadAt?: number;
 }

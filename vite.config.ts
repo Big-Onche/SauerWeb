@@ -451,12 +451,16 @@ function resolveMapModels(names: string[]): Array<{
 
 function resolvePlayerModels() {
   const definitions = [
-    { name: "mrfixit", ffa: "mrfixit", blueTeam: "mrfixit/blue", redTeam: "mrfixit/red", animations: "mrfixit/anims.cfg", format: "md5" },
-    { name: "snoutx10k", ffa: "snoutx10k", blueTeam: "snoutx10k/blue", redTeam: "snoutx10k/red", animations: "mrfixit/anims.cfg", format: "md5" },
-    { name: "ogro2", ffa: "ogro2", blueTeam: "ogro2/blue", redTeam: "ogro2/red", animations: "ogro2/anims.cfg", format: "iqm" },
-    { name: "inky", ffa: "inky", blueTeam: "inky/blue", redTeam: "inky/red", animations: "inky/anims.cfg", format: "md5" },
+    { name: "mrfixit", ffa: "mrfixit", blueTeam: "mrfixit/blue", redTeam: "mrfixit/red", animations: "mrfixit/anims.cfg",
+      ragdoll: "mrfixit/ragdoll.cfg", format: "md5" },
+    { name: "snoutx10k", ffa: "snoutx10k", blueTeam: "snoutx10k/blue", redTeam: "snoutx10k/red", animations: "mrfixit/anims.cfg",
+      ragdoll: "mrfixit/ragdoll.cfg", format: "md5" },
+    { name: "ogro2", ffa: "ogro2", blueTeam: "ogro2/blue", redTeam: "ogro2/red", animations: "ogro2/anims.cfg",
+      ragdoll: "ogro2/ragdoll.cfg", format: "iqm" },
+    { name: "inky", ffa: "inky", blueTeam: "inky/blue", redTeam: "inky/red", animations: "inky/anims.cfg",
+      ragdoll: "inky/ragdoll.cfg", format: "md5" },
     { name: "captaincannon", ffa: "captaincannon", blueTeam: "captaincannon/blue", redTeam: "captaincannon/red",
-      animations: "captaincannon/anims.cfg", format: "md5" },
+      animations: "captaincannon/anims.cfg", ragdoll: "captaincannon/ragdoll.cfg", format: "md5" },
   ];
   return definitions.map((definition, index) => {
     const animationConfig = path.join(packagesDirectory, "models", definition.animations);
@@ -482,6 +486,7 @@ function resolvePlayerModels() {
       blueTeam: model(definition.blueTeam),
       redTeam: model(definition.redTeam),
       animations,
+      ragdollPath: packageRelativePath(path.join(packagesDirectory, "models", definition.ragdoll)),
     };
   });
 }

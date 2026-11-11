@@ -139,7 +139,16 @@ export class MapScene {
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
-    this.playerRenderer = new PlayerRenderer(this.scene);
+    this.playerRenderer = new PlayerRenderer(this.scene, (from, to, radius) => {
+      const direction = { x: to.x - from.x, y: to.z - from.z, z: to.y - from.y };
+      const distance = Math.hypot(direction.x, direction.y, direction.z);
+      if (!distance) return undefined;
+      const hit = this.physics.raycast({ x: from.x, y: from.z, z: from.y }, {
+        x: direction.x / distance, y: direction.y / distance, z: direction.z / distance,
+      }, distance, radius, true);
+      return hit ? { position: { x: hit.position.x, y: hit.position.z, z: hit.position.y },
+        normal: { x: hit.normal.x, y: hit.normal.z, z: hit.normal.y } } : undefined;
+    });
     this.ctfRenderer = new CtfRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
     this.weaponInput.enabled = runtimeMode === "game";
@@ -782,6 +791,11 @@ export class MapScene {
         inWater: local ? this.physics.player.inWater : 0,
         timeInAir: local ? this.physics.player.timeInAir : undefined,
         velocityZ: source.velocity.z + (local ? this.physics.player.falling.z : 0),
+        velocity: {
+          x: source.velocity.x + (local ? this.physics.player.falling.x : 0),
+          y: source.velocity.y + (local ? this.physics.player.falling.y : 0),
+          z: source.velocity.z + (local ? this.physics.player.falling.z : 0),
+        },
         lastPain: player.lastPain,
         deadAt: player.deadAt || this.localDeadAt,
       });
@@ -808,6 +822,11 @@ export class MapScene {
         inWater: player.inWater,
         timeInAir: player.timeInAir,
         velocityZ: player.velocity.z + player.falling.z,
+        velocity: {
+          x: player.velocity.x + player.falling.x,
+          y: player.velocity.y + player.falling.y,
+          z: player.velocity.z + player.falling.z,
+        },
         deadAt: this.localDeadAt,
       });
     }
