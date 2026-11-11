@@ -96,6 +96,8 @@ export interface Md5AnimationInfo {
 export function interpolateModelGeometry(current: ModelGeometry, next: ModelGeometry, interpolation: number): ModelGeometry {
   if (interpolation <= 0 || current.meshes.length !== next.meshes.length) return current;
   const amount = Math.min(interpolation, 1);
+  const joints = current.joints && next.joints && current.joints.length === next.joints.length
+    ? current.joints.map((joint, index) => interpolateJointPose(joint, next.joints![index], amount)) : current.joints;
   return {
     meshes: current.meshes.map((mesh, meshIndex) => {
       const nextMesh = next.meshes[meshIndex];
@@ -105,6 +107,20 @@ export function interpolateModelGeometry(current: ModelGeometry, next: ModelGeom
         positions: mesh.positions.map((position, index) => position + (nextMesh.positions[index] - position) * amount),
       };
     }),
+    joints,
+  };
+}
+
+function interpolateJointPose(current: ModelJointPose, next: ModelJointPose, amount: number): ModelJointPose {
+  const direction = current.orientation.reduce((sum, value, index) => sum + value * next.orientation[index], 0) < 0 ? -1 : 1;
+  const orientation = current.orientation.map((value, index) => value + (next.orientation[index] * direction - value) * amount) as
+    [number, number, number, number];
+  const length = Math.hypot(...orientation) || 1;
+  return {
+    name: current.name,
+    parent: current.parent,
+    position: current.position.map((value, index) => value + (next.position[index] - value) * amount) as [number, number, number],
+    orientation: orientation.map((value) => value / length) as [number, number, number, number],
   };
 }
 
@@ -494,7 +510,30 @@ export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, ani
     });
   }
   if (!meshes.length) throw new Error("IQM model contains no renderable geometry.");
-  return { meshes };
+  const joints = iqmJointPoses(view, animationBuffer, animationFrame);
+  return { meshes, joints };
+}
+
+function iqmJointPoses(view: DataView, animationBuffer: ArrayBuffer | undefined, animationFrame: number): ModelJointPose[] | undefined {
+  const jointCount = view.getUint32(68, true);
+  const jointOffset = view.getUint32(72, true);
+  const textSize = view.getUint32(28, true);
+  const textOffset = view.getUint32(32, true);
+  if (!jointCount || !rangeWithin(jointOffset, jointCount * 48, view.byteLength)) return undefined;
+  const source = animationBuffer ? new DataView(animationBuffer) : undefined;
+  const animated = source && source.getUint32(76, true) === jointCount
+    ? readIqmFrame(source, source.getUint32(80, true), jointCount, animationFrame) : readIqmJoints(view, jointOffset, jointCount);
+  return animated.map((transform, index) => {
+    const entry = jointOffset + index * 48;
+    const nameOffset = view.getUint32(entry, true);
+    const orientation = transform.orientation;
+    return {
+      name: readAscii(view, textOffset + nameOffset, Math.max(0, textSize - nameOffset)),
+      parent: view.getInt32(entry + 4, true),
+      position: [transform.position[0], -transform.position[1], transform.position[2]],
+      orientation: [-orientation[0], orientation[1], -orientation[2], orientation[3]],
+    };
+  });
 }
 
 interface IqmTransform {

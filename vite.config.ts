@@ -507,6 +507,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
   let geometryPath: string | undefined;
   const skins: Array<{ mesh: string; diffusePath: string; masksPath?: string }> = [];
   const meshSettings: Array<{ mesh: string; cullFace?: boolean }> = [];
+  const tags: Record<string, string> = {};
   const source = fs.readFileSync(configPath, "utf8");
   for (const statement of splitStatements(source)) {
     const tokens = tokenize(statement.text);
@@ -527,6 +528,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     else if (command === `${format.toLowerCase()}cullface` && args[0]) {
       meshSettings.push({ mesh: args[0], cullFace: numberArg(args[1], 1) !== 0 });
     }
+    else if (command === `${format.toLowerCase()}tag` && args[0] && args[1]) tags[args[1].toLowerCase()] = args[0];
     else if (command === "mdltrans") settings.translate = [numberArg(args[0], 0), numberArg(args[1], 0), numberArg(args[2], 0)];
     else if (command === "mdlyaw") settings.yaw = numberArg(args[0], 0);
     else if (command === "mdlpitch") settings.pitch = numberArg(args[0], 0);
@@ -571,9 +573,18 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     geometryPath,
     skins,
     meshSettings,
+    tags,
     ...settings,
     reason: "",
   };
+}
+
+function resolveViewWeapons() {
+  const names = ["fist", "shotg", "chaing", "rocket", "rifle", "gl", "pistol"];
+  return names.map((model, gun) => {
+    const directory = path.join(packagesDirectory, "models", "vwep", model);
+    return { ...resolveRenderableMapModel(gun, `vwep/${model}`, directory, path.join(directory, "md5.cfg"), "MD5"), gun };
+  });
 }
 
 function findModelDefault(modelDirectory: string, configDirectory: string, extension: string): string | undefined {
@@ -640,6 +651,8 @@ function resolveHudGuns() {
       hands,
       handsAnimationPath: resolveModelAssetPath(directory, pose.animations[0]),
       weaponAnimationPath: resolveModelAssetPath(directory, pose.animations[1]),
+      handsShootAnimationPath: resolveModelAssetPath(directory, pose.shootAnimations[0] || pose.animations[0]),
+      weaponShootAnimationPath: resolveModelAssetPath(directory, pose.shootAnimations[1] || pose.animations[1]),
       attachmentBone,
       handsAdjustments: pose.adjustments[0],
       weaponAdjustments: pose.adjustments[1],
@@ -650,6 +663,7 @@ function resolveHudGuns() {
 function resolveHudGunPose(source: string) {
   type Adjustment = { bone: string; yaw: number; pitch: number; roll: number; translate: [number, number, number] };
   const animations = ["", ""];
+  const shootAnimations = ["", ""];
   const adjustments: [Adjustment[], Adjustment[]] = [[], []];
   let part = 0;
   let current = new Map<string, Adjustment>();
@@ -671,9 +685,11 @@ function resolveHudGunPose(source: string) {
     } else if (command === "md5anim" && args[0]?.toLowerCase() === "gun idle" && !animations[part]) {
       animations[part] = args[1] ?? "";
       adjustments[part] = [...current.values()];
+    } else if (command === "md5anim" && args[0]?.toLowerCase() === "gun shoot" && !shootAnimations[part]) {
+      shootAnimations[part] = args[1] ?? "";
     }
   }
-  return { animations, adjustments };
+  return { animations, shootAnimations, adjustments };
 }
 
 function sauerMapsPlugin(): Plugin {
@@ -694,6 +710,11 @@ function sauerMapsPlugin(): Plugin {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         response.setHeader("Cache-Control", "no-store");
         response.end(JSON.stringify(resolvePlayerModels()));
+      });
+      server.middlewares.use("/api/viewweapons", (_request, response) => {
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.end(JSON.stringify(resolveViewWeapons()));
       });
       server.middlewares.use("/api/packages", (request, response, next) => {
         let requestedPath: string;

@@ -46,9 +46,15 @@ export interface HudGunAsset {
   hands: MapModelAsset;
   handsAnimationPath: string;
   weaponAnimationPath: string;
+  handsShootAnimationPath: string;
+  weaponShootAnimationPath: string;
   attachmentBone: string;
   handsAdjustments: HudGunAdjustment[];
   weaponAdjustments: HudGunAdjustment[];
+}
+
+export interface ViewWeaponAsset extends MapModelAsset {
+  gun: number;
 }
 
 export interface HudGunAdjustment {
@@ -66,6 +72,7 @@ export interface MapModelAsset {
   format?: string;
   configPath?: string;
   geometryPath?: string;
+  tags?: Record<string, string>;
   skins?: MapModelSkin[];
   meshSettings?: MapModelMeshSettings[];
   scale?: number;

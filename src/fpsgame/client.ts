@@ -558,7 +558,7 @@ export class MultiplayerClient extends EventTarget {
     const to = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
     const player = this.players.get(clientNumber);
     if (player) this.applyShotEffects(player, gun);
-    this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [] });
+    this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [], clientNumber });
     this.emit({ type: "remote-shot", clientNumber, gun, from, to });
   }
 
@@ -585,7 +585,7 @@ export class MultiplayerClient extends EventTarget {
     for (let hit = 0; hit < hitCount; hit++) for (let field = 0; field < 7; field++) packet.getInt();
     const player = this.players.get(sender);
     if (player) this.applyShotEffects(player, gun);
-    this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [] });
+    this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [], clientNumber: sender });
     this.emit({ type: "remote-shot", clientNumber: sender, gun, from, to });
   }
 

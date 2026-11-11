@@ -32,6 +32,7 @@ interface SpriteEffect {
   startScale: number;
   endScale: number;
   light?: PointLight;
+  track?: () => Vec3 | undefined;
 }
 
 interface ProjectileEffect {
@@ -77,7 +78,8 @@ export class ParticleRenderer {
   private readonly effects: SpriteEffect[] = [];
   private readonly projectiles = new Map<number, ProjectileEffect>();
 
-  constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera) {
+  constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera,
+              private readonly taggedMuzzle: (event: WeaponEvent) => Vec3 | undefined) {
     events.on((event) => this.handleWeaponEvent(event));
   }
 
@@ -198,7 +200,8 @@ export class ParticleRenderer {
   }
 
   private handleWeaponEvent(event: WeaponEvent): void {
-    if (event.type === "shot" || event.type === "shot-effect") this.shot(event.gun, event.from, event.to, event.rays);
+    if (event.type === "shot" || event.type === "shot-effect") this.shot(event.gun, event.from, event.to, event.rays,
+      () => this.taggedMuzzle(event));
     else if (event.type === "projectile-spawned") this.spawnProjectile(event.id, event.gun, event.position);
     else if (event.type === "projectile-moved") this.moveProjectile(event.id, event.position);
     else if (event.type === "explosion") this.explosion(event.gun, event.position, event.radius);
@@ -207,26 +210,26 @@ export class ParticleRenderer {
   // Original: src/fpsgame/weapon.cpp
   // Function: shoteffects()
   // Sauerbraten reference: SVN r6488
-  private shot(gun: Gun, from: Vec3, to: Vec3, rays: Vec3[]): void {
+  private shot(gun: Gun, from: Vec3, to: Vec3, rays: Vec3[], taggedMuzzle?: () => Vec3 | undefined): void {
     const endpoints = rays.length ? rays : [to];
-    const muzzle = this.muzzlePosition(from);
+    const muzzle = taggedMuzzle?.() ?? this.muzzlePosition(from, to);
     if (gun === Gun.Shotgun) {
       endpoints.forEach((endpoint) => {
         this.sparks(endpoint, 20, 250);
         this.beam(muzzle, endpoint, "flare.jpg", 0xffc864, 0.28, 300);
       });
-      this.muzzleFlash(muzzle, "muzzleflash3.jpg", 2.75, 200, 30);
+      this.muzzleFlash(muzzle, "muzzleflash3.jpg", 2.75, 200, 30, taggedMuzzle);
     } else if (gun === Gun.Chaingun || gun === Gun.Pistol) {
       this.sparks(endpoints[0], 200, 250);
       this.beam(muzzle, endpoints[0], "flare.jpg", 0xffc864, 0.28, 600);
       this.muzzleFlash(muzzle, "muzzleflash1.jpg", gun === Gun.Chaingun ? 2.25 : 1.25, gun === Gun.Chaingun ? 100 : 200,
-        gun === Gun.Chaingun ? 30 : 15);
+        gun === Gun.Chaingun ? 30 : 15, taggedMuzzle);
     } else if (gun === Gun.Rifle) {
       this.sparks(endpoints[0], 200, 250);
       this.trail(muzzle, endpoints[0], "smoke.png", 0x404040, 0.6, 500, 20);
-      this.muzzleFlash(muzzle, "muzzleflash3.jpg", 1.25, 150, 25);
-    } else if (gun === Gun.Rocket) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 3, 250);
-    else if (gun === Gun.Grenade) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 1.5, 200, 20);
+      this.muzzleFlash(muzzle, "muzzleflash3.jpg", 1.25, 150, 25, taggedMuzzle);
+    } else if (gun === Gun.Rocket) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 3, 250, 0, taggedMuzzle);
+    else if (gun === Gun.Grenade) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 1.5, 200, 20, taggedMuzzle);
   }
 
   private spawnProjectile(id: number, gun: Gun, position: Vec3): void {
@@ -390,17 +393,20 @@ export class ParticleRenderer {
     return new Vector3(randomRange(low.x, high.x), randomRange(low.y, high.y), randomRange(low.z, high.z)).scale(options.speed ?? 0);
   }
 
-  private muzzlePosition(fallback: Vec3): Vec3 {
-    if (this.scene.activeCamera !== this.playerCamera) return fallback;
-    const forward = this.playerCamera.getForwardRay().direction;
+  private muzzlePosition(from: Vec3, to: Vec3): Vec3 {
+    if (this.scene.activeCamera !== this.playerCamera) return from;
+    const forward = toBabylonDirection({ x: to.x - from.x, y: to.y - from.y, z: to.z - from.z }).normalize();
     const up = this.playerCamera.upVector.normalizeToNew();
     const right = Vector3.Cross(forward, up).normalize();
-    const position = this.playerCamera.globalPosition.add(forward.scale(2.5)).add(right.scale(0.65)).subtract(up.scale(0.45));
-    return { x: position.x, y: -position.z, z: position.y };
+    const position = toBabylonPosition(from).add(forward.scale(2)).add(right.scale(0.8)).subtract(up);
+    return { x: position.x, y: position.z, z: position.y };
   }
 
-  private muzzleFlash(position: Vec3, texture: ParticleTexture, size: number, duration: number, lightRange = 0): void {
-    const effect = this.sprite(position, texture, 0xffffff, size, duration, true);
+  private muzzleFlash(position: Vec3, texture: ParticleTexture, size: number, duration: number, lightRange = 0,
+                      track?: () => Vec3 | undefined): void {
+    // Native muzzle particles use the supplied value as their visible width and PT_TRACK keeps them on tag_muzzle.
+    const effect = this.sprite(position, texture, 0xffffff, size * 0.5, duration, true);
+    effect.track = track;
     if (!lightRange) return;
     const light = new PointLight("weapon-muzzle-light", toBabylonPosition(position), this.scene);
     light.diffuse = new Color3(1, 0.75, 0.5);
@@ -500,6 +506,11 @@ export class ParticleRenderer {
     for (let index = this.effects.length - 1; index >= 0; index--) {
       const effect = this.effects[index];
       const progress = Math.min(1, (now - effect.started) / effect.duration);
+      const trackedPosition = effect.track?.();
+      if (trackedPosition) {
+        effect.mesh.position.copyFrom(toBabylonPosition(trackedPosition));
+        effect.light?.position.copyFrom(effect.mesh.position);
+      }
       effect.material.alpha = 1 - progress;
       effect.mesh.scaling.setAll(effect.startScale + (effect.endScale - effect.startScale) * progress);
       if (effect.light) effect.light.intensity = (1 - progress) * 2;

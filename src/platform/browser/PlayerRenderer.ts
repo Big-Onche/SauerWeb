@@ -6,11 +6,11 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
-import type { MapModelAsset, PlayerModelAsset } from "../../assets/types";
+import type { MapModelAsset, PlayerModelAsset, ViewWeaponAsset } from "../../assets/types";
 import { packageAssetUrl } from "../../assets/TextureResolver";
 import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
 import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd5, type ModelGeometry,
-  type ModelGeometryMesh } from "../../engine/rendermodel";
+  type ModelGeometryMesh, type ModelJointPose } from "../../engine/rendermodel";
 import type { Vec3 } from "../../engine/octa";
 import { getplayermodelinfo, playerSkin, renderclient, type RenderClientState } from "../../fpsgame/render";
 import { toBabylonPosition } from "../../render/coordinates";
@@ -25,11 +25,18 @@ export interface RenderPlayer extends RenderClientState {
   position: Vec3;
   yaw: number;
   pitch: number;
+  selectedGun: number;
+  lastAction: number;
+  lastAttackGun: number;
+  gunWait: number;
 }
 
 interface PlayerModelInstance {
   root: TransformNode;
   meshes: Mesh[];
+  weaponMeshes: Mesh[];
+  weaponKey: string;
+  muzzle?: Vector3;
   visualKey: string;
   animation: string;
   frame: number;
@@ -44,6 +51,7 @@ export class PlayerRenderer {
   private readonly binarySources = new Map<string, Promise<ArrayBuffer>>();
   private readonly geometryFrames = new Map<string, ModelGeometry>();
   private assets?: Promise<PlayerModelAsset[]>;
+  private viewWeapons?: Promise<ViewWeaponAsset[]>;
 
   constructor(private readonly scene: Scene) {}
 
@@ -75,10 +83,18 @@ export class PlayerRenderer {
     return position;
   }
 
+  muzzlePosition(playerId: number): Vec3 | undefined {
+    const instance = this.instances.get(playerId);
+    if (!instance?.muzzle || !instance.root.isEnabled()) return undefined;
+    const position = Vector3.TransformCoordinates(instance.muzzle, instance.root.computeWorldMatrix(true));
+    return { x: position.x, y: position.z, z: position.y };
+  }
+
   private renderplayer(player: RenderPlayer, gameMode: number, teamskins: boolean, localTeam: string, nowMilliseconds: number): void {
     let instance = this.instances.get(player.id);
     if (!instance) {
-      instance = { root: new TransformNode(`player-${player.id}`, this.scene), meshes: [], visualKey: "", animation: "", frame: -1, updateToken: 0 };
+      instance = { root: new TransformNode(`player-${player.id}`, this.scene), meshes: [], weaponMeshes: [], weaponKey: "", visualKey: "",
+        animation: "", frame: -1, updateToken: 0 };
       this.instances.set(player.id, instance);
     }
     instance.root.setEnabled(player.visible);
@@ -87,17 +103,19 @@ export class PlayerRenderer {
     if (!player.visible) return;
     const model = getplayermodelinfo(player.model);
     const skin = playerSkin(gameMode, teamskins, localTeam, player.team, player.local);
-    const visualKey = `${model.index}:${skin}`;
-    const animation = renderclient(player, nowMilliseconds);
+    const visualKey = `${model.index}:${skin}:${player.selectedGun}`;
+    const baseAnimation = renderclient(player, nowMilliseconds);
+    const attacking = player.lastAttackGun === player.selectedGun && nowMilliseconds - player.lastAction < player.gunWait + 50;
+    const animation = attacking ? `attack ${player.selectedGun + 1}` : baseAnimation === "idle" ? `hold ${player.selectedGun + 1}` : baseAnimation;
     const animationMilliseconds = animation === "dying" ? Math.max(0, nowMilliseconds - (player.deadAt ?? nowMilliseconds))
       : animation === "pain" ? Math.max(0, nowMilliseconds - (player.lastPain ?? nowMilliseconds))
-        : animation === "jump" ? player.timeInAir ?? 0 : nowMilliseconds;
-    const loop = animation !== "dying" && animation !== "pain" && animation !== "jump";
-    void this.updateModel(instance, model.index, skin, visualKey, animation, animationMilliseconds, loop, player.yaw);
+        : animation === "jump" ? player.timeInAir ?? 0 : attacking ? Math.max(0, nowMilliseconds - player.lastAction) : nowMilliseconds;
+    const loop = !attacking && animation !== "dying" && animation !== "pain" && animation !== "jump";
+    void this.updateModel(instance, model.index, skin, visualKey, animation, animationMilliseconds, loop, player.yaw, player.selectedGun);
   }
 
   private async updateModel(instance: PlayerModelInstance, modelIndex: number, skin: "ffa" | "blueTeam" | "redTeam", visualKey: string,
-                            animation: string, animationMilliseconds: number, loop: boolean, yaw: number): Promise<void> {
+                            animation: string, animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number): Promise<void> {
     const assets = await (this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
       return response.json() as Promise<PlayerModelAsset[]>;
@@ -132,9 +150,48 @@ export class PlayerRenderer {
       this.createMeshes(instance, definition, asset, geometry);
     }
     else this.updateMeshes(instance.meshes, geometry.meshes, asset);
+    await this.updateViewWeapon(instance, asset, geometry, selectedGun);
     instance.visualKey = visualKey;
     instance.animation = animation;
     instance.frame = frame;
+  }
+
+  private async updateViewWeapon(instance: PlayerModelInstance, playerAsset: MapModelAsset, playerGeometry: ModelGeometry,
+                                 selectedGun: number): Promise<void> {
+    const assets = await (this.viewWeapons ??= fetch("/api/viewweapons", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) throw new Error(`View-weapon manifest request failed (${response.status}).`);
+      return response.json() as Promise<ViewWeaponAsset[]>;
+    }));
+    const asset = assets[selectedGun];
+    const attachmentBone = playerAsset.tags?.tag_weapon;
+    const attachment = playerGeometry.joints?.find((joint) => joint.name === attachmentBone);
+    if (!asset || asset.status !== "ready" || !asset.geometryPath || !attachment) {
+      this.disposeWeapon(instance);
+      return;
+    }
+    const geometry = await this.geometryFrame(asset, undefined, undefined, undefined, 0);
+    if (instance.weaponKey !== asset.name || instance.weaponMeshes.length !== geometry.meshes.length) {
+      this.disposeWeapon(instance);
+      instance.weaponMeshes = geometry.meshes.map((source) => {
+        const mesh = new Mesh(`${instance.root.name}-${asset.name}-${source.name}`, this.scene);
+        mesh.parent = instance.root;
+        mesh.material = this.assetMaterial(`vwep:${asset.gun}`, asset, source.name);
+        mesh.isPickable = false;
+        return mesh;
+      });
+      instance.weaponKey = asset.name;
+    }
+    const playerScale = playerAsset.scale ?? 0.25;
+    const playerTranslate = playerAsset.translate ?? [0, 0, 0];
+    geometry.meshes.forEach((source, index) => {
+      const local = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
+      const positions = attachModelPositions(local, attachment, playerTranslate, playerScale);
+      this.applyMesh(instance.weaponMeshes[index], source, positions);
+    });
+    const muzzleBone = asset.tags?.tag_muzzle;
+    const muzzle = geometry.joints?.find((joint) => joint.name === muzzleBone);
+    instance.muzzle = muzzle ? attachModelPosition(translateAndScalePosition(muzzle.position, asset.translate ?? [0, 0, 0],
+      asset.scale ?? 0.25), attachment, playerTranslate, playerScale) : undefined;
   }
 
   private async geometry(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
@@ -163,7 +220,7 @@ export class PlayerRenderer {
     instance.meshes = geometry.meshes.map((source) => {
       const mesh = new Mesh(`${instance.root.name}-${definition.name}-${source.name}`, this.scene);
       mesh.parent = instance.root;
-      mesh.material = this.material(definition, asset, source.name);
+      mesh.material = this.assetMaterial(`player:${definition.index}`, asset, source.name);
       mesh.isPickable = false;
       return mesh;
     });
@@ -173,20 +230,24 @@ export class PlayerRenderer {
   private updateMeshes(meshes: Mesh[], sources: ModelGeometryMesh[], asset: MapModelAsset): void {
     sources.forEach((source, index) => {
       const positions = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
-      const normals: number[] = [];
-      VertexData.ComputeNormals(positions, source.indices, normals);
-      const data = new VertexData();
-      data.positions = positions;
-      data.indices = source.indices;
-      data.uvs = source.uvs;
-      data.normals = normals;
-      data.applyToMesh(meshes[index], true);
+      this.applyMesh(meshes[index], source, positions);
     });
   }
 
-  private material(definition: PlayerModelAsset, asset: MapModelAsset, meshName: string): StandardMaterial {
+  private applyMesh(mesh: Mesh, source: ModelGeometryMesh, positions: number[]): void {
+    const normals: number[] = [];
+    VertexData.ComputeNormals(positions, source.indices, normals);
+    const data = new VertexData();
+    data.positions = positions;
+    data.indices = source.indices;
+    data.uvs = source.uvs;
+    data.normals = normals;
+    data.applyToMesh(mesh, true);
+  }
+
+  private assetMaterial(prefix: string, asset: MapModelAsset, meshName: string): StandardMaterial {
     const skin = selectModelSkin(asset.skins ?? [], meshName);
-    const key = `${definition.index}:${asset.name}:${meshName}:${skin?.diffusePath ?? ""}`;
+    const key = `${prefix}:${asset.name}:${meshName}:${skin?.diffusePath ?? ""}`;
     const cached = this.materials.get(key);
     if (cached) return cached;
     const material = new StandardMaterial(`player-material-${key}`, this.scene);
@@ -231,7 +292,15 @@ export class PlayerRenderer {
 
   private disposeInstance(instance: PlayerModelInstance): void {
     instance.meshes.forEach((mesh) => mesh.dispose());
+    this.disposeWeapon(instance);
     instance.root.dispose();
+  }
+
+  private disposeWeapon(instance: PlayerModelInstance): void {
+    instance.weaponMeshes.forEach((mesh) => mesh.dispose());
+    instance.weaponMeshes = [];
+    instance.weaponKey = "";
+    instance.muzzle = undefined;
   }
 }
 
@@ -243,6 +312,39 @@ function translateAndScale(positions: number[], translate: [number, number, numb
     result[index + 2] = (positions[index + 2] + translate[1]) * scale;
   }
   return result;
+}
+
+function translateAndScalePosition(position: [number, number, number], translate: [number, number, number], scale: number): Vector3 {
+  return new Vector3((position[0] + translate[0]) * scale, (position[2] + translate[2]) * scale,
+    (position[1] + translate[1]) * scale);
+}
+
+function attachModelPositions(positions: number[], attachment: ModelJointPose, playerTranslate: [number, number, number],
+                              playerScale: number): number[] {
+  const result = new Array<number>(positions.length);
+  for (let index = 0; index < positions.length; index += 3) {
+    const attached = attachModelPosition(new Vector3(positions[index], positions[index + 1], positions[index + 2]), attachment,
+      playerTranslate, playerScale);
+    result.splice(index, 3, attached.x, attached.y, attached.z);
+  }
+  return result;
+}
+
+function attachModelPosition(position: Vector3, attachment: ModelJointPose, playerTranslate: [number, number, number],
+                             playerScale: number): Vector3 {
+  const point = rotateModelPosition(position, attachment.orientation);
+  return point.add(new Vector3((attachment.position[0] + playerTranslate[0]) * playerScale,
+    (attachment.position[2] + playerTranslate[2]) * playerScale, (attachment.position[1] + playerTranslate[1]) * playerScale));
+}
+
+function rotateModelPosition(position: Vector3, orientation: [number, number, number, number]): Vector3 {
+  const point: [number, number, number] = [position.x, position.z, position.y];
+  const [x, y, z, w] = orientation;
+  const tx = 2 * (y * point[2] - z * point[1]);
+  const ty = 2 * (z * point[0] - x * point[2]);
+  const tz = 2 * (x * point[1] - y * point[0]);
+  return new Vector3(point[0] + w * tx + y * tz - z * ty, point[2] + w * tz + x * ty - y * tx,
+    point[1] + w * ty + z * tx - x * tz);
 }
 
 export function thirdpersoncamera(position: Vec3, yaw: number, pitch: number, distance = 20, up = 0, side = 0): Vector3 {

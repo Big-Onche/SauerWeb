@@ -18,6 +18,7 @@ import type { WeaponEvent, WeaponEvents } from "../../fpsgame/weapon/WeaponEvent
 export class WeaponRenderer {
   private readonly hudRoot: TransformNode;
   private readonly hudGuns = new Map<Gun, Mesh[]>();
+  private readonly hudMuzzles = new Map<Gun, Vector3>();
   private hudVisible = false;
   private recoilStarted = 0;
 
@@ -33,6 +34,7 @@ export class WeaponRenderer {
   clear(): void {
     this.hudGuns.forEach((meshes) => meshes.forEach((mesh) => mesh.dispose(false, true)));
     this.hudGuns.clear();
+    this.hudMuzzles.clear();
   }
 
   async loadHudGuns(): Promise<string[]> {
@@ -58,6 +60,9 @@ export class WeaponRenderer {
         if (!attachment) throw new Error(`attachment bone ${asset.attachmentBone} was not found.`);
         const weapon = await this.loadHudComponent(asset.weapon, asset.weaponAnimationPath, asset.weaponAdjustments, asset.gun, attachment);
         meshes.push(...hands.meshes, ...weapon.meshes);
+        const muzzleBone = asset.weapon.tags?.tag_muzzle;
+        const muzzle = weapon.joints?.find((joint) => joint.name === muzzleBone);
+        if (muzzle) this.hudMuzzles.set(asset.gun, this.hudPoint(muzzle.position, asset.weapon, attachment));
       } catch (caught) {
         issues.push(`${asset.model}: ${caught instanceof Error ? caught.message : String(caught)}`);
       }
@@ -71,6 +76,13 @@ export class WeaponRenderer {
   setHudGunVisible(visible: boolean): void {
     this.hudVisible = visible;
     this.updateHudGunVisibility();
+  }
+
+  muzzlePosition(): { x: number; y: number; z: number } | undefined {
+    const local = this.hudMuzzles.get(this.controller.inventory.selectedGun);
+    if (!local || !this.hudVisible) return undefined;
+    const position = Vector3.TransformCoordinates(local, this.hudRoot.computeWorldMatrix(true));
+    return { x: position.x, y: position.z, z: position.y };
   }
 
   private handle(event: WeaponEvent): void {
@@ -128,6 +140,16 @@ export class WeaponRenderer {
     mesh.isPickable = false;
     mesh.alwaysSelectAsActiveMesh = true;
     return mesh;
+  }
+
+  private hudPoint(position: [number, number, number], asset: MapModelAsset, attachment?: ModelJointPose): Vector3 {
+    const point: [number, number, number] = [position[0], position[2], position[1]];
+    const attached = attachment ? attachHudPoint(point, 0, attachment) : point;
+    const scale = asset.scale ?? 0.75;
+    const translate = asset.translate ?? [0, 0, 0];
+    const fovCompensation = Math.tan(this.camera.fov / 2) / Math.tan(65 * Math.PI / 360);
+    return new Vector3((attached[2] + translate[1]) * scale * fovCompensation, (attached[1] + translate[2]) * scale * fovCompensation,
+      -(attached[0] + translate[0]) * scale);
   }
 
   private createHudMaterial(asset: MapModelAsset, skin: MapModelSkin | undefined, key: string): StandardMaterial {

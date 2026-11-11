@@ -144,8 +144,13 @@ export class MapScene {
     this.weaponInput.enabled = runtimeMode === "game";
     this.weaponHUD.setVisible(runtimeMode === "game");
     this.crosshairHUD.setVisible(runtimeMode === "game");
-    this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera);
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
+    this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera, (event) => {
+      if (event.type === "shot") return this.weaponRenderer.muzzlePosition();
+      if (event.type !== "shot-effect") return undefined;
+      if (event.clientNumber === this.fpsClient.multiplayer.clientNumber) return this.weaponRenderer.muzzlePosition();
+      return event.clientNumber === undefined ? undefined : this.playerRenderer.muzzlePosition(event.clientNumber);
+    });
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
     new WeaponAudio(this.weapons.events);
     this.fpsClient.multiplayer.addEventListener("multiplayer", (event) =>
@@ -762,6 +767,10 @@ export class MapScene {
         position: { ...source.position, z: source.position.z - source.eyeHeight },
         yaw: source.yaw,
         pitch: source.pitch,
+        selectedGun: local ? this.weapons.controller.inventory.selectedGun : player.selectedGun,
+        lastAction: local ? this.weapons.controller.lastAction : player.lastAction,
+        lastAttackGun: local ? this.weapons.controller.lastAttackGun : player.lastAttackGun,
+        gunWait: local ? this.weapons.controller.gunWait : player.gunWait,
         state: local ? this.physics.player.clientState : player.state,
         move: source.move,
         strafe: source.strafe,
@@ -784,6 +793,10 @@ export class MapScene {
         position: { ...player.position, z: player.position.z - player.eyeHeight },
         yaw: player.yaw,
         pitch: player.pitch,
+        selectedGun: this.weapons.controller.inventory.selectedGun,
+        lastAction: this.weapons.controller.lastAction,
+        lastAttackGun: this.weapons.controller.lastAttackGun,
+        gunWait: this.weapons.controller.gunWait,
         state: player.clientState,
         move: player.move,
         strafe: player.strafe,

@@ -13,7 +13,7 @@ export type WeaponEvent =
   | { type: "selected"; gun: Gun }
   | { type: "no-ammo"; gun: Gun }
   | { type: "shot"; gun: Gun; millis: number; from: Vec3; to: Vec3; rays: Vec3[]; hits: WeaponHit[] }
-  | { type: "shot-effect"; gun: Gun; from: Vec3; to: Vec3; rays: Vec3[] }
+  | { type: "shot-effect"; gun: Gun; from: Vec3; to: Vec3; rays: Vec3[]; clientNumber?: number }
   | { type: "projectile-spawned"; gun: Gun; id: number; position: Vec3 }
   | { type: "projectile-moved"; gun: Gun; id: number; position: Vec3 }
   | { type: "explosion"; gun: Gun; position: Vec3; radius: number }
