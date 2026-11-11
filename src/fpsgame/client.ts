@@ -339,18 +339,21 @@ export class MultiplayerClient extends EventTarget {
           this.parseMessages(clientNumber, packet.subReader(packet.getUInt()));
           break;
         }
-        case NetworkMessage.MapChange:
+        case NetworkMessage.MapChange: {
           this.mapName = packet.getString();
           this.gameMode = packet.getInt();
           packet.getInt();
-          this.mapInfoPending = this.loadedMapName.toLocaleLowerCase() === this.mapName.toLocaleLowerCase();
+          const mapAlreadyLoaded = this.loadedMapName.toLocaleLowerCase() === this.mapName.toLocaleLowerCase();
+          this.mapInfoPending = mapAlreadyLoaded;
           this.mapStarted = performance.now();
           this.teamScores.clear();
           this.ctfMode.reset();
+          if (mapAlreadyLoaded) this.ctfMode.setup(this.mapEntities, this.gameMode);
           this.captureBases = [];
           this.console(`game mode is ${gameModeName(this.gameMode)}`, "game-info");
           this.emit({ type: "map-change", map: this.mapName, mode: this.gameMode });
           break;
+        }
         case NetworkMessage.InitClient: this.parseInitClient(packet); break;
         case NetworkMessage.ClientDisconnect: {
           const clientNumber = packet.getInt(), player = this.players.get(clientNumber);
