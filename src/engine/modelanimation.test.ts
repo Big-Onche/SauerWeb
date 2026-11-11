@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { modelAnimationFrame, modelAnimationSpeed } from "./modelanimation";
+import { modelAnimationFrame, modelAnimationPosition, modelAnimationSpeed } from "./modelanimation";
 
 describe("model animation timing", () => {
   it("uses Sauerbraten's 10 FPS default when config speed is zero or omitted", () => {
@@ -22,5 +22,11 @@ describe("model animation timing", () => {
     expect(modelAnimationFrame(10, 10, 900, true, 0, -1)).toBe(0);
     expect(modelAnimationFrame(10, 10, 0, true, 2, -1)).toBe(2);
     expect(modelAnimationFrame(10, 10, 700, false, 2, -1)).toBe(8);
+  });
+
+  it("calculates adjacent frames and interpolation like animpos::setframes", () => {
+    expect(modelAnimationPosition(10, 10, 150, true)).toEqual({ frame: 1, nextFrame: 2, interpolation: 0.5 });
+    expect(modelAnimationPosition(10, 10, 950, true)).toEqual({ frame: 9, nextFrame: 0, interpolation: 0.5 });
+    expect(modelAnimationPosition(10, 10, 950, false)).toEqual({ frame: 9, nextFrame: 9, interpolation: 0.5 });
   });
 });

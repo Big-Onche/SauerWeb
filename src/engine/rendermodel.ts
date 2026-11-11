@@ -93,6 +93,21 @@ export interface Md5AnimationInfo {
   frameRate: number;
 }
 
+export function interpolateModelGeometry(current: ModelGeometry, next: ModelGeometry, interpolation: number): ModelGeometry {
+  if (interpolation <= 0 || current.meshes.length !== next.meshes.length) return current;
+  const amount = Math.min(interpolation, 1);
+  return {
+    meshes: current.meshes.map((mesh, meshIndex) => {
+      const nextMesh = next.meshes[meshIndex];
+      if (mesh.positions.length !== nextMesh.positions.length) return mesh;
+      return {
+        ...mesh,
+        positions: mesh.positions.map((position, index) => position + (nextMesh.positions[index] - position) * amount),
+      };
+    }),
+  };
+}
+
 export function md5AnimationInfo(source: string): Md5AnimationInfo {
   return {
     frameCount: Math.max(1, Number(source.match(/numFrames\s+(\d+)/i)?.[1] ?? 1)),

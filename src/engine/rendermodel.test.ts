@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd2, parseMd5 } from "./rendermodel";
+import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd2, parseMd5 } from "./rendermodel";
 
 describe("MD2 mapmodel loading", () => {
   it.each(["dcp/palmtree", "objects/well_roof", "objects/well_base"])('decodes the bundled model "%s"', (name) => {
@@ -59,6 +59,19 @@ describe("MD5 model loading", () => {
 
     expect(md5AnimationInfo(animation).frameCount).toBeGreaterThan(1);
     expect(parseMd5(mesh, animation, [], 1).meshes[0].positions).not.toEqual(parseMd5(mesh, animation, [], 0).meshes[0].positions);
+  });
+
+  it("interpolates skinned player geometry between animation frames", () => {
+    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
+    const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
+    const current = parseMd5(mesh, animation, [], 0);
+    const next = parseMd5(mesh, animation, [], 1);
+    const interpolated = interpolateModelGeometry(current, next, 0.5);
+
+    expect(interpolated.meshes[0].positions[0]).toBeCloseTo((current.meshes[0].positions[0] + next.meshes[0].positions[0]) / 2);
+    expect(interpolated.meshes[0].positions).not.toEqual(current.meshes[0].positions);
+    expect(interpolated.meshes[0].positions).not.toEqual(next.meshes[0].positions);
   });
 
   it("skins the Ogro player model at successive IQM animation frames", () => {

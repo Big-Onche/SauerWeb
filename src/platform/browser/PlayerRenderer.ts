@@ -8,8 +8,9 @@ import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
 import type { MapModelAsset, PlayerModelAsset } from "../../assets/types";
 import { packageAssetUrl } from "../../assets/TextureResolver";
-import { iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd5, type ModelGeometry, type ModelGeometryMesh } from "../../engine/rendermodel";
-import { modelAnimationFrame } from "../../engine/modelanimation";
+import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
+import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd5, type ModelGeometry,
+  type ModelGeometryMesh } from "../../engine/rendermodel";
 import type { Vec3 } from "../../engine/octa";
 import { getplayermodelinfo, playerSkin, renderclient, type RenderClientState } from "../../fpsgame/render";
 import { toBabylonPosition } from "../../render/coordinates";
@@ -102,25 +103,26 @@ export class PlayerRenderer {
     if (!definition || !asset || asset.status !== "ready" || !asset.geometryPath) return;
     const animationSpec = definition.animations[animation] ?? definition.animations.idle;
     const animationPath = animationSpec?.path;
-    let frame = 0;
+    let position: ModelAnimationPosition = { frame: 0, nextFrame: 0, interpolation: 0 };
     let animationSource: string | undefined;
     let animationBuffer: ArrayBuffer | undefined;
     if (asset.format === "MD5" && animationPath) {
       animationSource = await this.fetchText(animationPath);
       const info = md5AnimationInfo(animationSource);
-      frame = modelAnimationFrame(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
+      position = modelAnimationPosition(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
         animationSpec.endOffset);
     } else if (asset.format === "IQM" && animationPath) {
       animationBuffer = await this.fetchBinary(animationPath);
       const info = iqmAnimationInfo(animationBuffer);
-      frame = modelAnimationFrame(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
+      position = modelAnimationPosition(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
         animationSpec.endOffset);
     }
     instance.root.rotationQuaternion = Quaternion.RotationYawPitchRoll(-(yaw + 90 + (asset.yaw ?? 0)) * Math.PI / 180,
       -(asset.pitch ?? 0) * Math.PI / 180, 0);
+    const frame = position.frame + (position.nextFrame !== position.frame ? position.interpolation : 0);
     if (instance.visualKey === visualKey && instance.animation === animation && instance.frame === frame) return;
     const token = ++instance.updateToken;
-    const geometry = await this.geometry(asset, animationPath, animationSource, animationBuffer, frame);
+    const geometry = await this.geometry(asset, animationPath, animationSource, animationBuffer, position);
     if (token !== instance.updateToken) return;
     if (instance.visualKey !== visualKey || instance.meshes.length !== geometry.meshes.length) {
       this.createMeshes(instance, definition, asset, geometry);
@@ -132,7 +134,15 @@ export class PlayerRenderer {
   }
 
   private async geometry(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
-                         animationBuffer: ArrayBuffer | undefined, frame: number): Promise<ModelGeometry> {
+                         animationBuffer: ArrayBuffer | undefined, position: ModelAnimationPosition): Promise<ModelGeometry> {
+    const current = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.frame);
+    if (position.interpolation <= 0 || position.nextFrame === position.frame) return current;
+    const next = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.nextFrame);
+    return interpolateModelGeometry(current, next, position.interpolation);
+  }
+
+  private async geometryFrame(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
+                              animationBuffer: ArrayBuffer | undefined, frame: number): Promise<ModelGeometry> {
     const key = `${asset.geometryPath}:${animationPath ?? "bind"}:${frame}`;
     const cached = this.geometryFrames.get(key);
     if (cached) return cached;
