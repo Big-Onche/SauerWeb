@@ -6,6 +6,7 @@ export class MultiplayerHUD {
   private readonly status: HTMLDivElement;
   private readonly scoreboard: HTMLDivElement;
   private visible = false;
+  private connectionStatus = "not connected";
 
   constructor(viewport: HTMLElement, private readonly client: MultiplayerClient) {
     this.root = document.createElement("div");
@@ -31,9 +32,12 @@ export class MultiplayerHUD {
   render(): void {
     if (!this.visible) return;
     const player = this.client.players.get(this.client.clientNumber);
-    this.status.innerHTML = `<span>${escapeHtml(this.client.serverDescription || "Sauerbraten")}</span>` +
-      `<strong>${escapeHtml(gameModeName(this.client.gameMode))}</strong><span>${escapeHtml(this.client.mapName)}</span>` +
-      `<b>${player?.health ?? 0} HP</b><span>${formatTime(this.client.timeLeftSeconds)}</span>`;
+    if (!this.client.connected) this.status.textContent = this.connectionStatus;
+    else {
+      this.status.innerHTML = `<span>${escapeHtml(this.client.serverDescription || "Sauerbraten")}</span>` +
+        `<strong>${escapeHtml(gameModeName(this.client.gameMode))}</strong><span>${escapeHtml(this.client.mapName)}</span>` +
+        `<b>${player?.health ?? 0} HP</b><span>${formatTime(this.client.timeLeftSeconds)}</span>`;
+    }
     this.scoreboard.innerHTML = `<header><span>${escapeHtml(this.client.serverDescription || "scoreboard")}</span>` +
       `<small>${escapeHtml(gameModeName(this.client.gameMode))} · ${escapeHtml(this.client.mapName)}</small></header>` +
       `<div class="score-heading"><span>player</span><span>frags</span><span>deaths</span><span>ping</span></div>` +
@@ -43,9 +47,9 @@ export class MultiplayerHUD {
   }
 
   private handle(event: MultiplayerEvent): void {
-    if (event.type === "status") this.status.textContent = event.status;
+    if (event.type === "status") this.connectionStatus = event.status;
     else if (event.type === "message") this.status.textContent = event.text;
-    else if (event.type === "disconnect") this.status.textContent = `disconnected (${event.reason})`;
+    else if (event.type === "disconnect") this.connectionStatus = `disconnected (${event.reason})`;
     this.render();
   }
 

@@ -81,7 +81,12 @@ export class MultiplayerClient extends EventTarget {
     this.endpoint = { ...endpoint, playerName: endpoint.playerName.slice(0, 15) || "unnamed" };
     this.emit({ type: "status", status: `connecting to ${endpoint.host}:${endpoint.port}` });
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    await this.transport.connect(endpoint.relayUrl ?? `${protocol}//${location.host}/relay`, endpoint.host, endpoint.port);
+    try {
+      await this.transport.connect(endpoint.relayUrl ?? `${protocol}//${location.host}/relay`, endpoint.host, endpoint.port);
+    } catch (error) {
+      this.emit({ type: "status", status: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   }
 
   disconnect(): void {

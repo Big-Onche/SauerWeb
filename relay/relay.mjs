@@ -30,20 +30,37 @@ export function configuredServers(environment = process.env) {
 
 export function attachSauerRelay(httpServer, options = {}) {
   const servers = options.servers || configuredServers();
+  const keepservers = [...servers];
+  let serverRefresh;
   const allowedOrigins = new Set((process.env.SAUER_RELAY_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean));
   const connectionsByAddress = new Map();
   const webSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_DATAGRAM_BYTES, perMessageDeflate: false });
+  const refreshAllowedServers = () => {
+    serverRefresh ??= updatefrommaster(keepservers).then((updated) => {
+      servers.splice(0, servers.length, ...updated);
+    }).finally(() => { serverRefresh = undefined; });
+    return serverRefresh;
+  };
 
-  httpServer.on("upgrade", (request, socket, head) => {
+  void refreshAllowedServers().catch((error) => {
+    console.warn(`Could not initialize Sauerbraten master server list: ${error instanceof Error ? error.message : String(error)}`);
+  });
+
+  httpServer.on("upgrade", async (request, socket, head) => {
     const url = new URL(request.url || "/", "http://relay.invalid");
     if (url.pathname !== "/relay") return;
     const origin = request.headers.origin || "";
     const remoteAddress = request.socket.remoteAddress || "unknown";
     const remoteConnections = connectionsByAddress.get(remoteAddress) || 0;
     const key = `${url.searchParams.get("server") || ""}:${Number(url.searchParams.get("port"))}`;
-    const target = servers.find((server) => `${server.host}:${server.port}` === key);
+    let target = servers.find((server) => `${server.host}:${server.port}` === key);
+    if (!target) {
+      try { await refreshAllowedServers(); } catch {}
+      target = servers.find((server) => `${server.host}:${server.port}` === key);
+    }
     if (!target || webSockets.clients.size >= MAX_CONNECTIONS || remoteConnections >= MAX_CONNECTIONS_PER_ADDRESS ||
-        (allowedOrigins.size && !allowedOrigins.has(origin))) {
+        (allowedOrigins.size && !allowedOrigins.has(origin)) || socket.destroyed) {
+      if (socket.destroyed) return;
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
