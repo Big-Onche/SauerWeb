@@ -459,12 +459,17 @@ function resolvePlayerModels() {
   return definitions.map((definition, index) => {
     const animationConfig = path.join(packagesDirectory, "models", definition.animations);
     const animationDirectory = path.dirname(animationConfig);
-    const animations: Record<string, string> = {};
+    const animations: Record<string, { path: string; speed: number; startOffset: number; endOffset: number }> = {};
     if (fs.existsSync(animationConfig)) {
       for (const statement of splitStatements(fs.readFileSync(animationConfig, "utf8"))) {
         const tokens = tokenize(statement.text);
         if (tokens[0]?.toLowerCase() !== `${definition.format}anim` || !tokens[1] || !tokens[2] || animations[tokens[1].toLowerCase()]) continue;
-        animations[tokens[1].toLowerCase()] = resolveModelAssetPath(animationDirectory, tokens[2]);
+        animations[tokens[1].toLowerCase()] = {
+          path: resolveModelAssetPath(animationDirectory, tokens[2]),
+          speed: numberArg(tokens[3], 0),
+          startOffset: numberArg(tokens[5], 0),
+          endOffset: numberArg(tokens[6], 0),
+        };
       }
     }
     const model = (name: string) => ({ ...resolveMapModels([name])[0], index });

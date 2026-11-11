@@ -103,7 +103,14 @@ export interface PlayerModelAsset {
   ffa: MapModelAsset;
   blueTeam: MapModelAsset;
   redTeam: MapModelAsset;
-  animations: Record<string, string>;
+  animations: Record<string, PlayerModelAnimation>;
+}
+
+export interface PlayerModelAnimation {
+  path: string;
+  speed: number;
+  startOffset: number;
+  endOffset: number;
 }
 
 export interface MapLightingOverrides {

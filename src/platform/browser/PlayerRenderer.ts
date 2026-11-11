@@ -9,6 +9,7 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { MapModelAsset, PlayerModelAsset } from "../../assets/types";
 import { packageAssetUrl } from "../../assets/TextureResolver";
 import { iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd5, type ModelGeometry, type ModelGeometryMesh } from "../../engine/rendermodel";
+import { modelAnimationFrame } from "../../engine/modelanimation";
 import type { Vec3 } from "../../engine/octa";
 import { getplayermodelinfo, playerSkin, renderclient, type RenderClientState } from "../../fpsgame/render";
 import { toBabylonPosition } from "../../render/coordinates";
@@ -99,18 +100,21 @@ export class PlayerRenderer {
     const definition = assets[modelIndex] ?? assets[0];
     const asset = definition?.[skin] ?? definition?.ffa;
     if (!definition || !asset || asset.status !== "ready" || !asset.geometryPath) return;
-    const animationPath = definition.animations[animation] ?? definition.animations.idle;
+    const animationSpec = definition.animations[animation] ?? definition.animations.idle;
+    const animationPath = animationSpec?.path;
     let frame = 0;
     let animationSource: string | undefined;
     let animationBuffer: ArrayBuffer | undefined;
     if (asset.format === "MD5" && animationPath) {
       animationSource = await this.fetchText(animationPath);
       const info = md5AnimationInfo(animationSource);
-      frame = animationFrame(info.frameCount, info.frameRate, animationMilliseconds, loop);
+      frame = modelAnimationFrame(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
+        animationSpec.endOffset);
     } else if (asset.format === "IQM" && animationPath) {
       animationBuffer = await this.fetchBinary(animationPath);
       const info = iqmAnimationInfo(animationBuffer);
-      frame = animationFrame(info.frameCount, info.frameRate, animationMilliseconds, loop);
+      frame = modelAnimationFrame(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
+        animationSpec.endOffset);
     }
     instance.root.rotationQuaternion = Quaternion.RotationYawPitchRoll(-(yaw + 90 + (asset.yaw ?? 0)) * Math.PI / 180,
       -(asset.pitch ?? 0) * Math.PI / 180, 0);
@@ -240,9 +244,4 @@ export function thirdpersoncamera(position: Vec3, yaw: number, pitch: number, di
   camera.x += Math.cos(yawRadians) * side;
   camera.z += Math.sin(yawRadians) * side;
   return camera;
-}
-
-function animationFrame(frameCount: number, frameRate: number, milliseconds: number, loop: boolean): number {
-  const frame = Math.max(0, Math.floor(milliseconds * frameRate / 1000));
-  return loop ? frame % frameCount : Math.min(frameCount - 1, frame);
 }
