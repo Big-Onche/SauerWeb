@@ -18,8 +18,8 @@ The Vite development server indexes maps directly from `.Sauerbraten/packages/ba
 filter the archive, and select any enabled v33 map. You can also open a v33 `.ogz` from disk. The development server also starts the WebSocket-to-UDP
 relay and server browser API.
 
-Controls: **WASD / arrows** move, the **mouse** aims, **left click** fires, **Tab** opens the multiplayer scoreboard, and the diamond button toggles
-wireframe.
+Controls: **WASD / arrows** move, the **mouse** aims, **left click** fires, **T** chats, **Y** team-chats, **G** drops a carried flag, **Tab** opens the
+multiplayer scoreboard, **F11** toggles the full console, and the diamond button toggles wireframe. Page Up/Down or keypad +/- scrolls the full console.
 
 ## Multiplayer and relay
 

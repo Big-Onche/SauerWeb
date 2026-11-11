@@ -86,6 +86,26 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.getInt()).toBe(0xcbf43926 | 0);
     expect(packet.remaining).toBe(0);
   });
+
+  it.each([
+    { team: false, type: NetworkMessage.Text },
+    { team: true, type: NetworkMessage.SayTeam },
+  ])("sends $type chat using the native reliable packet", ({ team, type }) => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+
+    client.multiplayer.sendChat("  hello team  ", team);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const packet = new PacketReader(send.mock.calls[0][1]);
+    expect(send.mock.calls[0][0]).toBe(1);
+    expect(send.mock.calls[0][2]).toBe(true);
+    expect(packet.getInt()).toBe(type);
+    expect(packet.getString()).toBe("hello team");
+    expect(packet.remaining).toBe(0);
+  });
 });
 
 function readVector(packet: PacketReader, scale: number): { x: number; y: number; z: number } {

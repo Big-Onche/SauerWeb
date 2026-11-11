@@ -10,6 +10,7 @@ import { WeaponSystem } from "./weapon";
 import { createDamageable, hitpush, type Damageable } from "./weapon/DamageSystem";
 import { Gun, WEAPONS } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponHit } from "./weapon/WeaponEvents";
+import type { ConsoleLineType } from "../platform/browser/GameConsole";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -48,12 +49,21 @@ export interface NetworkPlayer extends Damageable {
   deadAt: number;
 }
 
+interface CaptureBase {
+  tag: number;
+  ammoType: number;
+  owner: string;
+  enemy: string;
+  converted: number;
+  ammo: number;
+}
+
 export type MultiplayerEvent =
-  | { type: "status"; status: string }
+  | { type: "status"; status: string; error?: boolean }
   | { type: "map-change"; map: string; mode: number }
   | { type: "players" }
   | { type: "spawn" }
-  | { type: "message"; text: string }
+  | { type: "console"; text: string; consoleType: ConsoleLineType }
   | { type: "remote-shot"; clientNumber: number; gun: Gun; from: Vec3; to: Vec3 }
   | { type: "disconnect"; reason: number };
 
@@ -89,6 +99,7 @@ export class MultiplayerClient extends EventTarget {
   private loadedMapName = "";
   private loadedMapCrc = 0;
   private mapInfoPending = false;
+  private captureBases: CaptureBase[] = [];
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
     super();
@@ -106,7 +117,7 @@ export class MultiplayerClient extends EventTarget {
       await this.transport.connect(endpoint.relayUrl ?? `${protocol}//${location.host}/relay`, endpoint.host, endpoint.port);
     } catch (error) {
       this.weapons.controller.serverAuthoritative = false;
-      this.emit({ type: "status", status: error instanceof Error ? error.message : String(error) });
+      this.emit({ type: "status", status: error instanceof Error ? error.message : String(error), error: true });
       throw error;
     }
   }
@@ -148,6 +159,14 @@ export class MultiplayerClient extends EventTarget {
         items.putInt(-1);
       }
       if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) this.ctfMode.putInitFlags(items, this.gameMode);
+      if (gameModeHas(this.gameMode, GameModeFlag.Capture)) {
+        const bases = this.mapEntities.filter((entity) => entity.typeName === "base");
+        items.putInt(NetworkMessage.Bases).putInt(bases.length);
+        for (const base of bases) {
+          items.putInt(base.attributes[0] ?? 0).putInt(Math.trunc(base.position.x * DMF)).putInt(Math.trunc(base.position.y * DMF))
+            .putInt(Math.trunc(base.position.z * DMF));
+        }
+      }
       const itemBytes = items.finish();
       if (itemBytes.length) this.transport.send(1, itemBytes, true);
       this.mapInfoPending = false;
@@ -183,10 +202,12 @@ export class MultiplayerClient extends EventTarget {
     return this.teamScores.get(team) ?? 0;
   }
 
-  sendChat(text: string): void {
+  sendChat(text: string, team = false): void {
     const message = text.trim();
     if (!this.connected || !message) return;
-    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Text).putString(message).finish(), true);
+    const player = this.players.get(this.clientNumber);
+    this.console(`${team ? "[team] " : ""}${this.displayName(player)}: ${message}`, team ? "team-chat" : "chat");
+    this.transport.send(1, new PacketWriter().putInt(team ? NetworkMessage.SayTeam : NetworkMessage.Text).putString(message).finish(), true);
     this.transport.flush();
   }
 
@@ -232,11 +253,13 @@ export class MultiplayerClient extends EventTarget {
   private handleEnet(event: EnetEvent): void {
     if (event.type === "connect") {
       this.emit({ type: "status", status: "ENet connected; waiting for server" });
+      this.console("connected to server");
       return;
     }
     if (event.type === "disconnect") {
       this.connected = false;
       this.weapons.controller.serverAuthoritative = false;
+      this.console(`server network error, disconnecting (${event.data})`, "error");
       this.emit({ type: "disconnect", reason: event.data });
       return;
     }
@@ -246,7 +269,8 @@ export class MultiplayerClient extends EventTarget {
       if (event.channel === 0) this.parsePositions(new PacketReader(event.data));
       else if (event.channel === 1) this.parseMessages(-1, new PacketReader(event.data));
     } catch (error) {
-      this.emit({ type: "status", status: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit({ type: "status", status: message, error: true });
     }
   }
 
@@ -323,11 +347,16 @@ export class MultiplayerClient extends EventTarget {
           this.mapStarted = performance.now();
           this.teamScores.clear();
           this.ctfMode.reset();
+          this.captureBases = [];
+          this.console(`game mode is ${gameModeName(this.gameMode)}`, "game-info");
           this.emit({ type: "map-change", map: this.mapName, mode: this.gameMode });
           break;
         case NetworkMessage.InitClient: this.parseInitClient(packet); break;
-        case NetworkMessage.ClientDisconnect:
-          this.players.delete(packet.getInt()); this.syncTargets(); this.emit({ type: "players" }); break;
+        case NetworkMessage.ClientDisconnect: {
+          const clientNumber = packet.getInt(), player = this.players.get(clientNumber);
+          if (player) this.console(`leave: ${this.displayName(player)}`);
+          this.players.delete(clientNumber); this.syncTargets(); this.emit({ type: "players" }); break;
+        }
         case NetworkMessage.SpawnState: this.parseSpawnState(packet); break;
         case NetworkMessage.Spawn: {
           const player = this.players.get(sender);
@@ -341,6 +370,8 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Damage: this.parseDamage(packet); break;
         case NetworkMessage.HitPush: this.parseHitPush(packet); break;
         case NetworkMessage.Died: this.parseDied(packet); break;
+        case NetworkMessage.Text: this.parseText(sender, packet, false); break;
+        case NetworkMessage.SayTeam: this.parseText(packet.getInt(), packet, true); break;
         case NetworkMessage.Resume: this.parseResume(packet); break;
         case NetworkMessage.TeamInfo: this.parseTeamInfo(packet); break;
         case NetworkMessage.ItemList: while (packet.getInt() >= 0) packet.getInt(); break;
@@ -351,8 +382,12 @@ export class MultiplayerClient extends EventTarget {
           for (let clientNumber = packet.getInt(); clientNumber >= 0; clientNumber = packet.getInt()) packet.getInt();
           break;
         case NetworkMessage.Pong: packet.getInt(); break;
-        case NetworkMessage.TimeUp: this.timeLeftSeconds = packet.getInt(); break;
-        case NetworkMessage.ServerMessage: this.emit({ type: "message", text: packet.getString() }); break;
+        case NetworkMessage.TimeUp: {
+          this.timeLeftSeconds = packet.getInt();
+          if (this.timeLeftSeconds <= 0) this.logIntermission();
+          break;
+        }
+        case NetworkMessage.ServerMessage: this.console(packet.getString()); break;
         case NetworkMessage.Sound: packet.getInt(); break;
         case NetworkMessage.GunSelect: {
           const player = this.players.get(sender), gun = packet.getInt();
@@ -361,6 +396,15 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.ReplenishAmmo: this.parseReplenishAmmo(packet); break;
         case NetworkMessage.BaseRegen: this.parseBaseRegen(packet); break;
+        case NetworkMessage.Bases: this.parseBases(packet); break;
+        case NetworkMessage.BaseInfo: this.parseBaseInfo(packet); break;
+        case NetworkMessage.BaseScore: this.parseBaseScore(packet); break;
+        case NetworkMessage.Announce: {
+          const item = packet.getInt();
+          if (item === 18) this.console("quad damage will spawn in 10 seconds!", "game-info");
+          else if (item === 15) this.console("health boost will spawn in 10 seconds!", "game-info");
+          break;
+        }
         case NetworkMessage.InitFlags: this.ctfMode.parseInitFlags(packet, this.gameMode); this.emit({ type: "players" }); break;
         case NetworkMessage.DropFlag: this.parseDropFlag(packet); break;
         case NetworkMessage.TakeFlag: this.parseTakeFlag(packet); break;
@@ -375,7 +419,7 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.SwitchName: {
           const player = this.players.get(sender), name = packet.getString();
-          if (player) player.name = name;
+          if (player) { this.console(`${this.displayName(player)} is now known as ${name}`); player.name = name; }
           break;
         }
         case NetworkMessage.SwitchModel: {
@@ -385,7 +429,9 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.SetTeam: {
           const player = this.players.get(packet.getInt()), team = packet.getString();
-          packet.getInt(); if (player) player.team = team; this.emit({ type: "players" }); break;
+          const reason = packet.getInt();
+          if (player) { this.console(`${this.displayName(player)} ${reason === 1 ? "was forced" : "switched"} to team ${team}`); player.team = team; }
+          this.emit({ type: "players" }); break;
         }
         case NetworkMessage.PauseGame: packet.getInt(); packet.getInt(); break;
         case NetworkMessage.GameSpeed: packet.getInt(); packet.getInt(); break;
@@ -424,6 +470,7 @@ export class MultiplayerClient extends EventTarget {
     player.name = packet.getString() || "unnamed";
     player.team = packet.getString();
     player.model = packet.getInt();
+    this.console(`join: ${this.displayName(player)}`);
     this.emit({ type: "players" });
   }
 
@@ -590,15 +637,61 @@ export class MultiplayerClient extends EventTarget {
     }
   }
 
+  // Original: src/fpsgame/capture.h, captureclientmode::initbase(), updatebase(), setscore().
+  private parseBases(packet: PacketReader): void {
+    const count = packet.getInt(), mapBases = this.mapEntities.filter((entity) => entity.typeName === "base");
+    this.captureBases = [];
+    for (let index = 0; index < count; index++) {
+      const ammoType = packet.getInt(), owner = packet.getString(), enemy = packet.getString(), converted = packet.getInt(), ammo = packet.getInt();
+      const tag = (mapBases[index]?.attributes[1] ?? 0) > 0 ? mapBases[index].attributes[1] : index + 1;
+      this.captureBases.push({ tag, ammoType, owner, enemy, converted, ammo });
+    }
+  }
+
+  private parseBaseInfo(packet: PacketReader): void {
+    const index = packet.getInt(), owner = packet.getString(), enemy = packet.getString(), converted = packet.getInt(), ammo = packet.getInt();
+    const base = this.captureBases[index];
+    if (!base) return;
+    if (owner && owner !== base.owner) this.console(`${this.teamDisplay(owner)} captured base ${base.tag}`, "game-info");
+    else if (!owner && base.owner) this.console(`${this.teamDisplay(base.owner)} lost base ${base.tag}`, "game-info");
+    Object.assign(base, { owner, enemy, converted, ammo });
+    this.emit({ type: "players" });
+  }
+
+  private parseBaseScore(packet: PacketReader): void {
+    packet.getInt();
+    const team = packet.getString(), total = packet.getInt();
+    this.teamScores.set(team, total);
+    if (total >= 10_000) this.console(`${this.teamDisplay(team)} captured all bases`, "game-info");
+    this.emit({ type: "players" });
+  }
+
   // Original: src/fpsgame/client.cpp
   // Function: parsepacketclient(), N_DIED
   // Sauerbraten reference: SVN r6488
   private parseDied(packet: PacketReader): void {
-    const victimNumber = packet.getInt(), actor = this.playerFor(packet.getInt());
+    const victimNumber = packet.getInt(), victim = this.playerFor(victimNumber), actor = this.playerFor(packet.getInt());
     actor.frags = packet.getInt();
     const teamFrags = packet.getInt();
     if (actor.team) this.teamScores.set(actor.team, teamFrags);
+    const victimName = this.displayName(victim, "you"), actorName = this.displayName(actor, "you");
+    const involved = victimNumber === this.clientNumber || actor.clientNumber === this.clientNumber;
+    if (victimNumber === actor.clientNumber) this.console(`${victimName} suicided${victimNumber === this.clientNumber ? "!" : ""}`,
+      involved ? "frag-self" : "frag-other");
+    else if (victim.team && victim.team === actor.team) {
+      const text = actor.clientNumber === this.clientNumber ? `${actorName} fragged a teammate (${victimName})`
+        : victimNumber === this.clientNumber ? `${victimName} got fragged by a teammate (${actorName})`
+          : `${actorName} fragged a teammate (${victimName})`;
+      this.console(text, "teamkill");
+    } else this.console(victimNumber === this.clientNumber ? `${victimName} got fragged by ${actorName}` : `${actorName} fragged ${victimName}`,
+      involved ? "frag-self" : "frag-other");
     this.setDead(victimNumber);
+  }
+
+  private parseText(sender: number, packet: PacketReader, team: boolean): void {
+    const player = this.players.get(sender), text = packet.getString();
+    if (!player) return;
+    this.console(`${team ? "[team] " : ""}${this.displayName(player)}: ${text}`, team ? "team-chat" : "chat");
   }
 
   private setDead(clientNumber: number, countDeath = true): void {
@@ -615,6 +708,16 @@ export class MultiplayerClient extends EventTarget {
     this.emit({ type: "players" });
   }
 
+  private logIntermission(): void {
+    const player = this.players.get(this.clientNumber);
+    this.console("intermission:", "game-info");
+    this.console("game has ended!", "game-info");
+    if (!player) return;
+    const objective = gameModeHas(this.gameMode, GameModeFlag.Ctf) ? `, flags: ${player.flags}`
+      : gameModeHas(this.gameMode, GameModeFlag.Collect) ? `, skulls: ${player.flags}` : "";
+    this.console(`player frags: ${player.frags}${objective}, deaths: ${player.deaths}`, "game-info");
+  }
+
   private parseTeamInfo(packet: PacketReader): void {
     this.teamScores.clear();
     for (let team = packet.getString(); team; team = packet.getString()) this.teamScores.set(team, packet.getInt());
@@ -624,25 +727,34 @@ export class MultiplayerClient extends EventTarget {
     const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
     const location = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
     const player = this.playerFor(clientNumber);
+    const flagName = this.flagName(flag);
     this.ctfMode.dropFlag(flag, version, location, player.yaw);
-    this.emit({ type: "message", text: `${player.name} dropped the flag` });
+    this.console(`${this.displayName(player)} dropped ${flagName}`, "game-info");
   }
 
   private parseTakeFlag(packet: PacketReader): void {
     const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
+    const player = this.playerFor(clientNumber), state = this.ctfMode.flags[flag];
+    const action = gameModeHas(this.gameMode, GameModeFlag.Hold) ? "picked up the flag for"
+      : gameModeHas(this.gameMode, GameModeFlag.Protect) || state?.dropped ? "picked up" : "stole";
+    const suffix = gameModeHas(this.gameMode, GameModeFlag.Hold) ? ` ${this.teamName(player.team)}` : ` ${this.flagName(flag)}`;
     this.ctfMode.takeFlag(clientNumber, flag, version);
-    this.emit({ type: "message", text: `${this.playerFor(clientNumber).name} took the flag` });
+    this.console(`${this.displayName(player)} ${action}${suffix}`, "game-info");
   }
 
   private parseReturnFlag(packet: PacketReader): void {
     const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
+    const name = this.flagName(flag);
     this.ctfMode.returnFlag(flag, version);
-    this.emit({ type: "message", text: `${this.playerFor(clientNumber).name} returned the flag` });
+    this.console(`${this.displayName(this.playerFor(clientNumber))} returned ${name}`, "game-info");
   }
 
   private parseResetFlag(packet: PacketReader): void {
     const flag = packet.getInt(), version = packet.getInt(), spawnIndex = packet.getInt(), team = packet.getInt(), score = packet.getInt();
+    const state = this.ctfMode.flags[flag], shouldLog = !gameModeHas(this.gameMode, GameModeFlag.Hold) || (state?.spawnIndex ?? -1) >= 0;
+    const name = this.flagName(flag);
     this.ctfMode.resetFlag(flag, version, spawnIndex, team, score, this.gameMode);
+    if (shouldLog) this.console(`${name} reset`, "game-info");
     this.emit({ type: "players" });
   }
 
@@ -652,7 +764,8 @@ export class MultiplayerClient extends EventTarget {
     const player = this.playerFor(clientNumber);
     this.ctfMode.scoreFlag(player, relay, relayVersion, goal, goalVersion, goalSpawn, team, score, flags, this.gameMode);
     const localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? "");
-    this.emit({ type: "message", text: `${player.name} scored for ${team === localTeam ? "your" : "the enemy"} team` });
+    this.console(`${this.displayName(player)} scored for ${team === localTeam ? "your team" : "the enemy team"}`, "game-info");
+    if (score >= 10) this.console(`${team === localTeam ? "your team" : "the enemy team"} captured ${score} flags`, "game-info");
     this.emit({ type: "players" });
   }
 
@@ -720,6 +833,26 @@ export class MultiplayerClient extends EventTarget {
   }
 
   private emit(detail: MultiplayerEvent): void { this.dispatchEvent(new CustomEvent<MultiplayerEvent>("multiplayer", { detail })); }
+
+  private console(text: string, consoleType: ConsoleLineType = "info"): void { this.emit({ type: "console", text, consoleType }); }
+
+  private displayName(player: NetworkPlayer | undefined, localName = "you"): string {
+    return player?.clientNumber === this.clientNumber ? localName : player?.name || "unnamed";
+  }
+
+  private teamName(team: string): string {
+    return team === this.players.get(this.clientNumber)?.team ? "your team" : "the enemy team";
+  }
+
+  private teamDisplay(team: string): string {
+    return team === this.players.get(this.clientNumber)?.team ? "your team" : team;
+  }
+
+  private flagName(id: number): string {
+    if (gameModeHas(this.gameMode, GameModeFlag.Hold)) return "the flag";
+    const flag = this.ctfMode.flags[id], localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? "");
+    return flag?.team === localTeam ? "your flag" : "the enemy flag";
+  }
 
   private weaponDelay(gun: number): number {
     return gun >= Gun.Fist && gun <= Gun.Pistol ? WEAPONS[gun].attackDelay : 0;

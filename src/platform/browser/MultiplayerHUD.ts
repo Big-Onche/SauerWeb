@@ -95,7 +95,6 @@ export class MultiplayerHUD {
 
   private handle(event: MultiplayerEvent): void {
     if (event.type === "status") this.connectionStatus = event.status;
-    else if (event.type === "message") this.status.textContent = event.text;
     else if (event.type === "disconnect") this.connectionStatus = `disconnected (${event.reason})`;
     this.render();
   }

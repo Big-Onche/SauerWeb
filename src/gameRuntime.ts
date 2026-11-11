@@ -3,6 +3,7 @@ import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolve
 import { crc32 } from "./engine/crc32";
 import { SauerMapParser } from "./engine/worldio";
 import { gameModeName } from "./fpsgame/game";
+import { GameConsole } from "./platform/browser/GameConsole";
 import { MapScene } from "./render/MapScene";
 
 const app = required<HTMLDivElement>("#app");
@@ -20,7 +21,8 @@ app.innerHTML = `
       <div id="game-loading" class="loading"><span></span><p>Loading ${escapeHtml(requestedMap || "map")}…</p></div>
       <div id="game-error" class="error" hidden></div>
       <div class="game-mode-label" ${server ? "hidden" : ""}>${escapeHtml(gameModeName(localGameMode))}</div>
-      <form id="chat" class="game-chat" hidden><input id="chat-input" maxlength="200" autocomplete="off" aria-label="Chat message" /></form>
+      <form id="chat" class="game-chat" hidden><label id="chat-prompt">&gt;</label>
+        <input id="chat-input" maxlength="200" autocomplete="off" aria-label="Chat message" /></form>
       <section id="death-menu" class="game-death" hidden aria-label="Respawn menu">
         <p>you died</p>
         <button type="button" data-action="respawn">respawn</button>
@@ -44,17 +46,23 @@ const respawnButton = required<HTMLButtonElement>("[data-action='respawn']");
 const pauseMenu = required<HTMLElement>("#pause-menu");
 const chat = required<HTMLFormElement>("#chat");
 const chatInput = required<HTMLInputElement>("#chat-input");
+const chatPrompt = required<HTMLLabelElement>("#chat-prompt");
+const gameConsole = new GameConsole(required<HTMLElement>(".viewport-panel"));
 const scene = new MapScene(canvas, "game");
 const parser = new SauerMapParser();
 let activeMap = "";
 let disposed = false;
 let respawnPending = false;
+let teamChat = false;
 
 scene.setPlayerModel(savedPlayerModel());
 scene.setLocalGameMode(localGameMode);
+gameConsole.add(`game mode is ${gameModeName(localGameMode)}`, "game-info");
 scene.onMultiplayer((event) => {
   if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMap.toLocaleLowerCase()) void loadMap(event.map);
   if (event.type === "players" || event.type === "spawn") syncDeathMenu();
+  if (event.type === "console") gameConsole.add(event.text, event.consoleType);
+  if (event.type === "status") gameConsole.add(event.status, event.error ? "error" : "info");
 });
 respawnButton.addEventListener("click", requestRespawn);
 required<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => setPaused(false));
@@ -62,7 +70,7 @@ required<HTMLButtonElement>("[data-action='switch-team']").addEventListener("cli
 required<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => location.assign("/"));
 chat.addEventListener("submit", (event) => {
   event.preventDefault();
-  scene.sendChat(chatInput.value);
+  scene.sendChat(chatInput.value, teamChat);
   chatInput.value = "";
   chat.hidden = true;
   canvas.focus();
@@ -92,6 +100,7 @@ async function loadMap(name: string): Promise<void> {
     scene.setMultiplayerMapInfo(name, crc32(new Uint8Array(mapData)));
     activeMap = name;
     document.title = `${name} — SauerWeb`;
+    gameConsole.add(`read map ${name}`);
   } catch (caught) {
     fail(caught instanceof Error ? caught.message : String(caught));
   } finally {
@@ -100,16 +109,39 @@ async function loadMap(name: string): Promise<void> {
 }
 
 function onKeyDown(event: KeyboardEvent): void {
-  if (!deathMenu.hidden && !event.repeat && event.target !== chatInput) {
+  if (event.target === chatInput) {
+    if (event.code === "Escape") {
+      event.preventDefault();
+      chat.hidden = true;
+      canvas.focus();
+    }
+    event.stopImmediatePropagation();
+    return;
+  }
+  const consoleKey = event.code === "KeyT" || event.code === "KeyY" || event.code === "F11" || event.code === "PageUp" ||
+    event.code === "PageDown" || event.code === "NumpadAdd" || event.code === "NumpadSubtract";
+  if (!deathMenu.hidden && !event.repeat && !consoleKey) {
     event.preventDefault();
     event.stopImmediatePropagation();
     requestRespawn();
   } else if (event.code === "Escape") {
     if (!chat.hidden) { chat.hidden = true; canvas.focus(); }
+    else if (gameConsole.isFull) gameConsole.toggle();
     else setPaused(pauseMenu.hidden);
-  } else if (server && event.code === "KeyT" && chat.hidden && pauseMenu.hidden) {
+  } else if (event.code === "F11") {
+    event.preventDefault();
+    gameConsole.toggle();
+  } else if (gameConsole.isFull && (event.code === "PageUp" || event.code === "NumpadSubtract")) {
+    event.preventDefault();
+    gameConsole.scroll(5);
+  } else if (gameConsole.isFull && (event.code === "PageDown" || event.code === "NumpadAdd")) {
+    event.preventDefault();
+    gameConsole.scroll(-5);
+  } else if (server && (event.code === "KeyT" || event.code === "KeyY") && chat.hidden && pauseMenu.hidden) {
     event.preventDefault();
     if (document.pointerLockElement === canvas) void document.exitPointerLock();
+    teamChat = event.code === "KeyY";
+    chatPrompt.textContent = teamChat ? "[team]" : ">";
     chat.hidden = false;
     chatInput.focus();
   } else if (server && event.code === "KeyG" && chat.hidden && pauseMenu.hidden) {
@@ -153,9 +185,11 @@ function dispose(): void {
   disposed = true;
   window.removeEventListener("keydown", onKeyDown, { capture: true });
   scene.dispose();
+  gameConsole.dispose();
 }
 
 function fail(message: string): void {
+  gameConsole.add(message, "error");
   error.textContent = message;
   error.hidden = false;
 }

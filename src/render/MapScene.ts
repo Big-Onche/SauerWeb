@@ -379,8 +379,8 @@ export class MapScene {
     return () => this.fpsClient.multiplayer.removeEventListener("multiplayer", wrapped);
   }
 
-  sendChat(text: string): void {
-    this.fpsClient.multiplayer.sendChat(text);
+  sendChat(text: string, team = false): void {
+    this.fpsClient.multiplayer.sendChat(text, team);
   }
 
   switchTeam(): void {
