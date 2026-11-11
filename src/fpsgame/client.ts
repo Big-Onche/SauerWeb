@@ -11,6 +11,7 @@ import { createDamageable, hitpush, type Damageable } from "./weapon/DamageSyste
 import { Gun, WEAPONS } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponHit } from "./weapon/WeaponEvents";
 import type { ConsoleLineType } from "../platform/browser/GameConsole";
+import { applyNetworkPosition, createNetworkInterpolation, resetNetworkInterpolation, type NetworkInterpolation } from "./networkInterpolation";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -47,6 +48,7 @@ export interface NetworkPlayer extends Damageable {
   lastAttackGun: number;
   lastPain: number;
   deadAt: number;
+  interpolation: NetworkInterpolation;
 }
 
 interface CaptureBase {
@@ -278,6 +280,17 @@ export class MultiplayerClient extends EventTarget {
     while (packet.remaining) {
       const type = packet.getInt();
       if (type === NetworkMessage.DemoPacket) continue;
+      if (type === NetworkMessage.Teleport) {
+        packet.getInt();
+        packet.getInt();
+        packet.getInt();
+        continue;
+      }
+      if (type === NetworkMessage.JumpPad) {
+        packet.getInt();
+        packet.getInt();
+        continue;
+      }
       if (type !== NetworkMessage.Pos) throw new Error(`Unexpected channel 0 message ${type}.`);
       const clientNumber = packet.getUInt(), physicalState = packet.getByte(), flags = packet.getUInt();
       const position = { x: 0, y: 0, z: 0 };
@@ -304,11 +317,9 @@ export class MultiplayerClient extends EventTarget {
       const player = this.players.get(clientNumber);
       const wrongLifeSequence = ((physicalState >> 3) & 1) !== ((player?.lifeSequence ?? 0) & 1);
       if (!player || player.lifeSequence < 0 || wrongLifeSequence || player.state === ClientState.Dead) continue;
-      player.position = { ...position, z: position.z + player.eyeHeight };
+      applyNetworkPosition(player, { ...position, z: position.z + player.eyeHeight }, yaw, pitch, roll, performance.now(),
+        player.state !== ClientState.Spawning);
       player.velocity = velocity;
-      player.yaw = yaw;
-      player.pitch = pitch;
-      player.roll = roll;
       player.move = (physicalState >> 4) & 2 ? -1 : (physicalState >> 4) & 1 ? 1 : 0;
       player.strafe = (physicalState >> 6) & 2 ? -1 : (physicalState >> 6) & 1 ? 1 : 0;
       player.physicsState = physicalState & 7;
@@ -364,7 +375,11 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Spawn: {
           const player = this.players.get(sender);
           this.parseState(player, packet);
-          if (player) { player.state = ClientState.Spawning; player.alive = false; }
+          if (player) {
+            player.state = ClientState.Spawning;
+            player.alive = false;
+            resetNetworkInterpolation(player);
+          }
           break;
         }
         case NetworkMessage.ForceDeath: this.setDead(packet.getInt(), false); break;
@@ -444,6 +459,9 @@ export class MultiplayerClient extends EventTarget {
           player.alive = false;
           break;
         }
+        case NetworkMessage.EditEntity:
+          for (let field = 0; field < 10; field++) packet.getInt();
+          break;
         case NetworkMessage.DemoPacket: break;
         default: throw new Error(`Unsupported server message ${type} on protocol 260.`);
       }
@@ -701,6 +719,7 @@ export class MultiplayerClient extends EventTarget {
     const player = this.playerFor(clientNumber);
     const wasDead = player.state === ClientState.Dead;
     player.state = ClientState.Dead; player.alive = false;
+    resetNetworkInterpolation(player);
     if (countDeath && !wasDead) player.deaths++;
     player.deadAt = performance.now();
     if (clientNumber === this.clientNumber) {
@@ -823,6 +842,7 @@ export class MultiplayerClient extends EventTarget {
       lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, ping: 0, yaw: 0, pitch: 0, roll: 0, move: 0 as const,
       strafe: 0 as const, physicsState: PhysicsState.Fall, selectedGun: Gun.Pistol, ammo: new Int32Array(12),
       lastAction: 0, gunWait: 0, lastAttackGun: -1, lastPain: 0, deadAt: 0,
+      interpolation: createNetworkInterpolation(this.physics.player.position),
     });
     player.alive = false;
     this.players.set(clientNumber, player);

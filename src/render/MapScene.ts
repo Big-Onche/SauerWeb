@@ -43,6 +43,7 @@ import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platfor
 import { CtfRenderer } from "../platform/browser/CtfRenderer";
 import { ClientState } from "../engine/physics/types";
 import { ctfTeamFlag } from "../fpsgame/ctf";
+import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
 import type { RuntimeMode } from "../runtime";
 
 export type CameraMode = "free" | "player";
@@ -739,11 +740,13 @@ export class MapScene {
 
   private updateNetworkPlayers(): void {
     const multiplayer = this.fpsClient.multiplayer;
+    const nowMilliseconds = performance.now();
     const thirdPersonView = this.thirdperson || this.isLocalPlayerDead();
     const players: RenderPlayer[] = [];
     const localNetworkPlayer = multiplayer.players.get(multiplayer.clientNumber);
     for (const [clientNumber, player] of multiplayer.players) {
       const local = clientNumber === multiplayer.clientNumber;
+      if (!local) interpolateNetworkEntity(player, nowMilliseconds);
       if (local && !thirdPersonView) continue;
       const source = local ? this.physics.player : player;
       players.push({
@@ -787,7 +790,7 @@ export class MapScene {
         deadAt: this.localDeadAt,
       });
     }
-    this.playerRenderer.rendergame(players, multiplayer.gameMode, this.teamskins, localNetworkPlayer?.team ?? "", performance.now());
+    this.playerRenderer.rendergame(players, multiplayer.gameMode, this.teamskins, localNetworkPlayer?.team ?? "", nowMilliseconds);
     this.ctfRenderer.render(multiplayer.ctfMode.flags, multiplayer.players, multiplayer.clientNumber, localNetworkPlayer?.team ?? "",
       this.physics.player.position, this.physics.player.aboveEye, this.physics.player.yaw, multiplayer.gameMode,
       (clientNumber) => this.playerRenderer.flagAttachmentPosition(clientNumber));
@@ -810,12 +813,8 @@ export class MapScene {
       cameraPosition = cameraPosition.add(offset);
     }
     this.playerCamera.position.copyFrom(cameraPosition);
-    const direction = toBabylonDirection({
-      x: -Math.sin(yaw) * Math.cos(pitch),
-      y: Math.cos(yaw) * Math.cos(pitch),
-      z: Math.sin(pitch),
-    });
-    this.playerCamera.setTarget(this.playerCamera.position.add(direction));
+    // Sauerbraten applies yaw and pitch as independent camera rotations. Avoiding a look-at decomposition preserves yaw at vertical pitch.
+    this.playerCamera.rotation.set(pitch, Math.PI - yaw, 0);
   }
 
   private readonly resize = (): void => this.engine.resize();

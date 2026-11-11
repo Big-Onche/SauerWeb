@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PacketReader } from "../network/protocol";
+import { PacketReader, PacketWriter } from "../network/protocol";
 import { createClient, serializeShoot, type NetworkPlayer } from "./client";
 import { DMF, DNF, NetworkMessage } from "./game";
 import { createDamageable } from "./weapon/DamageSystem";
@@ -105,6 +105,33 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.getInt()).toBe(type);
     expect(packet.getString()).toBe("hello team");
     expect(packet.remaining).toBe(0);
+  });
+});
+
+describe("native server message framing", () => {
+  it("consumes teleport and jumppad records on the position channel", () => {
+    const client = createClient().multiplayer;
+    const packet = new PacketWriter()
+      .putInt(NetworkMessage.Teleport).putInt(7).putInt(2).putInt(3)
+      .putInt(NetworkMessage.JumpPad).putInt(7).putInt(4)
+      .finish();
+
+    expect(() => Reflect.apply(Reflect.get(client, "parsePositions"), client, [new PacketReader(packet)])).not.toThrow();
+  });
+
+  it("consumes the complete edit-entity payload before the following message", () => {
+    const client = createClient().multiplayer;
+    const consoleLines: string[] = [];
+    client.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "console") consoleLines.push(detail.text);
+    });
+    const packet = new PacketWriter().putInt(NetworkMessage.EditEntity);
+    for (let field = 0; field < 10; field++) packet.putInt(field);
+    packet.putInt(NetworkMessage.ServerMessage).putString("aligned");
+
+    expect(() => Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(packet.finish())])).not.toThrow();
+    expect(consoleLines).toEqual(["aligned"]);
   });
 });
 

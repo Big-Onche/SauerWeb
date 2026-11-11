@@ -34,7 +34,6 @@ interface PlayerModelInstance {
   animation: string;
   frame: number;
   updateToken: number;
-  positioned: boolean;
 }
 
 // Browser counterpart of src/fpsgame/render.cpp's model batching. Ragdoll state is deliberately not represented yet.
@@ -79,15 +78,12 @@ export class PlayerRenderer {
   private renderplayer(player: RenderPlayer, gameMode: number, teamskins: boolean, localTeam: string, nowMilliseconds: number): void {
     let instance = this.instances.get(player.id);
     if (!instance) {
-      instance = { root: new TransformNode(`player-${player.id}`, this.scene), meshes: [], visualKey: "", animation: "", frame: -1, updateToken: 0,
-        positioned: false };
+      instance = { root: new TransformNode(`player-${player.id}`, this.scene), meshes: [], visualKey: "", animation: "", frame: -1, updateToken: 0 };
       this.instances.set(player.id, instance);
     }
     instance.root.setEnabled(player.visible);
     const targetPosition = toBabylonPosition(player.position);
-    if (!player.local && instance.positioned) Vector3.LerpToRef(instance.root.position, targetPosition, 0.35, instance.root.position);
-    else instance.root.position.copyFrom(targetPosition);
-    instance.positioned = true;
+    instance.root.position.copyFrom(targetPosition);
     if (!player.visible) return;
     const model = getplayermodelinfo(player.model);
     const skin = playerSkin(gameMode, teamskins, localTeam, player.team, player.local);
