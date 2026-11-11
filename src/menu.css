@@ -74,6 +74,14 @@ button { color: inherit; }
 @media (max-height: 760px) { .sauer-logo { width: min(660px, 82vw, 86vh); }.main-dialog { margin-top: 26vh; } }
 @media (max-width: 540px) { .sauer-logo { width: 100vw; }.main-dialog { margin-top: 24vh; }.map-browser { grid-template-columns: 1fr; }.map-preview { display: none; }.map-columns { grid-template-columns: 1fr 1fr; }.maps-heading h1 { font-size: 23px; }.maps-dialog footer span:last-child { display: none; } }
 .servers-dialog { display: flex; flex-direction: column; width: min(1050px, calc(100vw - 80px)); height: min(650px, calc(100vh - 80px)); padding: 20px 22px 14px; }
+.server-controls {
+  display: flex; align-items: center; gap: 16px; min-height: 42px; padding: 5px 4px 8px; border-bottom: 1px solid #69737477; color: #c9ceca;
+}
+.server-controls button { padding: 5px 12px; border: 1px solid #7f8b8b; border-radius: 2px; background: #202829aa; cursor: pointer; }
+.server-controls button:hover { border-color: #d9953d; color: #ffd49b; }
+.server-controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.server-controls input { width: 15px; height: 15px; margin: 0; accent-color: #c47b32; }
+.server-controls #sort-servers { margin-left: auto; }
 .server-heading, .server-list button { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(120px, 1fr) 130px 80px 65px; gap: 12px; align-items: center; }
 .server-heading { padding: 9px 12px; border-bottom: 1px solid #768181; color: #8f9a9a; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 .server-list { flex: 1; overflow: auto; }.server-list > p { padding: 25px; color: #9aa; text-align: center; }
@@ -82,3 +90,8 @@ button { color: inherit; }
 .server-list button strong, .server-list button small { display: block; }.server-list button strong { font-size: 17px; }.server-list button small { color: #829090; }
 .servers-dialog footer { display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px solid #69737477; color: #7f898a; font-size: 12px; letter-spacing: .1em; }
 .servers-dialog footer button { padding: 5px 18px; border: 1px solid #7f8b8b; background: #202829aa; color: #fff; cursor: pointer; }
+@media (max-width: 760px) {
+  .server-controls { gap: 9px; overflow-x: auto; font-size: 13px; }
+  .server-heading, .server-list button { grid-template-columns: minmax(180px, 2fr) 100px 70px 55px; }
+  .server-heading span:nth-child(3), .server-list button > span:nth-child(3) { display: none; }
+}

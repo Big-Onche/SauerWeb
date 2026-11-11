@@ -1,5 +1,5 @@
 import "./menu.css";
-import { refreshservers, servermodename, type ServerListItem } from "./engine/serverbrowser";
+import { refreshservers, servercompatible, servermodename, sortservers, type ServerListItem } from "./engine/serverbrowser";
 import { MAP_MENU_PAGES } from "./menuData";
 
 interface MapListItem {
@@ -12,6 +12,10 @@ const app = required<HTMLDivElement>("#app");
 let availableMaps: Map<string, MapListItem> | undefined;
 let selectedPage = "ffa-1";
 let previewMap = "aard3c";
+let serverBrowserServers: ServerListItem[] = [];
+let serverBrowserLoaded = false;
+let serverBrowserRequest = 0;
+const serverBrowserOptions = { searchlan: false, autoupdateservers: true, autosortservers: true };
 const backgroundDecals = createBackgroundDecals();
 let guiSkinSequence = 0;
 
@@ -87,36 +91,83 @@ function renderServersMenu(): void {
         ${guiSkinMarkup()}
         <header class="maps-heading"><div><p>multiplayer</p><h1 id="servers-title">server browser</h1></div>
           <button id="servers-back" class="back-button" type="button">‹ main menu</button></header>
-        <div class="server-heading"><span>server</span><span>map</span><span>mode</span><span>players</span><span>ping</span></div>
+        <div class="server-controls" aria-label="Server browser options">
+          <button id="update-from-master" type="button">update from master server</button>
+          <label><input id="search-lan" type="checkbox" ${serverBrowserOptions.searchlan ? "checked" : ""} /> search LAN</label>
+          <label><input id="auto-update-servers" type="checkbox" ${serverBrowserOptions.autoupdateservers ? "checked" : ""} /> auto-update</label>
+          <label><input id="auto-sort-servers" type="checkbox" ${serverBrowserOptions.autosortservers ? "checked" : ""} /> auto-sort</label>
+          <button id="sort-servers" type="button" ${serverBrowserOptions.autosortservers ? "hidden" : ""}>sort</button>
+        </div>
+        <div class="server-heading"><span>server</span><span>map</span><span>mode</span><span>players ↓</span><span>ping</span></div>
         <div id="server-list" class="server-list"><p>Querying configured Sauerbraten servers…</p></div>
-        <footer><span>PROTOCOL 260 · ENET 1.3.17</span><button id="refresh-servers" type="button">refresh</button></footer>
+        <footer><span>PROTOCOL 260 · ENET 1.3.17</span><span id="server-count"></span></footer>
       </section>
     </main>`;
   required<HTMLButtonElement>("#servers-back").addEventListener("click", () => navigate("/"));
-  required<HTMLButtonElement>("#refresh-servers").addEventListener("click", () => void loadServers());
-  void loadServers();
+  required<HTMLButtonElement>("#update-from-master").addEventListener("click", () => void loadServers());
+  const searchlan = required<HTMLInputElement>("#search-lan");
+  searchlan.addEventListener("change", () => {
+    serverBrowserOptions.searchlan = searchlan.checked;
+    void loadServers();
+  });
+  const autoupdateservers = required<HTMLInputElement>("#auto-update-servers");
+  autoupdateservers.addEventListener("change", () => { serverBrowserOptions.autoupdateservers = autoupdateservers.checked; });
+  const autosortservers = required<HTMLInputElement>("#auto-sort-servers");
+  const sortButton = required<HTMLButtonElement>("#sort-servers");
+  autosortservers.addEventListener("change", () => {
+    serverBrowserOptions.autosortservers = autosortservers.checked;
+    sortButton.hidden = autosortservers.checked;
+    if (autosortservers.checked) {
+      serverBrowserServers = sortservers(serverBrowserServers);
+      renderServerList();
+    }
+  });
+  sortButton.addEventListener("click", () => {
+    serverBrowserServers = sortservers(serverBrowserServers);
+    renderServerList();
+  });
+  if (!serverBrowserLoaded || serverBrowserOptions.autoupdateservers) void loadServers();
+  else renderServerList();
 }
 
 async function loadServers(): Promise<void> {
   const list = required<HTMLDivElement>("#server-list");
+  const request = ++serverBrowserRequest;
   list.innerHTML = "<p>Querying configured Sauerbraten servers…</p>";
   try {
-    const servers = await refreshservers();
-    list.replaceChildren(...servers.map((server) => {
+    const servers = await refreshservers(serverBrowserOptions.searchlan);
+    if (request !== serverBrowserRequest || normalizePath(location.pathname) !== "/servers") return;
+    serverBrowserServers = serverBrowserOptions.autosortservers ? sortservers(servers) : servers;
+    serverBrowserLoaded = true;
+    renderServerList();
+  } catch (caught) {
+    if (request !== serverBrowserRequest || normalizePath(location.pathname) !== "/servers") return;
+    list.innerHTML = `<p>${escapeHtml(caught instanceof Error ? caught.message : String(caught))}</p>`;
+  }
+}
+
+function renderServerList(): void {
+  const list = required<HTMLDivElement>("#server-list");
+  if (!serverBrowserServers.length) {
+    list.innerHTML = "<p>No Sauerbraten servers found.</p>";
+  } else {
+    list.replaceChildren(...serverBrowserServers.map((server) => {
       const attributes = server.attributes ?? [];
-      const compatible = server.online && attributes[0] === 260;
+      const compatible = servercompatible(server);
       const button = document.createElement("button");
       button.type = "button";
       button.disabled = !compatible || !server.map;
-      button.innerHTML = `<span><strong>${escapeHtml(server.description || server.label)}</strong><small>${escapeHtml(server.host)}:${server.port}</small></span>` +
+      const description = escapeHtml(server.description || server.label);
+      const address = `${escapeHtml(server.host)}:${server.port}`;
+      button.innerHTML = `<span><strong>${description}</strong><small>${address}</small></span>` +
         `<span>${escapeHtml(server.map || "—")}</span><span>${escapeHtml(servermodename(attributes[1]))}</span>` +
         `<span>${server.numPlayers ?? 0}/${attributes[3] ?? "?"}</span><span>${server.ping ?? "—"}</span>`;
       if (compatible && server.map) button.addEventListener("click", () => launchServer(server));
       return button;
     }));
-  } catch (caught) {
-    list.innerHTML = `<p>${escapeHtml(caught instanceof Error ? caught.message : String(caught))}</p>`;
   }
+  const serverSuffix = serverBrowserServers.length === 1 ? "" : "s";
+  required<HTMLSpanElement>("#server-count").textContent = `${serverBrowserServers.length} server${serverSuffix}`;
 }
 
 function launchServer(server: ServerListItem): void {

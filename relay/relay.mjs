@@ -15,6 +15,7 @@ const MAX_PACKETS_PER_SECOND = 256;
 const MAX_BYTES_PER_SECOND = 1_048_576;
 const DEFAULT_MASTER_NAME = "master.sauerbraten.org";
 const DEFAULT_MASTER_PORT = 28787;
+const DEFAULT_LAN_INFO_PORT = 28786;
 
 export function configuredServers(environment = process.env) {
   const value = environment.SAUER_RELAY_SERVERS || "127.0.0.1:28785";
@@ -24,7 +25,7 @@ export function configuredServers(environment = process.env) {
     if (!match) throw new Error(`Invalid SAUER_RELAY_SERVERS entry: ${entry}`);
     const port = Number(match[2]);
     if (!Number.isInteger(port) || port < 1 || port > 65_534) throw new Error(`Invalid Sauerbraten port: ${match[2]}`);
-    return { host: match[1], port, label: label || match[1] };
+    return { host: match[1], port, label: label || match[1], keep: true };
   });
 }
 
@@ -118,6 +119,44 @@ export async function queryConfiguredServers(servers = configuredServers()) {
   return Promise.all(servers.map(async (server) => ({ ...server, ...await queryServer(server) })));
 }
 
+// Original: src/engine/serverbrowser.cpp, pingservers() searchlan branch
+export function discoverLanServers(timeout = 400) {
+  return new Promise((resolve) => {
+    const udp = dgram.createSocket("udp4");
+    const servers = new Map();
+    const started = Date.now();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try { udp.close(); } catch {}
+      resolve([...servers.values()]);
+    };
+    const timer = setTimeout(finish, timeout);
+    udp.on("message", (datagram, remote) => {
+      try {
+        const port = remote.port - 1;
+        if (port < 1) return;
+        const server = { host: remote.address, port, label: remote.address, keep: false, ...decodeServerInfo(datagram, Date.now() - started) };
+        servers.set(`${server.host}:${server.port}`, server);
+      } catch {}
+    });
+    udp.once("error", () => {
+      clearTimeout(timer);
+      finish();
+    });
+    udp.bind(0, () => {
+      try {
+        udp.setBroadcast(true);
+        udp.send(Buffer.from([1]), DEFAULT_LAN_INFO_PORT, "255.255.255.255");
+      } catch {
+        clearTimeout(timer);
+        finish();
+      }
+    });
+  });
+}
+
 // Original: src/engine/serverbrowser.cpp, retrieveservers()
 export function retrieveservers(environment = process.env) {
   const mastername = environment.SAUER_MASTER_SERVER || DEFAULT_MASTER_NAME;
@@ -182,8 +221,8 @@ export async function updatefrommaster(keepservers = configuredServers(), enviro
 }
 
 export function serverListMiddleware(servers = configuredServers(), environment = process.env) {
-  const keepservers = [...servers];
-  return async (_request, response) => {
+  const keepservers = servers.map((server) => ({ ...server, keep: true }));
+  return async (request, response) => {
     try {
       try {
         const updated = await updatefrommaster(keepservers, environment);
@@ -191,9 +230,19 @@ export function serverListMiddleware(servers = configuredServers(), environment 
       } catch (error) {
         console.warn(`Could not update from Sauerbraten master server: ${error instanceof Error ? error.message : String(error)}`);
       }
+      const searchlan = new URL(request.url || "/", "http://relay.invalid").searchParams.get("searchlan") === "1";
+      const queried = await queryConfiguredServers(servers);
+      if (searchlan) {
+        const lanServers = await discoverLanServers();
+        const known = new Set(queried.map((server) => `${server.host}:${server.port}`));
+        for (const server of lanServers) {
+          if (!known.has(`${server.host}:${server.port}`)) queried.push(server);
+          if (!servers.some((candidate) => candidate.host === server.host && candidate.port === server.port)) servers.push(server);
+        }
+      }
       response.setHeader("Content-Type", "application/json; charset=utf-8");
       response.setHeader("Cache-Control", "no-store");
-      response.end(JSON.stringify(await queryConfiguredServers(servers)));
+      response.end(JSON.stringify(queried));
     } catch (error) {
       response.statusCode = 500;
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
@@ -233,18 +282,22 @@ async function queryServer(server) {
     udp.once("error", () => finish({ ping: null, online: false }));
     udp.once("message", (datagram) => {
       try {
-        const reader = packetReader(datagram);
-        reader.int();
-        const numPlayers = reader.int();
-        const attributeCount = reader.int();
-        const attributes = Array.from({ length: Math.max(0, Math.min(64, attributeCount)) }, () => reader.int());
-        finish({ ping: Date.now() - started, online: true, numPlayers, attributes, map: reader.string(), description: reader.string() });
+        finish(decodeServerInfo(datagram, Date.now() - started));
       } catch {
         finish({ ping: null, online: false });
       }
     });
     udp.send(Buffer.from([1]), server.port + 1, server.host);
   });
+}
+
+function decodeServerInfo(datagram, ping) {
+  const reader = packetReader(datagram);
+  reader.int();
+  const numPlayers = reader.int();
+  const attributeCount = reader.int();
+  const attributes = Array.from({ length: Math.max(0, Math.min(64, attributeCount)) }, () => reader.int());
+  return { ping, online: true, numPlayers, attributes, map: reader.string(), description: reader.string() };
 }
 
 function packetReader(bytes) {
