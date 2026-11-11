@@ -1,7 +1,7 @@
 import "./menu.css";
 import { refreshservers, servercompatible, servermodename, sortservers, type ServerListItem } from "./engine/serverbrowser";
 import { MAP_MENU_PAGES } from "./menuData";
-import { PLAYER_MODEL_NAMES } from "./fpsgame/render";
+import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
 
 interface MapListItem {
   name: string;
@@ -40,8 +40,7 @@ function route(): void {
 
 function renderMainMenu(): void {
   const playerModel = savedPlayerModel();
-  const playerModelName = PLAYER_MODEL_NAMES[playerModel];
-  const playerModelIcon = playerModelName === "ogro2" ? "ogro" : playerModelName;
+  const playerModelInfo = PLAYER_MODEL_INFO[playerModel];
   app.innerHTML = `
     <main class="sauer-screen">
       ${backgroundMarkup(true)}
@@ -50,12 +49,12 @@ function renderMainMenu(): void {
         <h1 id="main-menu-title" class="sr-only">Sauerbraten main menu</h1>
         <div class="identity-row">
           <button class="portrait" type="button" data-action="player-model" aria-label="Choose player model">
-            <img src="/api/packages/icons/${playerModelIcon}.jpg" alt="${playerModelLabel(playerModel)}" />
+            <img src="/api/packages/icons/${playerModelInfo.icon}.jpg" alt="${playerModelInfo.name}" />
           </button>
           <div class="identity-fields">
             <label for="player-name">player name</label>
             <input id="player-name" maxlength="15" value="${escapeHtml(savedPlayerName())}" autocomplete="nickname" />
-            <div class="model-row"><span>${playerModelLabel(playerModel)}</span>
+            <div class="model-row"><button type="button" data-action="player-model">${playerModelInfo.name}</button>
               <img src="/api/packages/crosshairs/cross_normal.png" alt="Current crosshair" /></div>
           </div>
         </div>
@@ -70,6 +69,23 @@ function renderMainMenu(): void {
           ${menuButton("quit", "quit", false, "exit")}
         </nav>
       </section>
+      <dialog id="playermodel-dialog" class="playermodel-dialog" aria-labelledby="playermodel-title">
+        ${guiSkinMarkup()}
+        <div class="playermodel-layout">
+          <nav class="playermodel-list" aria-label="Player models">
+            ${PLAYER_MODEL_INFO.map((model, index) => `<button type="button" data-player-model="${index}"
+              class="${index === playerModel ? "active" : ""}"><img src="/api/packages/icons/${model.icon}.jpg" alt="" />
+              <span>${model.name}</span></button>`).join("")}
+          </nav>
+          <div class="playermodel-rule" aria-hidden="true"></div>
+          <section class="playermodel-preview">
+            <div class="player-preview-frame"><canvas id="player-model-preview" aria-label="Animated player model preview"></canvas></div>
+            <h2 id="playermodel-title">${playerModelInfo.name}</h2>
+            <p id="playermodel-story">${playerModelInfo.story}</p>
+          </section>
+        </div>
+        <footer><span>Choose your player model</span><button type="button" data-action="close-playermodel">back</button></footer>
+      </dialog>
       <dialog id="about-dialog" class="about-dialog">
         ${guiSkinMarkup()}
         <h2>Cube 2: Sauerbraten</h2>
@@ -81,10 +97,47 @@ function renderMainMenu(): void {
 
   const playerName = required<HTMLInputElement>("#player-name");
   playerName.addEventListener("change", () => savePlayerName(playerName.value));
-  required<HTMLButtonElement>("[data-action='player-model']").addEventListener("click", () => {
+  const playermodelDialog = required<HTMLDialogElement>("#playermodel-dialog");
+  let preview: { setModel(model: number): void; dispose(): void } | undefined;
+  let previewModel = playerModel;
+  const showPreview = (model: number): void => {
+    previewModel = model;
+    const info = PLAYER_MODEL_INFO[model];
+    required<HTMLHeadingElement>("#playermodel-title").textContent = info.name;
+    required<HTMLParagraphElement>("#playermodel-story").textContent = info.story;
+    preview?.setModel(model);
+    playermodelDialog.querySelectorAll<HTMLButtonElement>("[data-player-model]").forEach((button) => {
+      button.classList.toggle("previewing", Number(button.dataset.playerModel) === model);
+    });
+  };
+  const openPlayermodel = async (): Promise<void> => {
     savePlayerName(playerName.value);
-    savePlayerModel((playerModel + 1) % PLAYER_MODEL_NAMES.length);
-    renderMainMenu();
+    playermodelDialog.showModal();
+    showPreview(playerModel);
+    const module = await import("./platform/browser/PlayerModelPreview");
+    if (!playermodelDialog.open) return;
+    preview = new module.PlayerModelPreview(required<HTMLCanvasElement>("#player-model-preview"));
+    preview.setModel(previewModel);
+  };
+  document.querySelectorAll<HTMLButtonElement>("[data-action='player-model']").forEach((button) => {
+    button.addEventListener("click", () => void openPlayermodel());
+  });
+  playermodelDialog.querySelectorAll<HTMLButtonElement>("[data-player-model]").forEach((button) => {
+    const model = Number(button.dataset.playerModel);
+    button.addEventListener("mouseenter", () => showPreview(model));
+    button.addEventListener("focus", () => showPreview(model));
+    button.addEventListener("click", () => {
+      savePlayerModel(model);
+      preview?.dispose();
+      preview = undefined;
+      playermodelDialog.close();
+      renderMainMenu();
+    });
+  });
+  required<HTMLButtonElement>("[data-action='close-playermodel']").addEventListener("click", () => playermodelDialog.close());
+  playermodelDialog.addEventListener("close", () => {
+    preview?.dispose();
+    preview = undefined;
   });
   required<HTMLButtonElement>("[data-action='bot']").addEventListener("click", () => navigate("/maps"));
   required<HTMLButtonElement>("[data-action='server']").addEventListener("click", () => navigate("/servers"));
@@ -356,9 +409,6 @@ function savePlayerModel(model: number): void {
   }
 }
 
-function playerModelLabel(model: number): string {
-  return ["Mr. Fixit", "Snout X10K", "Ogro", "Inky", "Captain Cannon"][model] ?? "Mr. Fixit";
-}
 
 function required<ElementType extends Element>(selector: string): ElementType {
   const element = document.querySelector<ElementType>(selector);

@@ -95,6 +95,7 @@ export class MapScene {
   private currentMap?: SauerMap;
   private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
   private debugLoadout = false;
+  private playerModel = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -295,6 +296,10 @@ export class MapScene {
     this.teamskins = enabled;
   }
 
+  setPlayerModel(model: number): void {
+    this.playerModel = Number.isInteger(model) && model >= 0 && model < 5 ? model : 0;
+  }
+
   resetPlayer(): void {
     this.physics.reset(performance.now());
     this.weapons.controller.respawn(performance.now());
@@ -320,9 +325,10 @@ export class MapScene {
 
   async connectMultiplayer(endpoint: ServerEndpoint): Promise<void> {
     this.debugLoadout = false;
+    this.setPlayerModel(endpoint.playerModel ?? this.playerModel);
     this.setCameraMode("player");
     this.multiplayerHUD.setVisible(true);
-    await this.fpsClient.multiplayer.connect(endpoint);
+    await this.fpsClient.multiplayer.connect({ ...endpoint, playerModel: this.playerModel });
   }
 
   onMultiplayer(listener: (event: MultiplayerEvent) => void): () => void {
@@ -669,7 +675,7 @@ export class MapScene {
       const source = local ? this.physics.player : player;
       players.push({
         id: clientNumber,
-        model: player.model,
+        model: local ? this.playerModel : player.model,
         team: player.team,
         local,
         visible: player.state !== ClientState.Spectator && player.state !== ClientState.Spawning,
@@ -691,7 +697,7 @@ export class MapScene {
       const player = this.physics.player;
       players.push({
         id: -1,
-        model: 0,
+        model: this.playerModel,
         team: "",
         local: true,
         visible: player.clientState !== ClientState.Spectator,

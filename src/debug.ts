@@ -130,6 +130,7 @@ const launchParameters = new URLSearchParams(location.search);
 const multiplayerHost = launchParameters.get("server");
 const multiplayerPort = Number(launchParameters.get("port") || 28785);
 if (!multiplayerHost) mapScene.enableDebugLoadout();
+mapScene.setPlayerModel(savedPlayerModel());
 let maps: MapListItem[] = [];
 let activeMapName = "";
 let multiplayerConnected = false;

@@ -2,6 +2,41 @@ import { ClientState, PhysicsState } from "../engine/physics/types";
 
 export const PLAYER_MODEL_NAMES = ["mrfixit", "snoutx10k", "ogro2", "inky", "captaincannon"] as const;
 export type PlayerModelName = typeof PLAYER_MODEL_NAMES[number];
+export const PLAYER_MODEL_INFO = [
+  {
+    name: "Mr. Fixit",
+    icon: "mrfixit",
+    story: "Which orc do you choose when the mission calls for an all-purpose wrecking machine? Who do you call when the odds are stacked " +
+      "against you? Mr. Fixit, that's who. Gifted with the ability to perform deconstructive surgery with any weapon, this orc gets the job " +
+      "done fast and with extreme prejudice.",
+  },
+  {
+    name: "IronSnout X10K",
+    icon: "snoutx10k",
+    story: "IronSnout X10K is a hybrid model of the IronSnout series. Bred in the bowels of a top secret underground facility, this walking " +
+      "fragging machine is for one purpose: to annihilate the opposition. Part pig, part machine, IronSnout X10K knows no fear and fears no " +
+      "fragger.",
+  },
+  {
+    name: "Ogro",
+    icon: "ogro",
+    story: "Ogro is smaller than a normal ogre, but just as fat and only slightly less stupid. As opposed to common belief, he is not an evil " +
+      "creature, only killing as is absolutely necessary.",
+  },
+  {
+    name: "Inky",
+    icon: "inky",
+    story: "Inky is the aspiring younger sibling of an infamous transdimensional celebrity. Often teased as being only the ‘Lesser Evil’, " +
+      "Inky searches the battlefields for infamy of his own, claiming it one fragger at a time.",
+  },
+  {
+    name: "Captain Cannon",
+    icon: "captaincannon",
+    story: "Cannon Jones dared to imbibe the old imported beer can that had languished at the bottom of his refrigerator. Unbeknownst to " +
+      "Cannon, it had been bombarded with stray gamma radiation. After some serious indigestion, the mild-mannered Cannon Jones became the " +
+      "mighty Captain Cannon! Captain Cannon now has only one known weakness: his overbearingly righteous sense of justice.",
+  },
+] as const;
 export type PlayerAnimation = "dead" | "dying" | "idle" | "forward" | "backward" | "left" | "right" | "pain" | "jump" | "sink" |
   "swim" | "edit" | "lag";
 export type PlayerSkin = "ffa" | "blueTeam" | "redTeam";
