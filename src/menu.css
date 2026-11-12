@@ -69,6 +69,18 @@ button { color: inherit; }
 .bot-mode { display: flex; align-items: center; gap: 8px; margin-left: auto; margin-right: 14px; color: #aab1ad; font-size: 10px;
   text-transform: uppercase; letter-spacing: .1em; }
 .bot-mode select { padding: 6px 9px; border: 1px solid #6f7776; border-radius: 2px; background: #182020; color: #ffd49b; }
+.botmatch-dialog { width: min(520px, calc(100vw - 32px)); }
+.botmatch-controls { display: grid; gap: 18px; padding: 26px 34px 30px; }
+.botmatch-controls > label { display: grid; gap: 7px; color: #d7d9d5; text-transform: lowercase; }
+.botmatch-controls > label > div { display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 14px; }
+.botmatch-controls input[type="range"] { width: 100%; accent-color: #d49a54; }
+.botmatch-controls output { color: #ffd49b; font-variant-numeric: tabular-nums; text-align: right; }
+.gamemode-dialog { width: min(660px, calc(100vw - 32px)); }
+.gamemode-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; padding: 18px 26px 24px; background: #76818155; }
+.gamemode-columns > div { display: grid; align-content: start; gap: 2px; padding: 0 18px; background: #111818ee; }
+.gamemode-columns > div + div { border-left: 1px solid #788080; }
+.gamemode-columns button { padding: 7px 10px; border: 0; background: transparent; color: #d7d9d5; text-align: left; cursor: pointer; }
+.gamemode-columns button:hover, .gamemode-columns button:focus-visible { background: #8b562b66; color: #ffd49b; }
 .back-button { padding: 7px 14px; background: #202829aa; border-color: #7f8b8b; }
 .back-button:hover { border-color: #d9953d; color: #ffd49b; }
 .map-tabs { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid #858f8f; }

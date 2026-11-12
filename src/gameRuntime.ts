@@ -16,6 +16,9 @@ const server = parameters.get("server");
 const port = Number(parameters.get("port") || 28785);
 const requestedMode = Number(parameters.get("mode"));
 const localGameMode = validGameMode(requestedMode) ? requestedMode : 0;
+const botCount = integerParameter("bots", 0, 0, 32);
+const botMinimumSkill = integerParameter("minskill", 50, 1, 101);
+const botMaximumSkill = integerParameter("maxskill", 100, botMinimumSkill, 101);
 
 app.innerHTML = `
   <main class="game-shell">
@@ -102,7 +105,7 @@ required<HTMLButtonElement>("[data-action='close-crosshair']").addEventListener(
 required<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => location.assign("/"));
 chat.addEventListener("submit", (event) => {
   event.preventDefault();
-  scene.sendChat(chatInput.value, teamChat);
+  if (!scene.executeBotCommand(chatInput.value)) scene.sendChat(chatInput.value, teamChat);
   chatInput.value = "";
   chat.hidden = true;
   canvas.focus();
@@ -131,6 +134,7 @@ async function loadMap(name: string): Promise<void> {
     await scene.loadMap(map, resolveMapTextures(map, manifest), manifest.skybox, manifest.lighting, manifest.fog, manifest.mapModels ?? [],
       manifest.entityModels?.teleporter);
     scene.setMultiplayerMapInfo(name, crc32(new Uint8Array(mapData)));
+    if (!server) scene.configureBotMatch(botCount, botMinimumSkill, botMaximumSkill);
     activeMap = name;
     document.title = `${name} — SauerWeb`;
     gameConsole.add(`read map ${name}`);
@@ -151,7 +155,7 @@ function onKeyDown(event: KeyboardEvent): void {
     event.stopImmediatePropagation();
     return;
   }
-  const consoleKey = event.code === "KeyT" || event.code === "KeyY" || event.code === "F11" || event.code === "PageUp" ||
+  const consoleKey = event.code === "KeyT" || event.code === "KeyY" || event.code === "Slash" || event.code === "F11" || event.code === "PageUp" ||
     event.code === "PageDown" || event.code === "NumpadAdd" || event.code === "NumpadSubtract";
   if (!deathMenu.hidden && !event.repeat && !consoleKey) {
     event.preventDefault();
@@ -170,11 +174,12 @@ function onKeyDown(event: KeyboardEvent): void {
   } else if (gameConsole.isFull && (event.code === "PageDown" || event.code === "NumpadAdd")) {
     event.preventDefault();
     gameConsole.scroll(-5);
-  } else if (server && (event.code === "KeyT" || event.code === "KeyY") && chat.hidden && pauseMenu.hidden) {
+  } else if ((server && (event.code === "KeyT" || event.code === "KeyY") || event.code === "Slash") && chat.hidden && pauseMenu.hidden) {
     event.preventDefault();
     if (document.pointerLockElement === canvas) void document.exitPointerLock();
     teamChat = event.code === "KeyY";
-    chatPrompt.textContent = teamChat ? "[team]" : ">";
+    chatPrompt.textContent = event.code === "Slash" ? "/" : teamChat ? "[team]" : ">";
+    if (event.code === "Slash") chatInput.value = "/";
     chat.hidden = false;
     chatInput.focus();
   } else if (server && event.code === "KeyG" && chat.hidden && pauseMenu.hidden) {
@@ -184,6 +189,7 @@ function onKeyDown(event: KeyboardEvent): void {
 
 function requestRespawn(): void {
   if (!scene.requestRespawn()) return;
+  if (!server) { syncDeathMenu(); return; }
   respawnPending = true;
   respawnButton.disabled = true;
   respawnButton.textContent = "respawning…";
@@ -252,6 +258,11 @@ function savedPlayerModel(): number {
 
 function validGameMode(mode: number): boolean {
   return Number.isInteger(mode) && mode >= 0 && mode <= 22;
+}
+
+function integerParameter(name: string, fallback: number, minimum: number, maximum: number): number {
+  const value = Number(parameters.get(name));
+  return Number.isInteger(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
 }
 
 function required<ElementType extends Element>(selector: string): ElementType {

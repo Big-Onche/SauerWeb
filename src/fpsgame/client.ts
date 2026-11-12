@@ -1,5 +1,5 @@
 import { PhysicsSimulation } from "../engine/physics";
-import { ClientState, PhysicsState } from "../engine/physics/types";
+import { ClientState, PhysicsState, type PhysicsEntity } from "../engine/physics/types";
 import { copyVec3, magnitude } from "../engine/physics/vector";
 import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
 import { EnetClient, type EnetEvent, ENET_PACKET_FLAG_UNSEQUENCED } from "../network/enet";
@@ -50,6 +50,9 @@ export interface NetworkPlayer extends Damageable {
   lastPain: number;
   deadAt: number;
   interpolation: NetworkInterpolation;
+  aiType: number;
+  ownerNumber: number;
+  skill: number;
 }
 
 interface CaptureBase {
@@ -65,11 +68,12 @@ export type MultiplayerEvent =
   | { type: "status"; status: string; error?: boolean }
   | { type: "map-change"; map: string; mode: number }
   | { type: "players"; disconnectedClientNumber?: number }
-  | { type: "spawn" }
+  | { type: "spawn"; clientNumber?: number }
   | { type: "console"; text: string; consoleType: ConsoleLineType }
   | { type: "remote-shot"; clientNumber: number; gun: Gun; from: Vec3; to: Vec3 }
   | { type: "entity-effect"; effect: EntityEffect; local: boolean }
-  | { type: "disconnect"; reason: number };
+  | { type: "disconnect"; reason: number }
+  | { type: "bot-init"; player: NetworkPlayer };
 
 export function createClient(physics = new PhysicsSimulation()): FpsClient {
   const weapons = new WeaponSystem({
@@ -224,6 +228,67 @@ export class MultiplayerClient extends EventTarget {
     this.console(`${team ? "[team] " : ""}${this.displayName(player)}: ${message}`, team ? "team-chat" : "chat");
     this.transport.send(1, new PacketWriter().putInt(team ? NetworkMessage.SayTeam : NetworkMessage.Text).putString(message).finish(), true);
     this.transport.flush();
+  }
+
+  // Native bot administration messages from ai.cpp.
+  addBot(skill = -1): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.AddBot).putInt(skill > 0 ? Math.min(101, Math.max(1, skill)) : -1).finish(), true);
+  }
+
+  deleteBot(): void { this.sendSimpleBotCommand(NetworkMessage.DeleteBot); }
+
+  setBotLimit(limit: number): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.BotLimit).putInt(Math.min(32, Math.max(0, Math.trunc(limit)))).finish(), true);
+  }
+
+  setBotBalance(enabled: boolean): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.BotBalance).putInt(enabled ? 1 : 0).finish(), true);
+  }
+
+  syncLocalBot(bot: PhysicsEntity & { clientNumber: number; ownerNumber: number; skill: number; name: string; team: string; model: number;
+    lifeSequence: number; frags: number; deaths: number; flags: number; selectedGun: number; ammo: Int32Array; lastAction: number; gunWait: number;
+    lastAttackGun: number; lastPain: number; deadAt: number }): void {
+    const player = this.playerFor(bot.clientNumber);
+    Object.assign(player, {
+      ownerNumber: bot.ownerNumber, aiType: 1, skill: bot.skill, name: bot.name, team: bot.team, model: bot.model % 5,
+      lifeSequence: bot.lifeSequence, frags: bot.frags, deaths: bot.deaths, flags: bot.flags, selectedGun: bot.selectedGun, ammo: bot.ammo,
+      lastAction: bot.lastAction, gunWait: bot.gunWait, lastAttackGun: bot.lastAttackGun, lastPain: bot.lastPain, deadAt: bot.deadAt,
+      position: copyVec3(bot.position), velocity: copyVec3(bot.velocity), yaw: bot.yaw, pitch: bot.pitch, roll: bot.roll, move: bot.move,
+      strafe: bot.strafe, physicsState: bot.physicsState, state: bot.clientState, alive: bot.alive, health: bot.health,
+      maxHealth: bot.maxHealth, armour: bot.armour, armourType: bot.armourType,
+    });
+  }
+
+  clearLocalBots(): void {
+    for (const [clientNumber, player] of this.players) if (player.aiType !== 0 && player.ownerNumber < 0) this.players.delete(clientNumber);
+    this.syncTargets();
+  }
+
+  notifyLocalStateChange(): void { this.emit({ type: "players" }); }
+
+  sendOwnedBotPosition(bot: PhysicsEntity, clientNumber: number, lifeSequence: number): void {
+    if (!this.connected) return;
+    this.transport.send(0, this.buildPosition(bot, clientNumber, lifeSequence));
+  }
+
+  sendOwnedBotEvent(clientNumber: number, event: WeaponEvent): void {
+    if (!this.connected || event.type !== "shot") return;
+    const local = this.players.get(this.clientNumber);
+    const normalized = { ...event, hits: event.hits.map((hit) => hit.target === this.physics.player && local
+      ? { ...hit, target: Object.assign({ ...this.physics.player }, { id: `client:${this.clientNumber}`, clientNumber: this.clientNumber,
+        lifeSequence: local.lifeSequence }) as unknown as NetworkPlayer }
+      : hit) };
+    const packet = new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber)
+      .putBytes(serializeShoot(normalized, Math.trunc(event.millis - this.mapStarted)));
+    this.transport.send(1, packet.finish(), true);
+  }
+
+  requestOwnedBotSpawn(clientNumber: number): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber).putInt(NetworkMessage.TrySpawn).finish(), true);
   }
 
   // Original: src/fpsgame/fps.cpp
@@ -395,6 +460,7 @@ export class MultiplayerClient extends EventTarget {
           break;
         }
         case NetworkMessage.InitClient: this.parseInitClient(packet); break;
+        case NetworkMessage.InitAi: this.parseInitAi(packet); break;
         case NetworkMessage.ClientDisconnect: {
           const clientNumber = packet.getInt(), player = this.players.get(clientNumber);
           if (player) this.console(`leave: ${this.displayName(player)}`);
@@ -543,10 +609,13 @@ export class MultiplayerClient extends EventTarget {
       this.physics.player.armourType = player.armourType;
       this.weapons.controller.inventory.selectedGun = player.selectedGun;
       this.weapons.controller.inventory.ammo.set(player.ammo);
-      this.emit({ type: "spawn" });
     }
-    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Spawn).putInt(player.lifeSequence).putInt(player.selectedGun).finish(), true);
+    const confirmation = new PacketWriter();
+    if (clientNumber !== this.clientNumber) confirmation.putInt(NetworkMessage.FromAi).putInt(clientNumber);
+    confirmation.putInt(NetworkMessage.Spawn).putInt(player.lifeSequence).putInt(player.selectedGun);
+    this.transport.send(1, confirmation.finish(), true);
     this.transport.flush();
+    this.emit({ type: "spawn", clientNumber });
   }
 
   private parseState(player: NetworkPlayer | undefined, packet: PacketReader, resume = false): void {
@@ -634,6 +703,7 @@ export class MultiplayerClient extends EventTarget {
       this.physics.player.armour = armour;
       this.physics.player.health = health;
     }
+    this.emit({ type: "players" });
   }
 
   // Original: src/fpsgame/client.cpp
@@ -647,6 +717,7 @@ export class MultiplayerClient extends EventTarget {
     if (targetNumber === this.clientNumber && !this.isSpectator) {
       hitpush(this.physics.player, damage * (this.physics.player.health <= 0 ? 2 : 1), direction, gun);
     }
+    this.emit({ type: "players" });
   }
 
   // Original: src/fpsgame/capture.h
@@ -828,10 +899,10 @@ export class MultiplayerClient extends EventTarget {
     this.emit({ type: "players" });
   }
 
-  private buildPosition(): Uint8Array {
-    const player = this.physics.player, networkPlayer = this.playerFor(this.clientNumber);
-    const packet = new PacketWriter().putInt(NetworkMessage.Pos).putUInt(this.clientNumber);
-    const physicalState = player.physicsState | ((networkPlayer.lifeSequence & 1) << 3) | ((player.move & 3) << 4) |
+  private buildPosition(player: PhysicsEntity = this.physics.player, clientNumber = this.clientNumber,
+                        lifeSequence = this.playerFor(clientNumber).lifeSequence): Uint8Array {
+    const packet = new PacketWriter().putInt(NetworkMessage.Pos).putUInt(clientNumber);
+    const physicalState = player.physicsState | ((lifeSequence & 1) << 3) | ((player.move & 3) << 4) |
       ((player.strafe & 3) << 6);
     packet.putByte(physicalState);
     const position = [Math.trunc(player.position.x * DMF), Math.trunc(player.position.y * DMF),
@@ -891,6 +962,7 @@ export class MultiplayerClient extends EventTarget {
       strafe: 0 as const, physicsState: PhysicsState.Fall, selectedGun: Gun.Pistol, ammo: new Int32Array(12),
       lastAction: 0, gunWait: 0, lastAttackGun: -1, lastPain: 0, deadAt: 0,
       interpolation: createNetworkInterpolation(this.physics.player.position),
+      aiType: 0, ownerNumber: -1, skill: 0,
     });
     player.alive = false;
     this.players.set(clientNumber, player);
@@ -901,6 +973,20 @@ export class MultiplayerClient extends EventTarget {
   private syncTargets(): void {
     this.weapons.targets.splice(1, this.weapons.targets.length - 1,
       ...[...this.players.values()].filter((player) => player.clientNumber !== this.clientNumber));
+  }
+
+  private parseInitAi(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), ownerNumber = packet.getInt(), aiType = packet.getInt(), skill = Math.min(101, Math.max(1, packet.getInt())),
+      model = packet.getInt(), name = packet.getString(16), team = packet.getString(5), player = this.playerFor(clientNumber);
+    Object.assign(player, { ownerNumber, aiType, skill, model: ((model % 5) + 5) % 5, name: name || "bot", team });
+    this.console(`join: ${this.displayName(player)}`);
+    this.emit({ type: "bot-init", player });
+    this.emit({ type: "players" });
+  }
+
+  private sendSimpleBotCommand(type: NetworkMessage): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(type).finish(), true);
   }
 
   private emit(detail: MultiplayerEvent): void { this.dispatchEvent(new CustomEvent<MultiplayerEvent>("multiplayer", { detail })); }
@@ -959,7 +1045,8 @@ export function serializeShoot(event: Extract<WeaponEvent, { type: "shot" }>, sh
   const packet = new PacketWriter().putInt(NetworkMessage.Shoot).putInt(shotMillis).putInt(event.gun)
     .putInt(Math.trunc(event.from.x * DMF)).putInt(Math.trunc(event.from.y * DMF)).putInt(Math.trunc(event.from.z * DMF))
     .putInt(Math.trunc(event.to.x * DMF)).putInt(Math.trunc(event.to.y * DMF)).putInt(Math.trunc(event.to.z * DMF));
-  const hits = event.hits.filter((hit): hit is WeaponHit & { target: NetworkPlayer } => hit.target.id.startsWith("client:"));
+  const hits = event.hits.filter((hit): hit is WeaponHit & { target: NetworkPlayer } =>
+    "clientNumber" in hit.target && "lifeSequence" in hit.target);
   packet.putInt(hits.length);
   for (const hit of hits) {
     const target = hit.target;

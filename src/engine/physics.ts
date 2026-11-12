@@ -85,7 +85,7 @@ export class PhysicsSimulation {
     this.applyInput(input);
     if (this.paused) return this.renderPosition;
     this.lastSchedule = this.scheduler.schedule(nowMilliseconds, this.timeScale);
-    for (let index = 0; index < this.lastSchedule.steps; index++) this.moveplayer(this.lastSchedule.stepMilliseconds);
+    for (let index = 0; index < this.lastSchedule.steps; index++) this.moveplayer(this.player, this.lastSchedule.stepMilliseconds);
     this.renderPosition = lerpVec3(this.player.previousPosition, this.player.position, this.lastSchedule.interpolation);
     return this.renderPosition;
   }
@@ -111,8 +111,12 @@ export class PhysicsSimulation {
   // Original: src/engine/physics.cpp
   // Function: moveplayer()
   // Sauerbraten reference: SVN r6488
-  private moveplayer(milliseconds: number): void {
-    const player = this.player;
+  /** Advances an AI-owned actor through the same native movement and collision path as the local player. */
+  simulateEntity(player: PhysicsEntity, milliseconds: number): void {
+    this.moveplayer(player, milliseconds);
+  }
+
+  private moveplayer(player: PhysicsEntity, milliseconds: number): void {
     player.previousPosition = copyVec3(player.position);
     const seconds = milliseconds / 1000;
     const floating = player.clientState === ClientState.Editing || player.clientState === ClientState.Spectator;

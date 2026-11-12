@@ -3,7 +3,6 @@ import "./guiSkin.css";
 import { refreshservers, servercompatible, servermodename, sortservers, type ServerListItem } from "./engine/serverbrowser";
 import { MAP_MENU_PAGES } from "./menuData";
 import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
-import { gameModeName } from "./fpsgame/game";
 import { guiSkinMarkup } from "./guiSkin";
 import { bindCrosshairSettings, CROSSHAIRS, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 
@@ -17,6 +16,9 @@ const app = required<HTMLDivElement>("#app");
 let availableMaps: Map<string, MapListItem> | undefined;
 let selectedPage = "ffa-1";
 let selectedBotMode = 0;
+let botMatchCount = 5;
+let botMatchMinSkill = 50;
+let botMatchMaxSkill = 100;
 let previewMap = "aard3c";
 let serverBrowserServers: ServerListItem[] = [];
 let serverBrowserLoaded = false;
@@ -41,7 +43,9 @@ function route(): void {
     return;
   }
   document.title = path === "/maps" ? "SauerWeb — Maps" : path === "/servers" ? "SauerWeb — Servers" : "SauerWeb";
-  if (path === "/maps") renderMapsMenu();
+  if (path === "/bots") renderBotMatchMenu();
+  else if (path === "/modes") renderGameModeMenu();
+  else if (path === "/maps") renderMapsMenu();
   else if (path === "/servers") renderServersMenu();
   else renderMainMenu();
 }
@@ -154,7 +158,7 @@ function renderMainMenu(): void {
     preview?.dispose();
     preview = undefined;
   });
-  required<HTMLButtonElement>("[data-action='bot']").addEventListener("click", () => navigate("/maps"));
+  required<HTMLButtonElement>("[data-action='bot']").addEventListener("click", () => navigate("/bots"));
   required<HTMLButtonElement>("[data-action='server']").addEventListener("click", () => navigate("/servers"));
   const crosshairDialog = required<HTMLDialogElement>("#crosshair-dialog");
   bindCrosshairSettings(crosshairDialog, (settings) => {
@@ -168,6 +172,81 @@ function renderMainMenu(): void {
   const about = required<HTMLDialogElement>("#about-dialog");
   required<HTMLButtonElement>("[data-action='about']").addEventListener("click", () => about.showModal());
   about.querySelector("button")?.addEventListener("click", () => about.close());
+}
+
+// Original: data/menus.cfg, newgui botmatch / startbotmatch.
+function renderBotMatchMenu(): void {
+  app.innerHTML = `
+    <main class="sauer-screen">
+      ${backgroundMarkup(false)}
+      <section class="sauer-dialog botmatch-dialog" aria-labelledby="botmatch-title">
+        ${guiSkinMarkup()}
+        <header class="maps-heading"><div><p>bot match</p><h1 id="botmatch-title">bot match</h1></div>
+          <button id="botmatch-back" class="back-button" type="button">‹ main menu</button></header>
+        <div class="botmatch-controls">
+          ${botSlider("bot amount", "botmatch-count", botMatchCount, 0, 32)}
+          ${botSlider("bot minimum skill", "botmatch-min-skill", botMatchMinSkill, 50, 101)}
+          ${botSlider("bot maximum skill", "botmatch-max-skill", botMatchMaxSkill, 50, 101)}
+          <button id="start-bot-match" class="primary-map-action" type="button">start match..</button>
+        </div>
+        <footer><span>Native Sauerbraten bot configuration</span><span>skill 50–101</span></footer>
+      </section>
+    </main>`;
+  required<HTMLButtonElement>("#botmatch-back").addEventListener("click", () => navigate("/"));
+  const count = required<HTMLInputElement>("#botmatch-count"), minimum = required<HTMLInputElement>("#botmatch-min-skill"),
+    maximum = required<HTMLInputElement>("#botmatch-max-skill");
+  bindBotSlider(count, (value) => { botMatchCount = value; });
+  bindBotSlider(minimum, (value) => {
+    botMatchMinSkill = value;
+    if (botMatchMaxSkill < value) { botMatchMaxSkill = value; maximum.value = String(value); syncSliderOutput(maximum); }
+  });
+  bindBotSlider(maximum, (value) => {
+    botMatchMaxSkill = value;
+    if (botMatchMinSkill > value) { botMatchMinSkill = value; minimum.value = String(value); syncSliderOutput(minimum); }
+  });
+  required<HTMLButtonElement>("#start-bot-match").addEventListener("click", () => navigate("/modes"));
+}
+
+// Original: data/menus.cfg, newgui gamemode. Ordering and labels intentionally match the two native columns.
+function renderGameModeMenu(): void {
+  const columns: Array<Array<[number, string]>> = [
+    [[0, "ffa"], [1, "coop-edit"], [2, "teamplay"], [3, "instagib"], [4, "instagib team"], [5, "efficiency"],
+      [6, "efficiency team"], [7, "tactics"], [8, "tactics team"], [9, "capture"], [10, "regen capture"]],
+    [[11, "ctf"], [12, "insta ctf"], [17, "efficiency ctf"], [13, "protect"], [14, "insta protect"], [18, "efficiency protect"],
+      [15, "hold"], [16, "insta hold"], [19, "efficiency hold"], [20, "collect"], [21, "insta collect"], [22, "efficiency collect"]],
+  ];
+  app.innerHTML = `
+    <main class="sauer-screen">${backgroundMarkup(false)}
+      <section class="sauer-dialog gamemode-dialog" aria-labelledby="gamemode-title">${guiSkinMarkup()}
+        <header class="maps-heading"><div><p>bot match</p><h1 id="gamemode-title">game mode</h1></div>
+          <button id="gamemode-back" class="back-button" type="button">‹ bot match</button></header>
+        <div class="gamemode-columns">${columns.map((column) => `<div>${column.map(([mode, label]) =>
+          `<button type="button" data-bot-mode="${mode}">${label}</button>`).join("")}</div>`).join("")}</div>
+        <footer><span>Choose game mode</span><span>Native mode order</span></footer>
+      </section>
+    </main>`;
+  required<HTMLButtonElement>("#gamemode-back").addEventListener("click", () => navigate("/bots"));
+  document.querySelectorAll<HTMLButtonElement>("[data-bot-mode]").forEach((button) => button.addEventListener("click", () => {
+    selectedBotMode = Number(button.dataset.botMode);
+    selectedPage = [9, 10, 15, 16, 19].includes(selectedBotMode) ? "capture-1"
+      : selectedBotMode >= 11 ? "ctf-1" : "ffa-1";
+    previewMap = "";
+    navigate("/maps");
+  }));
+}
+
+function botSlider(label: string, id: string, value: number, minimum: number, maximum: number): string {
+  return `<label for="${id}"><span>${label}</span><div><input id="${id}" type="range" min="${minimum}" max="${maximum}" value="${value}" />
+    <output for="${id}">${value}</output></div></label>`;
+}
+
+function bindBotSlider(input: HTMLInputElement, changed: (value: number) => void): void {
+  input.addEventListener("input", () => { changed(Number(input.value)); syncSliderOutput(input); });
+}
+
+function syncSliderOutput(input: HTMLInputElement): void {
+  const output = input.parentElement?.querySelector("output");
+  if (output) output.value = input.value;
 }
 
 function currentCrosshair(selected = loadCrosshairSettings().selected) {
@@ -268,6 +347,9 @@ function launchServer(server: ServerListItem): void {
 
 function renderMapsMenu(): void {
   const page = MAP_MENU_PAGES.find((candidate) => candidate.id === selectedPage) ?? MAP_MENU_PAGES[0];
+  const availablePages = page.category === "capture" ? MAP_MENU_PAGES.filter((candidate) => candidate.category === "capture")
+    : page.category === "ctf" ? MAP_MENU_PAGES.filter((candidate) => candidate.category === "ctf")
+      : MAP_MENU_PAGES.filter((candidate) => candidate.category === "ffa" || candidate.category === "concept");
   const initialPreview = page.columns.flat()[0] ?? previewMap;
   if (!page.columns.flat().includes(previewMap)) previewMap = initialPreview;
   const preview = availableMaps?.get(previewMap);
@@ -278,11 +360,10 @@ function renderMapsMenu(): void {
         ${guiSkinMarkup()}
         <header class="maps-heading">
           <div><p>bot match</p><h1 id="maps-title">choose a map</h1></div>
-          <label class="bot-mode">mode <select id="bot-mode">${botModeOptions()}</select></label>
-          <button id="maps-back" class="back-button" type="button">‹ main menu</button>
+          <button id="maps-back" class="back-button" type="button">‹ game mode</button>
         </header>
         <nav class="map-tabs" aria-label="Map pages">
-          ${MAP_MENU_PAGES.map((item) => `<button type="button" data-page="${item.id}" class="${item.id === page.id ? "active" : ""}">${item.label}</button>`).join("")}
+          ${availablePages.map((item) => `<button type="button" data-page="${item.id}" class="${item.id === page.id ? "active" : ""}">${item.label}</button>`).join("")}
         </nav>
         <div class="map-browser">
           <div class="map-columns" role="listbox" aria-label="${page.label} maps">
@@ -302,10 +383,7 @@ function renderMapsMenu(): void {
       </section>
     </main>`;
 
-  required<HTMLButtonElement>("#maps-back").addEventListener("click", () => navigate("/"));
-  required<HTMLSelectElement>("#bot-mode").addEventListener("change", (event) => {
-    selectedBotMode = Number((event.currentTarget as HTMLSelectElement).value);
-  });
+  required<HTMLButtonElement>("#maps-back").addEventListener("click", () => navigate("/modes"));
   document.querySelectorAll<HTMLButtonElement>("[data-page]").forEach((button) => button.addEventListener("click", () => {
     selectedPage = button.dataset.page ?? selectedPage;
     previewMap = "";
@@ -346,13 +424,9 @@ async function loadAvailableMaps(): Promise<void> {
 
 function launchMap(name: string): void {
   if (!name || (availableMaps && !availableMaps.get(name)?.supported)) return;
-  const query = new URLSearchParams({ map: name, mode: String(selectedBotMode) });
+  const query = new URLSearchParams({ map: name, mode: String(selectedBotMode), bots: String(botMatchCount),
+    minskill: String(botMatchMinSkill), maxskill: String(botMatchMaxSkill) });
   location.assign(`/game?${query}`);
-}
-
-function botModeOptions(): string {
-  const modes = [0, 3, 5, 7, 11, 12, 13, 14, 20];
-  return modes.map((mode) => `<option value="${mode}" ${mode === selectedBotMode ? "selected" : ""}>${escapeHtml(gameModeName(mode))}</option>`).join("");
 }
 
 function menuButton(label: string, action: string, enabled: boolean, icon = "menu"): string {

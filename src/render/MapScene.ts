@@ -49,6 +49,8 @@ import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
 import type { RuntimeMode } from "../runtime";
 import { lineCylinderIntersection } from "../fpsgame/weapon/HitscanSystem";
 import { magnitude, normalize, subtract } from "../engine/physics/vector";
+import { BotManager } from "../fpsgame/ai";
+import { GameModeFlag, gameModeHas } from "../fpsgame/game";
 
 export type CameraMode = "free" | "player";
 
@@ -77,6 +79,18 @@ export class MapScene {
   private readonly fpsClient = createClient(this.physics);
   private readonly physicsInput: BrowserPhysicsInput;
   private readonly weapons = this.fpsClient.weapons;
+  private readonly bots = new BotManager(this.physics, this.physics.player, {
+    event: (event, bot) => {
+      if (event.type === "shot") {
+        this.weapons.events.emit({ type: "shot-effect", gun: event.gun, from: event.from, to: event.to, rays: event.rays,
+          clientNumber: bot.clientNumber });
+      }
+      if (event.type === "death" && event.target === this.physics.player) this.fpsClient.multiplayer.notifyLocalStateChange();
+      if (bot.ownerNumber === this.fpsClient.multiplayer.clientNumber) this.fpsClient.multiplayer.sendOwnedBotEvent(bot.clientNumber, event);
+    },
+    spawnRequest: (bot) => this.fpsClient.multiplayer.requestOwnedBotSpawn(bot.clientNumber),
+    changed: () => this.syncBotTargets(),
+  });
   private readonly weaponInput: BrowserWeaponInput;
   private readonly weaponHUD: WeaponHUD;
   private readonly crosshairHUD: CrosshairHUD;
@@ -103,6 +117,8 @@ export class MapScene {
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
+  private readonly waypointMeshes: Mesh[] = [];
+  private lastWaypointDebugUpdate = 0;
   private readonly entityModelAnimations: EntityModelAnimation[] = [];
   private currentMap?: SauerMap;
   private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
@@ -112,6 +128,7 @@ export class MapScene {
   private localDeadAt = 0;
   private following = -1;
   private followDirection = 0;
+  private lastBotNetworkUpdate = 0;
   private readonly resizeObserver: ResizeObserver;
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
@@ -170,6 +187,13 @@ export class MapScene {
     new WeaponAudio(this.weapons.events);
     this.fpsClient.multiplayer.addEventListener("multiplayer", (event) =>
       this.handleMultiplayerEvent((event as CustomEvent<MultiplayerEvent>).detail));
+    this.weapons.events.on((event) => {
+      if (event.type !== "damage" && event.type !== "death") return;
+      const bot = [...this.bots.bots.values()].find((candidate) => candidate === event.target);
+      if (!bot) return;
+      if (event.type === "damage") this.bots.damaged(bot, this.physics.player);
+      else this.bots.killed(bot, this.physics.player);
+    });
     canvas.addEventListener("pointerdown", this.onSpectatorPointerDown, { capture: true });
     canvas.addEventListener("contextmenu", this.onSpectatorContextMenu);
     window.addEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
@@ -199,6 +223,7 @@ export class MapScene {
     this.entityMaterials.forEach((material) => material.dispose());
     this.entityMaterials.clear();
     this.mapModelMeshes.length = 0;
+    this.waypointMeshes.length = 0;
     this.entityModelAnimations.length = 0;
     this.materialCache.dispose();
     this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
@@ -216,6 +241,7 @@ export class MapScene {
     this.weapons.projectiles.clear();
     this.physics.setMap(map);
     this.fpsClient.multiplayer.setMapEntities(map.entityRegistry);
+    await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
     const batches = generateGeometry(map, textures);
     const materialBatches = generateMaterialGeometry(map);
     let faces = 0;
@@ -388,8 +414,50 @@ export class MapScene {
     if (this.runtimeMode !== "game") return;
     this.localGameMode = mode;
     this.fpsClient.multiplayer.gameMode = mode;
+    this.bots.setGameMode(mode);
     this.weapons.controller.spawnForGameMode(mode, performance.now());
     this.weaponHUD.render();
+  }
+
+  configureBotMatch(count: number, minimumSkill: number, maximumSkill: number): void {
+    this.bots.clear();
+    this.fpsClient.multiplayer.clearLocalBots();
+    const total = Math.min(32, Math.max(0, Math.trunc(count))), minimum = Math.min(101, Math.max(1, Math.trunc(minimumSkill))),
+      maximum = Math.min(101, Math.max(minimum, Math.trunc(maximumSkill)));
+    if (gameModeHas(this.localGameMode, GameModeFlag.Team)) Object.assign(this.physics.player, { team: "good" });
+    for (let index = 0; index < total; index++) {
+      const skill = minimum + Math.floor(Math.random() * (maximum - minimum + 1));
+      this.bots.addbot(skill);
+    }
+    this.syncBotTargets();
+  }
+
+  executeBotCommand(commandLine: string): boolean {
+    const [command = "", ...arguments_] = commandLine.trim().replace(/^\//, "").split(/\s+/);
+    switch (command.toLowerCase()) {
+      case "addbot": {
+        const skill = arguments_[0] ? Number(arguments_[0]) : -1;
+        if (this.fpsClient.multiplayer.connected) this.fpsClient.multiplayer.addBot(skill);
+        else this.bots.addbot(skill);
+        return true;
+      }
+      case "delbot":
+        if (this.fpsClient.multiplayer.connected) this.fpsClient.multiplayer.deleteBot();
+        else this.bots.delbot();
+        return true;
+      case "botlimit": this.fpsClient.multiplayer.setBotLimit(Number(arguments_[0] ?? 0)); return true;
+      case "botbalance": this.fpsClient.multiplayer.setBotBalance(Number(arguments_[0] ?? 0) !== 0); return true;
+      case "clearwaypoints": this.bots.waypoints.clearwaypoints(); this.syncWaypointDebug(true); return true;
+      case "dropwaypoints": this.bots.waypoints.dropWaypoints = Number(arguments_[0] ?? 0) !== 0; return true;
+      case "showwaypoints": this.bots.waypoints.showWaypoints = Number(arguments_[0] ?? 0) !== 0; this.syncWaypointDebug(true); return true;
+      case "showwaypointsradius": this.bots.waypoints.showWaypointsRadius = Math.max(0, Number(arguments_[0] ?? 200));
+        this.syncWaypointDebug(true); return true;
+      case "loadwaypoints": void this.bots.waypoints.loadwaypoints(arguments_[0] || this.currentMap?.name || "", true); return true;
+      case "savewaypoints": this.downloadWaypoints(arguments_[0] || this.currentMap?.name || "waypoints"); return true;
+      case "movewaypoints": this.bots.waypoints.movewaypoints({ x: Number(arguments_[0] ?? 0), y: Number(arguments_[1] ?? 0),
+        z: Number(arguments_[2] ?? 0) }, this.currentMap?.header.worldSize ?? 0); return true;
+      default: return false;
+    }
   }
 
   dispose(): void {
@@ -446,7 +514,14 @@ export class MapScene {
   }
 
   requestRespawn(): boolean {
-    return this.fpsClient.multiplayer.requestRespawn();
+    if (this.fpsClient.multiplayer.clientNumber >= 0) return this.fpsClient.multiplayer.requestRespawn();
+    if (this.physics.player.alive) return false;
+    // Native fps.cpp::respawnself() calls spawnplayer(), which restores the entity,
+    // spawn state, HUD player and input state as one transition in local games.
+    this.resetPlayer();
+    this.stopFollowing();
+    this.syncPlayerView();
+    return true;
   }
 
   setMultiplayerMapInfo(name: string, crc: number): void {
@@ -748,6 +823,10 @@ export class MapScene {
 
   private updatePhysics(nowMilliseconds: number): void {
     animateEntityModels(this.entityModelAnimations, nowMilliseconds);
+    if (this.bots.waypoints.showWaypoints && nowMilliseconds - this.lastWaypointDebugUpdate >= 500) {
+      this.lastWaypointDebugUpdate = nowMilliseconds;
+      this.syncWaypointDebug(true);
+    }
     if (this.cameraMode !== "player") return;
     const dead = this.isLocalPlayerDead(), wasDead = this.localDeadAt > 0;
     if (dead && !wasDead) this.localDeadAt = nowMilliseconds;
@@ -774,13 +853,61 @@ export class MapScene {
     this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
     if (followed) this.weaponHUD.render({ health: followed.health, selectedGun: followed.selectedGun, ammo: followed.ammo });
     this.weapons.update(nowMilliseconds, aimTarget);
+    this.bots.update(nowMilliseconds, [...this.fpsClient.multiplayer.players.values()].filter((player) =>
+      player.aiType === 0 || player.ownerNumber >= 0), !dead);
+    for (const bot of this.bots.bots.values()) if (bot.ownerNumber < 0) this.fpsClient.multiplayer.syncLocalBot(bot);
+    this.syncBotTargets();
+    if (nowMilliseconds - this.lastBotNetworkUpdate >= 33) {
+      this.lastBotNetworkUpdate = nowMilliseconds;
+      for (const bot of this.bots.bots.values()) {
+        if (bot.ownerNumber === this.fpsClient.multiplayer.clientNumber && bot.alive) {
+          this.fpsClient.multiplayer.sendOwnedBotPosition(bot, bot.clientNumber, bot.lifeSequence);
+        }
+      }
+    }
     this.fpsClient.multiplayer.update(nowMilliseconds);
     this.multiplayerHUD.render();
     this.updateNetworkPlayers();
   }
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
-    if (event.type === "spawn") {
+    if (event.type === "bot-init") {
+      if (event.player.ownerNumber === this.fpsClient.multiplayer.clientNumber) {
+        const bot = this.bots.init({ clientNumber: event.player.clientNumber, ownerNumber: event.player.ownerNumber, skill: event.player.skill,
+          name: event.player.name, team: event.player.team, model: event.player.model });
+        bot.lifeSequence = event.player.lifeSequence;
+        bot.clientState = event.player.state;
+        bot.alive = event.player.alive;
+        if (!bot.alive) bot.deadAt = performance.now() - 500;
+      } else this.bots.remove(event.player.clientNumber);
+      return;
+    }
+    if (event.type === "players" && event.disconnectedClientNumber !== undefined) this.bots.remove(event.disconnectedClientNumber);
+    if (event.type === "players") {
+      for (const bot of this.bots.bots.values()) {
+        if (bot.ownerNumber !== this.fpsClient.multiplayer.clientNumber) continue;
+        const player = this.fpsClient.multiplayer.players.get(bot.clientNumber);
+        if (!player) continue;
+        bot.health = player.health; bot.maxHealth = player.maxHealth; bot.armour = player.armour; bot.armourType = player.armourType;
+        bot.velocity = { ...player.velocity };
+        if (player.state === ClientState.Dead && bot.alive) this.bots.killed(bot);
+      }
+    }
+    if (event.type === "spawn" && event.clientNumber !== undefined && event.clientNumber !== this.fpsClient.multiplayer.clientNumber) {
+      const bot = this.bots.bots.get(event.clientNumber);
+      const player = this.fpsClient.multiplayer.players.get(event.clientNumber);
+      if (bot && player) {
+        this.bots.spawned(bot, performance.now());
+        bot.lifeSequence = player.lifeSequence;
+        bot.health = player.health;
+        bot.maxHealth = player.maxHealth;
+        bot.armour = player.armour;
+        bot.armourType = player.armourType;
+        bot.weaponSystem.controller.inventory.selectedGun = player.selectedGun;
+        bot.weaponSystem.controller.inventory.ammo.set(player.ammo);
+      }
+    }
+    if (event.type === "spawn" && (event.clientNumber === undefined || event.clientNumber === this.fpsClient.multiplayer.clientNumber)) {
       this.stopFollowing();
       this.spawnNetworkPlayer();
       this.syncPlayerView();
@@ -819,6 +946,8 @@ export class MapScene {
     const players: RenderPlayer[] = [];
     const localNetworkPlayer = multiplayer.players.get(multiplayer.clientNumber);
     for (const [clientNumber, player] of multiplayer.players) {
+      const ownedBot = this.bots.bots.get(clientNumber);
+      if (ownedBot?.ownerNumber === multiplayer.clientNumber) continue;
       const local = clientNumber === multiplayer.clientNumber;
       if (!local) interpolateNetworkEntity(player, nowMilliseconds);
       if (local && !thirdPersonView) continue;
@@ -851,6 +980,19 @@ export class MapScene {
         },
         lastPain: player.lastPain,
         deadAt: player.deadAt || this.localDeadAt,
+      });
+    }
+    for (const bot of this.bots.bots.values()) {
+      if (multiplayer.players.has(bot.clientNumber) && bot.ownerNumber !== multiplayer.clientNumber) continue;
+      players.push({
+        id: bot.clientNumber, model: bot.model % 5, team: bot.team, local: false,
+        visible: bot.clientState !== ClientState.Spectator && bot.clientState !== ClientState.Spawning,
+        position: { ...bot.position, z: bot.position.z - bot.eyeHeight }, yaw: bot.yaw, pitch: bot.pitch,
+        selectedGun: bot.selectedGun, lastAction: bot.lastAction, lastAttackGun: bot.lastAttackGun, gunWait: bot.gunWait,
+        state: bot.clientState, move: bot.move, strafe: bot.strafe, physicsState: bot.physicsState, inWater: bot.inWater,
+        timeInAir: bot.timeInAir, velocityZ: bot.velocity.z + bot.falling.z,
+        velocity: { x: bot.velocity.x + bot.falling.x, y: bot.velocity.y + bot.falling.y, z: bot.velocity.z + bot.falling.z },
+        lastPain: bot.lastPain, deadAt: bot.deadAt,
       });
     }
     if (thirdPersonView && multiplayer.clientNumber < 0) {
@@ -887,6 +1029,54 @@ export class MapScene {
     this.ctfRenderer.render(multiplayer.ctfMode.flags, multiplayer.players, multiplayer.clientNumber, localNetworkPlayer?.team ?? "",
       this.physics.player.position, this.physics.player.aboveEye, this.physics.player.yaw, multiplayer.gameMode,
       (clientNumber) => this.playerRenderer.flagAttachmentPosition(clientNumber));
+  }
+
+  private syncBotTargets(): void {
+    const botTargets = [...this.bots.bots.values()];
+    const networkTargets = [...this.fpsClient.multiplayer.players.values()]
+      .filter((player) => player.clientNumber !== this.fpsClient.multiplayer.clientNumber && !(player.aiType !== 0 && player.ownerNumber < 0));
+    this.weapons.targets.splice(1, this.weapons.targets.length - 1, ...networkTargets, ...botTargets);
+  }
+
+  private downloadWaypoints(mapName: string): void {
+    const bytes = Uint8Array.from(this.bots.waypoints.savewaypoints());
+    const url = URL.createObjectURL(new Blob([bytes.buffer], { type: "application/octet-stream" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${mapName}.wpt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  private syncWaypointDebug(rebuild = false): void {
+    if (rebuild || !this.bots.waypoints.showWaypoints) {
+      this.waypointMeshes.forEach((mesh) => { if (mesh.material?.name.startsWith("waypoint-material-")) mesh.material.dispose(); mesh.dispose(); });
+      this.waypointMeshes.length = 0;
+    }
+    if (!this.bots.waypoints.showWaypoints || this.waypointMeshes.length) return;
+    const radius = this.bots.waypoints.showWaypointsRadius, origin = this.physics.player.position;
+    const visible = this.bots.waypoints.waypoints.map((waypoint, index) => ({ waypoint, index })).filter(({ waypoint, index }) =>
+      index > 0 && (!radius || Math.hypot(waypoint.o.x - origin.x, waypoint.o.y - origin.y, waypoint.o.z - origin.z) <= radius));
+    const visibleIndices = new Set(visible.map(({ index }) => index));
+    for (const { waypoint, index } of visible) {
+      const marker = MeshBuilder.CreateSphere(`waypoint-${index}`, { diameter: 1.5, segments: 4 }, this.scene);
+      marker.position.copyFrom(toBabylonPosition(waypoint.o));
+      const material = new StandardMaterial(`waypoint-material-${index}`, this.scene);
+      material.emissiveColor = waypoint.weight < 0 ? new Color3(1, 0.4, 0) : new Color3(1, 1, 1);
+      material.disableLighting = true;
+      marker.material = material;
+      marker.isPickable = false;
+      this.waypointMeshes.push(marker);
+      for (const link of waypoint.links) {
+        if (!visibleIndices.has(link)) continue;
+        const line = MeshBuilder.CreateLines(`waypoint-link-${index}-${link}`, {
+          points: [toBabylonPosition(waypoint.o), toBabylonPosition(this.bots.waypoints.waypoints[link].o)],
+        }, this.scene);
+        line.color = new Color3(0, 0.35, 1);
+        line.isPickable = false;
+        this.waypointMeshes.push(line);
+      }
+    }
   }
 
   private updatePlayerCamera(position: RegisteredMapEntity["position"]): void {
