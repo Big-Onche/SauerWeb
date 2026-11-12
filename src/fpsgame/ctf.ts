@@ -20,6 +20,10 @@ export interface CtfFlag {
   yaw: number;
 }
 
+type LocalCtfPlayer = Pick<NetworkPlayer, "clientNumber" | "team" | "state" | "flags">;
+export type LocalCtfEvent = { type: "drop" | "return" | "score"; flag: CtfFlag } |
+  { type: "take"; flag: CtfFlag; wasDropped: boolean };
+
 // Original: src/fpsgame/ctf.h, ctfclientmode.
 // The server remains authoritative; this class mirrors its flag versions, owners and scores.
 export class CtfClientMode {
@@ -140,6 +144,60 @@ export class CtfClientMode {
     if (flag) flag.invisible = invisible;
   }
 
+  // Original: src/fpsgame/ctf.h, ctfservmode::takeflag() / scoreflag().
+  // Remote games receive these transitions from the server; a vanilla-style local match performs the same authority step in process.
+  takeFlagLocal(player: LocalCtfPlayer, id: number, version: number, mode: number,
+                announce?: (event: LocalCtfEvent) => void): boolean {
+    const flag = this.flags[id];
+    if (!flag || player.state !== ClientState.Alive || !player.team || flag.owner >= 0 || flag.version !== version) return false;
+    const team = ctfTeamFlag(player.team), hold = gameModeHas(mode, GameModeFlag.Hold), protect = gameModeHas(mode, GameModeFlag.Protect);
+    if (hold || protect === (flag.team === team)) {
+      if (this.flags.some((candidate) => candidate.owner === player.clientNumber)) return false;
+      const wasDropped = flag.dropped;
+      flag.version++;
+      flag.owner = player.clientNumber;
+      flag.dropped = false;
+      flag.invisible = false;
+      flag.pickup = false;
+      if (hold) flag.team = team;
+      announce?.({ type: "take", flag, wasDropped });
+      return true;
+    }
+    if (protect) {
+      if (flag.invisible) return false;
+      this.scoreFlagLocal(player, flag, team, mode);
+      announce?.({ type: "score", flag });
+      return true;
+    }
+    if (flag.dropped) {
+      flag.version++;
+      flag.owner = -1;
+      flag.dropped = false;
+      flag.invisible = false;
+      flag.pickup = false;
+      announce?.({ type: "return", flag });
+      return true;
+    }
+    const relay = this.flags.find((candidate) => candidate.owner === player.clientNumber);
+    if (!relay) return false;
+    this.scoreFlagLocal(player, relay, team, mode);
+    announce?.({ type: "score", flag: relay });
+    return true;
+  }
+
+  // Original: src/fpsgame/ctf.h, ctfservmode::dropflag().
+  dropFlags(clientNumber: number, location: Vec3, yaw: number, announce?: (event: LocalCtfEvent) => void): boolean {
+    let dropped = false;
+    for (const flag of this.flags) {
+      if (flag.owner !== clientNumber) continue;
+      Object.assign(flag, { version: flag.version + 1, owner: -1, dropped: true, dropLoc: { ...location }, yaw, invisible: false,
+        pickup: false });
+      announce?.({ type: "drop", flag });
+      dropped = true;
+    }
+    return dropped;
+  }
+
   checkItems(player: NetworkPlayer | undefined, feet: Vec3, mode: number, take: (id: number, version: number) => void): void {
     if (!player || player.state !== ClientState.Alive) return;
     const playerTeam = ctfTeamFlag(player.team);
@@ -167,6 +225,17 @@ export class CtfClientMode {
   private createFlag(id: number, spawnLoc: Vec3, team: number, yaw: number): CtfFlag {
     return { id, version: 0, spawnIndex: -1, spawnLoc: { ...spawnLoc }, dropLoc: { ...spawnLoc }, team, owner: -1, dropped: false,
       invisible: false, pickup: false, yaw };
+  }
+
+  private scoreFlagLocal(player: LocalCtfPlayer, flag: CtfFlag, team: number, mode: number): void {
+    flag.version++;
+    flag.owner = -1;
+    flag.dropped = false;
+    flag.invisible = false;
+    flag.pickup = false;
+    player.flags++;
+    if (team >= 1 && team <= 2) this.scores[team - 1]++;
+    if (gameModeHas(mode, GameModeFlag.Hold)) flag.team = 0;
   }
 
   private putFlagEntity(packet: PacketWriter, team: number, position: Vec3): void {

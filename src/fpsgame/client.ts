@@ -4,7 +4,7 @@ import { copyVec3, magnitude } from "../engine/physics/vector";
 import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
 import { EnetClient, type EnetEvent, ENET_PACKET_FLAG_UNSEQUENCED } from "../network/enet";
 import { PacketReader, PacketWriter } from "../network/protocol";
-import { CtfClientMode, ctfTeamFlag } from "./ctf";
+import { CtfClientMode, ctfTeamFlag, type LocalCtfEvent } from "./ctf";
 import { DMF, DNF, DVELF, GameModeFlag, gameModeHas, gameModeName, NetworkMessage, PROTOCOL_VERSION } from "./game";
 import { WeaponSystem } from "./weapon";
 import { createDamageable, hitpush, type Damageable } from "./weapon/DamageSystem";
@@ -109,6 +109,7 @@ export class MultiplayerClient extends EventTarget {
   private loadedMapCrc = 0;
   private mapInfoPending = false;
   private captureBases: CaptureBase[] = [];
+  private localGame = false;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
     super();
@@ -136,9 +137,27 @@ export class MultiplayerClient extends EventTarget {
     }
   }
 
+  // Original: src/fpsgame/server.cpp, localconnect() / localclienttoserver().
+  // Vanilla bot matches still have a local client. Preserving that invariant lets the normal HUD,
+  // scoreboard, spectator and client-mode code serve both local and remote games.
+  startLocalGame(playerName: string, playerModel = 0): void {
+    this.disconnect();
+    this.localGame = true;
+    this.clientNumber = 0;
+    this.endpoint = { host: "local", port: 0, playerName: playerName.slice(0, 15) || "unnamed", playerModel };
+    this.serverDescription = "local bot match";
+    this.mapStarted = performance.now();
+    this.timeLeftSeconds = 10 * 60;
+    const player = this.playerFor(this.clientNumber);
+    Object.assign(player, { name: this.endpoint.playerName, model: playerModel, state: ClientState.Alive, alive: true });
+    this.synchronizeLocalState();
+    this.emit({ type: "players" });
+  }
+
   disconnect(): void {
     this.transport.close();
     this.connected = false;
+    this.localGame = false;
     this.clientNumber = -1;
     this.players.clear();
     this.respawnRequested = false;
@@ -153,6 +172,21 @@ export class MultiplayerClient extends EventTarget {
   // Sauerbraten reference: SVN r6488
   update(nowMilliseconds: number): void {
     this.entities.checkitems(nowMilliseconds);
+    if (this.localGame) {
+      this.syncLocalPlayer();
+      this.timeLeftSeconds = Math.max(0, 10 * 60 - Math.trunc((nowMilliseconds - this.mapStarted) / 1000));
+      if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
+        for (const player of this.players.values()) {
+          if (player.state !== ClientState.Alive) continue;
+          const feet = { ...player.position, z: player.position.z - player.eyeHeight };
+          this.ctfMode.checkItems(player, feet, this.gameMode, (flag, version) => {
+            if (this.ctfMode.takeFlagLocal(player, flag, version, this.gameMode,
+              (event) => this.announceLocalFlag(player, event))) this.emit({ type: "players" });
+          });
+        }
+      }
+      return;
+    }
     if (this.clientNumber < 0 || nowMilliseconds - this.lastUpdate < 33) return;
     this.lastUpdate = nowMilliseconds;
     if (this.physics.player.alive) this.transport.send(0, this.buildPosition());
@@ -216,6 +250,8 @@ export class MultiplayerClient extends EventTarget {
     return this.players.get(this.clientNumber)?.state === ClientState.Spectator;
   }
 
+  get isLocalGame(): boolean { return this.localGame; }
+
   getTeamScore(team: string): number {
     if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) return this.ctfMode.scores[ctfTeamFlag(team) - 1] ?? 0;
     return this.teamScores.get(team) ?? 0;
@@ -223,9 +259,10 @@ export class MultiplayerClient extends EventTarget {
 
   sendChat(text: string, team = false): void {
     const message = text.trim();
-    if (!this.connected || !message) return;
+    if ((!this.connected && !this.localGame) || !message) return;
     const player = this.players.get(this.clientNumber);
     this.console(`${team ? "[team] " : ""}${this.displayName(player)}: ${message}`, team ? "team-chat" : "chat");
+    if (this.localGame) return;
     this.transport.send(1, new PacketWriter().putInt(team ? NetworkMessage.SayTeam : NetworkMessage.Text).putString(message).finish(), true);
     this.transport.flush();
   }
@@ -269,6 +306,28 @@ export class MultiplayerClient extends EventTarget {
 
   notifyLocalStateChange(): void { this.emit({ type: "players" }); }
 
+  localDied(victimNumber: number, actorNumber: number): void {
+    if (!this.localGame) return;
+    const victim = this.players.get(victimNumber), actor = this.players.get(actorNumber);
+    if (!victim || !actor || victim.state === ClientState.Dead) return;
+    victim.deaths++;
+    if (actor === victim || actor.team && actor.team === victim.team) actor.frags--;
+    else actor.frags++;
+    victim.state = ClientState.Dead;
+    victim.alive = false;
+    victim.deadAt = performance.now();
+    this.dropLocalFlags(victim);
+    const victimName = this.displayName(victim, "you"), actorName = this.displayName(actor, "you");
+    this.console(actor === victim ? `${victimName} suicided!` : `${actorName} fragged ${victimName}`,
+      victimNumber === this.clientNumber || actorNumber === this.clientNumber ? "frag-self" : "frag-other");
+    if (victimNumber === this.clientNumber) {
+      this.physics.player.alive = false;
+      this.physics.player.clientState = ClientState.Dead;
+      this.weapons.controller.setAttacking(false);
+    }
+    this.emit({ type: "players" });
+  }
+
   sendOwnedBotPosition(bot: PhysicsEntity, clientNumber: number, lifeSequence: number): void {
     if (!this.connected) return;
     this.transport.send(0, this.buildPosition(bot, clientNumber, lifeSequence));
@@ -295,6 +354,11 @@ export class MultiplayerClient extends EventTarget {
   // Function: respawn() / respawnself()
   // Sauerbraten reference: SVN r6488
   requestRespawn(): boolean {
+    if (this.localGame) {
+      if (this.physics.player.alive || this.isSpectator) return false;
+      this.spawnLocalPlayer();
+      return true;
+    }
     if (!this.connected || this.physics.player.alive || this.isSpectator) return false;
     if (!this.respawnRequested) this.lastSpawnAttempt = Number.NEGATIVE_INFINITY;
     this.respawnRequested = true;
@@ -308,6 +372,7 @@ export class MultiplayerClient extends EventTarget {
     this.loadedMapName = name;
     this.loadedMapCrc = crc;
     this.mapInfoPending = true;
+    if (this.localGame) this.mapName = name;
   }
 
   setMapEntities(entities: readonly RegisteredMapEntity[]): void {
@@ -320,7 +385,25 @@ export class MultiplayerClient extends EventTarget {
     this.syncLocalState();
   }
 
+  setLocalTeam(team: string): void {
+    if (!this.localGame) return;
+    const player = this.players.get(this.clientNumber);
+    if (!player) return;
+    player.team = team;
+    Object.assign(this.physics.player, { team });
+    this.emit({ type: "players" });
+  }
+
   switchTeam(): void {
+    if (this.localGame) {
+      const player = this.players.get(this.clientNumber);
+      if (!player || !gameModeHas(this.gameMode, GameModeFlag.Team)) return;
+      this.dropLocalFlags(player);
+      player.team = player.team === "good" ? "evil" : "good";
+      Object.assign(this.physics.player, { team: player.team });
+      this.emit({ type: "players" });
+      return;
+    }
     if (!this.connected) return;
     const player = this.players.get(this.clientNumber);
     const team = player?.team === "good" ? "evil" : "good";
@@ -330,6 +413,14 @@ export class MultiplayerClient extends EventTarget {
 
   // Original: src/fpsgame/client.cpp, togglespectator(). The server remains authoritative and may reject this request.
   setSpectator(spectating: boolean): boolean {
+    if (this.localGame) {
+      if (this.isSpectator === spectating) return false;
+      const player = this.players.get(this.clientNumber);
+      if (player) this.dropLocalFlags(player);
+      this.setSpectatorState(this.clientNumber, spectating);
+      if (!spectating) this.spawnLocalPlayer();
+      return true;
+    }
     if (!this.connected || this.clientNumber < 0 || this.isSpectator === spectating) return false;
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Spectator).putInt(this.clientNumber).putInt(spectating ? 1 : 0).finish(), true);
     this.transport.flush();
@@ -337,6 +428,13 @@ export class MultiplayerClient extends EventTarget {
   }
 
   tryDropFlag(): void {
+    if (this.localGame) {
+      const player = this.players.get(this.clientNumber);
+      if (!this.isSpectator && player && gameModeHas(this.gameMode, GameModeFlag.Ctf) && this.dropLocalFlags(player)) {
+        this.emit({ type: "players" });
+      }
+      return;
+    }
     if (!this.connected || this.isSpectator || !gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
     if (!this.ctfMode.flags.some((flag) => flag.owner === this.clientNumber)) return;
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TryDropFlag).finish(), true);
@@ -993,6 +1091,32 @@ export class MultiplayerClient extends EventTarget {
 
   private console(text: string, consoleType: ConsoleLineType = "info"): void { this.emit({ type: "console", text, consoleType }); }
 
+  private dropLocalFlags(player: NetworkPlayer): boolean {
+    const position = player.clientNumber === this.clientNumber ? this.physics.player.position : player.position;
+    const yaw = player.clientNumber === this.clientNumber ? this.physics.player.yaw : player.yaw;
+    return this.ctfMode.dropFlags(player.clientNumber, position, yaw,
+      (event) => this.announceLocalFlag(player, event));
+  }
+
+  // Original: src/fpsgame/ctf.h, ctfclientmode flag event console output.
+  private announceLocalFlag(player: NetworkPlayer, event: LocalCtfEvent): void {
+    const name = this.displayName(player);
+    if (event.type === "drop") this.console(`${name} dropped ${this.flagName(event.flag.id)}`, "game-info");
+    else if (event.type === "return") this.console(`${name} returned ${this.flagName(event.flag.id)}`, "game-info");
+    else if (event.type === "take") {
+      const action = gameModeHas(this.gameMode, GameModeFlag.Hold) ? "picked up the flag for"
+        : gameModeHas(this.gameMode, GameModeFlag.Protect) || event.wasDropped ? "picked up" : "stole";
+      const suffix = gameModeHas(this.gameMode, GameModeFlag.Hold) ? ` ${this.teamName(player.team)}`
+        : ` ${this.flagName(event.flag.id)}`;
+      this.console(`${name} ${action}${suffix}`, "game-info");
+    } else {
+      const localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? ""), team = ctfTeamFlag(player.team);
+      const teamName = team === localTeam ? "your team" : "the enemy team", score = this.ctfMode.scores[team - 1] ?? 0;
+      this.console(`${name} scored for ${teamName}`, "game-info");
+      if (score >= 10) this.console(`${teamName} captured ${score} flags`, "game-info");
+    }
+  }
+
   private displayName(player: NetworkPlayer | undefined, localName = "you"): string {
     return player?.clientNumber === this.clientNumber ? localName : player?.name || "unnamed";
   }
@@ -1035,6 +1159,35 @@ export class MultiplayerClient extends EventTarget {
     this.physics.player.clientState = player.state;
     this.physics.player.alive = player.state === ClientState.Alive;
     if (player.state !== ClientState.Alive) this.weapons.controller.setAttacking(false);
+  }
+
+  private spawnLocalPlayer(): void {
+    const player = this.players.get(this.clientNumber);
+    if (!player) return;
+    player.state = ClientState.Alive;
+    player.alive = true;
+    player.lifeSequence++;
+    this.physics.player.clientState = ClientState.Alive;
+    this.physics.player.alive = true;
+    this.emit({ type: "spawn", clientNumber: this.clientNumber });
+  }
+
+  private syncLocalPlayer(): void {
+    const player = this.players.get(this.clientNumber);
+    if (!player) return;
+    if (player.state !== ClientState.Spectator && this.physics.player.clientState === ClientState.Dead && player.state !== ClientState.Dead) {
+      this.localDied(this.clientNumber, this.clientNumber);
+    }
+    const state = player.state === ClientState.Spectator ? ClientState.Spectator : this.physics.player.clientState;
+    Object.assign(player, {
+      position: copyVec3(this.physics.player.position), velocity: copyVec3(this.physics.player.velocity), yaw: this.physics.player.yaw,
+      pitch: this.physics.player.pitch, roll: this.physics.player.roll, move: this.physics.player.move, strafe: this.physics.player.strafe,
+      physicsState: this.physics.player.physicsState, state, alive: state === ClientState.Alive, health: this.physics.player.health,
+      maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour, armourType: this.physics.player.armourType,
+      selectedGun: this.weapons.controller.inventory.selectedGun, ammo: this.weapons.controller.inventory.ammo,
+      lastAction: this.weapons.controller.lastAction, gunWait: this.weapons.controller.gunWait,
+      lastAttackGun: this.weapons.controller.lastAttackGun,
+    });
   }
 }
 

@@ -127,6 +127,57 @@ describe("Sauerbraten rifle protocol", () => {
 });
 
 describe("native server message framing", () => {
+  it("uses the normal client lifecycle for a local bot match", () => {
+    const client = createClient();
+    const events: string[] = [];
+    client.multiplayer.addEventListener("multiplayer", (event) => events.push((event as CustomEvent).detail.type));
+
+    client.multiplayer.startLocalGame("local player", 2);
+    client.multiplayer.setLocalTeam("good");
+
+    expect(client.multiplayer.clientNumber).toBe(0);
+    expect(client.multiplayer.isLocalGame).toBe(true);
+    expect(client.multiplayer.scoreboard).toMatchObject([{ clientNumber: 0, name: "local player", model: 2, team: "good" }]);
+    expect(client.multiplayer.setSpectator(true)).toBe(true);
+    expect(client.multiplayer.isSpectator).toBe(true);
+    expect(client.multiplayer.setSpectator(false)).toBe(true);
+    expect(client.multiplayer.isSpectator).toBe(false);
+    expect(events).toContain("spawn");
+  });
+
+  it("emits vanilla CTF console messages for local flag transitions", () => {
+    const client = createClient();
+    const lines: string[] = [];
+    client.multiplayer.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "console") lines.push(detail.text);
+    });
+    client.multiplayer.gameMode = 11;
+    client.multiplayer.startLocalGame("local player");
+    client.multiplayer.setLocalTeam("good");
+    client.multiplayer.setMapEntities(createFpsEntityRegistry([
+      { type: 30, position: { x: 100, y: 200, z: 20 }, attributes: [90, 1, 0, 0, 0] },
+      { type: 30, position: { x: 500, y: 600, z: 30 }, attributes: [270, 2, 0, 0, 0] },
+    ]));
+
+    client.physics.player.position = { x: 500, y: 600, z: 30 + client.physics.player.eyeHeight };
+    client.multiplayer.update(1000);
+    client.multiplayer.tryDropFlag();
+    client.multiplayer.switchTeam();
+    client.multiplayer.update(1100);
+    client.multiplayer.switchTeam();
+    client.physics.player.position = { x: 100, y: 200, z: 20 + client.physics.player.eyeHeight };
+    client.multiplayer.update(1200);
+    client.physics.player.position = { x: 500, y: 600, z: 30 + client.physics.player.eyeHeight };
+    client.multiplayer.update(1300);
+    client.physics.player.position = { x: 100, y: 200, z: 20 + client.physics.player.eyeHeight };
+    client.multiplayer.update(1400);
+
+    expect(lines).toEqual(expect.arrayContaining([
+      "you stole the enemy flag", "you dropped the enemy flag", "you returned your flag", "you scored for your team",
+    ]));
+  });
+
   it("applies server-authoritative spectator transitions to local physics", () => {
     const client = createClient();
     client.multiplayer.connected = true;

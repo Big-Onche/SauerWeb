@@ -49,8 +49,9 @@ import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
 import type { RuntimeMode } from "../runtime";
 import { lineCylinderIntersection } from "../fpsgame/weapon/HitscanSystem";
 import { magnitude, normalize, subtract } from "../engine/physics/vector";
-import { BotManager } from "../fpsgame/ai";
+import { AiStateType, AiTargetType, BotManager, type AiInterest, type BotActor } from "../fpsgame/ai";
 import { GameModeFlag, gameModeHas } from "../fpsgame/game";
+import { SIGHTMIN } from "../fpsgame/waypoint";
 
 export type CameraMode = "free" | "player";
 
@@ -85,11 +86,24 @@ export class MapScene {
         this.weapons.events.emit({ type: "shot-effect", gun: event.gun, from: event.from, to: event.to, rays: event.rays,
           clientNumber: bot.clientNumber });
       }
-      if (event.type === "death" && event.target === this.physics.player) this.fpsClient.multiplayer.notifyLocalStateChange();
+      if (event.type === "death" && event.target === this.physics.player) {
+        if (bot.ownerNumber < 0 && this.fpsClient.multiplayer.clientNumber >= 0) {
+          const victim = this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
+          bot.frags += bot.team && bot.team === victim?.team ? -1 : 1;
+          this.fpsClient.multiplayer.localDied(this.fpsClient.multiplayer.clientNumber, bot.clientNumber);
+        } else this.fpsClient.multiplayer.notifyLocalStateChange();
+      } else if (event.type === "death" && bot.ownerNumber < 0 && "clientNumber" in event.target) {
+        const victim = event.target as BotActor;
+        if (victim.ownerNumber < 0 && this.fpsClient.multiplayer.clientNumber >= 0) {
+          if (bot.team && bot.team === victim.team) bot.frags -= 2;
+          this.fpsClient.multiplayer.localDied(victim.clientNumber, bot.clientNumber);
+        }
+      }
       if (bot.ownerNumber === this.fpsClient.multiplayer.clientNumber) this.fpsClient.multiplayer.sendOwnedBotEvent(bot.clientNumber, event);
     },
     spawnRequest: (bot) => this.fpsClient.multiplayer.requestOwnedBotSpawn(bot.clientNumber),
     changed: () => this.syncBotTargets(),
+    objective: (bot, _state, interests) => this.ctfAiObjective(bot, interests),
   });
   private readonly weaponInput: BrowserWeaponInput;
   private readonly weaponHUD: WeaponHUD;
@@ -192,7 +206,12 @@ export class MapScene {
       const bot = [...this.bots.bots.values()].find((candidate) => candidate === event.target);
       if (!bot) return;
       if (event.type === "damage") this.bots.damaged(bot, this.physics.player);
-      else this.bots.killed(bot, this.physics.player);
+      else {
+        this.bots.killed(bot, this.physics.player);
+        if (bot.ownerNumber < 0 && this.fpsClient.multiplayer.clientNumber >= 0) {
+          this.fpsClient.multiplayer.localDied(bot.clientNumber, this.fpsClient.multiplayer.clientNumber);
+        }
+      }
     });
     canvas.addEventListener("pointerdown", this.onSpectatorPointerDown, { capture: true });
     canvas.addEventListener("contextmenu", this.onSpectatorContextMenu);
@@ -410,6 +429,13 @@ export class MapScene {
     await this.fpsClient.multiplayer.connect({ ...endpoint, playerModel: this.playerModel });
   }
 
+  startLocalGame(playerName: string): void {
+    if (this.runtimeMode !== "game") return;
+    this.fpsClient.multiplayer.startLocalGame(playerName, this.playerModel);
+    this.multiplayerHUD.setVisible(true);
+    this.syncPlayerView();
+  }
+
   setLocalGameMode(mode: number): void {
     if (this.runtimeMode !== "game") return;
     this.localGameMode = mode;
@@ -424,7 +450,7 @@ export class MapScene {
     this.fpsClient.multiplayer.clearLocalBots();
     const total = Math.min(32, Math.max(0, Math.trunc(count))), minimum = Math.min(101, Math.max(1, Math.trunc(minimumSkill))),
       maximum = Math.min(101, Math.max(minimum, Math.trunc(maximumSkill)));
-    if (gameModeHas(this.localGameMode, GameModeFlag.Team)) Object.assign(this.physics.player, { team: "good" });
+    this.fpsClient.multiplayer.setLocalTeam(gameModeHas(this.localGameMode, GameModeFlag.Team) ? "good" : "");
     for (let index = 0; index < total; index++) {
       const skill = minimum + Math.floor(Math.random() * (maximum - minimum + 1));
       this.bots.addbot(skill);
@@ -866,6 +892,12 @@ export class MapScene {
       }
     }
     this.fpsClient.multiplayer.update(nowMilliseconds);
+    if (this.fpsClient.multiplayer.isLocalGame) {
+      for (const bot of this.bots.bots.values()) {
+        const player = this.fpsClient.multiplayer.players.get(bot.clientNumber);
+        if (bot.ownerNumber < 0 && player) bot.flags = player.flags;
+      }
+    }
     this.multiplayerHUD.render();
     this.updateNetworkPlayers();
   }
@@ -1036,6 +1068,25 @@ export class MapScene {
     const networkTargets = [...this.fpsClient.multiplayer.players.values()]
       .filter((player) => player.clientNumber !== this.fpsClient.multiplayer.clientNumber && !(player.aiType !== 0 && player.ownerNumber < 0));
     this.weapons.targets.splice(1, this.weapons.targets.length - 1, ...networkTargets, ...botTargets);
+  }
+
+  // Original: src/fpsgame/ctf.h, ctfclientmode::aicheck() / aihomerun().
+  private ctfAiObjective(bot: BotActor, interests: AiInterest[]): boolean {
+    const multiplayer = this.fpsClient.multiplayer;
+    if (!multiplayer.isLocalGame || !gameModeHas(multiplayer.gameMode, GameModeFlag.Ctf) ||
+        gameModeHas(multiplayer.gameMode, GameModeFlag.Protect) || gameModeHas(multiplayer.gameMode, GameModeFlag.Hold)) return false;
+    const team = ctfTeamFlag(bot.team), carrying = multiplayer.ctfMode.flags.find((flag) => flag.owner === bot.clientNumber);
+    const ownFlag = multiplayer.ctfMode.flags.find((flag) => flag.team === team);
+    if (!carrying && (!ownFlag || ownFlag.owner < 0 && !ownFlag.dropped)) return false;
+    const target = ownFlag;
+    if (!target) return false;
+    const owner = target.owner >= 0 ? multiplayer.players.get(target.owner) : undefined;
+    const position = owner?.position ?? (target.dropped ? target.dropLoc : target.spawnLoc);
+    const node = this.bots.waypoints.closestwaypoint(position, SIGHTMIN, true);
+    if (!this.bots.waypoints.iswaypoint(node)) return false;
+    interests.push({ state: AiStateType.Pursue, node, target: target.id, targetType: AiTargetType.Affinity,
+      score: magnitude(subtract(bot.position, position)) / 10 });
+    return true;
   }
 
   private downloadWaypoints(mapName: string): void {

@@ -3,7 +3,7 @@ import "./guiSkin.css";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
 import { crc32 } from "./engine/crc32";
 import { SauerMapParser } from "./engine/worldio";
-import { gameModeName } from "./fpsgame/game";
+import { GameModeFlag, gameModeHas, gameModeName } from "./fpsgame/game";
 import { guiSkinMarkup } from "./guiSkin";
 import { GameConsole } from "./platform/browser/GameConsole";
 import { MapScene } from "./render/MapScene";
@@ -40,10 +40,10 @@ app.innerHTML = `
           <h1>paused</h1>
           <div class="pause-actions">
             <button type="button" data-action="resume"><img src="/api/packages/icons/menu.jpg" alt="" /><span>resume game</span></button>
-            <button type="button" data-action="switch-team" ${server ? "" : "hidden"}>
+            <button type="button" data-action="switch-team" ${server || gameModeHas(localGameMode, GameModeFlag.Team) ? "" : "hidden"}>
               <img src="/api/packages/icons/menu.jpg" alt="" /><span>switch team</span>
             </button>
-            <button type="button" data-action="spectator" ${server ? "" : "hidden"}>
+            <button type="button" data-action="spectator">
               <img src="/api/packages/icons/spectator.jpg" alt="" /><span>spectate</span>
             </button>
             <button type="button" data-action="crosshair"><img src="/api/packages/crosshairs/cross_normal.png" alt="" />
@@ -81,6 +81,7 @@ let teamChat = false;
 
 scene.setPlayerModel(savedPlayerModel());
 scene.setLocalGameMode(localGameMode);
+if (!server) scene.startLocalGame(savedPlayerName());
 gameConsole.add(`game mode is ${gameModeName(localGameMode)}`, "game-info");
 scene.onMultiplayer((event) => {
   if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMap.toLocaleLowerCase()) void loadMap(event.map);
@@ -174,7 +175,7 @@ function onKeyDown(event: KeyboardEvent): void {
   } else if (gameConsole.isFull && (event.code === "PageDown" || event.code === "NumpadAdd")) {
     event.preventDefault();
     gameConsole.scroll(-5);
-  } else if ((server && (event.code === "KeyT" || event.code === "KeyY") || event.code === "Slash") && chat.hidden && pauseMenu.hidden) {
+  } else if ((event.code === "KeyT" || event.code === "KeyY" || event.code === "Slash") && chat.hidden && pauseMenu.hidden) {
     event.preventDefault();
     if (document.pointerLockElement === canvas) void document.exitPointerLock();
     teamChat = event.code === "KeyY";
@@ -182,7 +183,7 @@ function onKeyDown(event: KeyboardEvent): void {
     if (event.code === "Slash") chatInput.value = "/";
     chat.hidden = false;
     chatInput.focus();
-  } else if (server && event.code === "KeyG" && chat.hidden && pauseMenu.hidden) {
+  } else if (event.code === "KeyG" && chat.hidden && pauseMenu.hidden) {
     scene.tryDropFlag();
   }
 }

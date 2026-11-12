@@ -41,7 +41,7 @@ export class MultiplayerHUD {
   render(): void {
     if (!this.visible) return;
     const player = this.client.players.get(this.client.clientNumber);
-    if (!this.client.connected) this.status.textContent = this.connectionStatus;
+    if (!this.client.connected && !this.client.isLocalGame) this.status.textContent = this.connectionStatus;
     else {
       this.status.innerHTML = `<span>${escapeHtml(this.client.serverDescription || "Sauerbraten")}</span>` +
         `<strong>${escapeHtml(gameModeName(this.client.gameMode))}</strong><span>${escapeHtml(this.client.mapName)}</span>` +

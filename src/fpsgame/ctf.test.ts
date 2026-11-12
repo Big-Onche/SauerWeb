@@ -36,6 +36,26 @@ describe("CTF map lifecycle", () => {
     expect(take).toHaveBeenCalledOnce();
     expect(take).toHaveBeenCalledWith(1, 13);
   });
+
+  it("runs vanilla steal, drop, return and capture transitions for a local match", () => {
+    const mode = new CtfClientMode();
+    mode.setup(FLAGS, CTF_MODE);
+    const good = { clientNumber: 0, state: ClientState.Alive, team: "good", flags: 0 } as NetworkPlayer;
+    const evil = { clientNumber: 1, state: ClientState.Alive, team: "evil", flags: 0 } as NetworkPlayer;
+
+    expect(mode.takeFlagLocal(good, 1, 0, CTF_MODE)).toBe(true);
+    expect(mode.flags[1].owner).toBe(0);
+    expect(mode.dropFlags(0, { x: 20, y: 30, z: 4 }, 90)).toBe(true);
+    expect(mode.flags[1]).toMatchObject({ owner: -1, dropped: true, dropLoc: { x: 20, y: 30, z: 4 } });
+    expect(mode.takeFlagLocal(evil, 1, mode.flags[1].version, CTF_MODE)).toBe(true);
+    expect(mode.flags[1]).toMatchObject({ owner: -1, dropped: false });
+
+    expect(mode.takeFlagLocal(good, 1, mode.flags[1].version, CTF_MODE)).toBe(true);
+    expect(mode.takeFlagLocal(good, 0, mode.flags[0].version, CTF_MODE)).toBe(true);
+    expect(good.flags).toBe(1);
+    expect(mode.scores).toEqual([1, 0]);
+    expect(mode.flags[1].owner).toBe(-1);
+  });
 });
 
 function initialFlagsPacket(): PacketReader {

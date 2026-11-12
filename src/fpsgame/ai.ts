@@ -423,7 +423,7 @@ export class BotManager {
   private findObjectiveInterests(bot: BotActor, interests: AiInterest[]): void {
     if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
       const team = bot.team === "good" ? 1 : bot.team === "evil" ? 2 : 0;
-      for (const flag of this.entities.filter((entity) => entity.type === 31)) {
+      for (const flag of this.entities.filter((entity) => entity.typeName === "flag")) {
         const flagTeam = flag.attributes[1] ?? 0, own = flagTeam === team;
         const protect = gameModeHas(this.gameMode, GameModeFlag.Protect), hold = gameModeHas(this.gameMode, GameModeFlag.Hold);
         const type = hold || own === protect ? AiStateType.Pursue : AiStateType.Defend;
