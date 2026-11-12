@@ -16,6 +16,8 @@ interface MapListItem {
 const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "keys", "console"] as const;
 type OptionTab = typeof OPTION_TABS[number];
 
+const EXPERIMENTAL_DISCLAIMER_KEY = "sauerweb.experimental-disclaimer-dismissed";
+
 const app = required<HTMLDivElement>("#app");
 const onlinePresence = new OnlinePresence();
 
@@ -29,6 +31,7 @@ let previewMap = "aard3c";
 let serverBrowserServers: ServerListItem[] = [];
 let serverBrowserLoaded = false;
 let serverBrowserRequest = 0;
+let experimentalDisclaimerDismissed = false;
 const serverBrowserOptions = { searchlan: false, autoupdateservers: true, autosortservers: true };
 const backgroundDecals = createBackgroundDecals();
 
@@ -47,6 +50,7 @@ function route(): void {
     return;
   }
   if (path === "/game") {
+    dismissExperimentalDisclaimer();
     void import("./gameRuntime");
     return;
   }
@@ -123,6 +127,25 @@ function renderMainMenu(): void {
         <p>SauerWeb brings the native maps and gameplay systems to the browser.</p>
         <button type="button">back</button>
       </dialog>
+      <dialog id="experimental-disclaimer" class="experimental-disclaimer" aria-labelledby="experimental-disclaimer-title"
+        aria-describedby="experimental-disclaimer-description">
+        ${guiSkinMarkup()}
+        <div class="experimental-disclaimer-content">
+          <h2 id="experimental-disclaimer-title">SauerWeb is experimental!</h2>
+          <div id="experimental-disclaimer-description">
+            <p>SauerWeb is an experimental browser-based port of Cube 2: Sauerbraten, currently under active development.</p>
+            <ul>
+              <li><strong>Bugs &amp; instability:</strong> Expect glitches, performance issues, crashes, and unexpected behavior.</li>
+              <li><strong>Multiplayer limitations:</strong> Some servers may reject connections due to SauerWeb's proxy-based networking or
+                compatibility/anti-cheat restrictions.</li>
+              <li><strong>Missing features:</strong> Not all original Sauerbraten features, mechanics, and options have been implemented yet.</li>
+              <li><strong>Work in progress:</strong> Compatibility, performance, stability, and features are continuously being improved.</li>
+            </ul>
+            <p class="experimental-disclaimer-thanks">Thanks for testing SauerWeb and helping the project grow!</p>
+          </div>
+          <footer><button type="button" data-action="dismiss-experimental-disclaimer" autofocus>I Understand</button></footer>
+        </div>
+      </dialog>
     </main>`;
 
   updateOnlinePlayerCounter();
@@ -184,6 +207,13 @@ function renderMainMenu(): void {
   const about = required<HTMLDialogElement>("#about-dialog");
   required<HTMLButtonElement>("[data-action='about']").addEventListener("click", () => about.showModal());
   about.querySelector("button")?.addEventListener("click", () => about.close());
+  const experimentalDisclaimer = required<HTMLDialogElement>("#experimental-disclaimer");
+  experimentalDisclaimer.addEventListener("cancel", (event) => event.preventDefault());
+  required<HTMLButtonElement>("[data-action='dismiss-experimental-disclaimer']").addEventListener("click", () => {
+    dismissExperimentalDisclaimer();
+    experimentalDisclaimer.close();
+  });
+  if (shouldShowExperimentalDisclaimer()) experimentalDisclaimer.showModal();
 }
 
 function updateOnlinePlayerCounter(): void {
@@ -572,6 +602,24 @@ function createBackgroundDecals(): string {
 function navigate(path: string): void {
   history.pushState(null, "", path);
   route();
+}
+
+function shouldShowExperimentalDisclaimer(): boolean {
+  if (experimentalDisclaimerDismissed) return false;
+  try {
+    return sessionStorage.getItem(EXPERIMENTAL_DISCLAIMER_KEY) !== "true";
+  } catch {
+    return true;
+  }
+}
+
+function dismissExperimentalDisclaimer(): void {
+  experimentalDisclaimerDismissed = true;
+  try {
+    sessionStorage.setItem(EXPERIMENTAL_DISCLAIMER_KEY, "true");
+  } catch {
+    // The in-memory fallback still prevents the popup from repeating while the page remains loaded.
+  }
 }
 
 function normalizePath(path: string): string {
