@@ -606,6 +606,10 @@ export class MapScene {
     return true;
   }
 
+  captureMouse(): void {
+    if (this.runtimeMode === "game") this.physicsInput.capture();
+  }
+
   setMultiplayerMapInfo(name: string, crc: number): void {
     this.fpsClient.multiplayer.setMapInfo(name, crc);
   }
@@ -859,7 +863,9 @@ export class MapScene {
     const spawn = playerStart ? { ...playerStart.position, z: playerStart.position.z + 14 } : fallback;
     const spawnYaw = playerStart?.attributes[0] ?? 0;
     this.physics.spawn(spawn, spawnYaw, performance.now());
-    if (this.runtimeMode === "game") this.weapons.controller.spawnForGameMode(this.localGameMode, performance.now());
+    const remotePlayer = this.fpsClient.multiplayer.clientNumber >= 0 && !this.fpsClient.multiplayer.isLocalGame;
+    if (remotePlayer) this.fpsClient.multiplayer.synchronizeLocalSpawnState();
+    else if (this.runtimeMode === "game") this.weapons.controller.spawnForGameMode(this.localGameMode, performance.now());
     else this.weapons.controller.respawn(performance.now());
     if (this.runtimeMode === "debug" && this.debugLoadout) this.weapons.controller.inventory.grantMaximumAmmo();
     this.weaponHUD.render();
@@ -1063,17 +1069,66 @@ export class MapScene {
 
   private spawnNetworkPlayer(): void {
     const player = this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
-    const team = ctfTeamFlag(player?.team ?? "");
-    const allStarts = this.currentMap?.entities.filter((entity) => entity.type === 3) ?? [];
-    const teamStarts = team ? allStarts.filter((entity) => (entity.attributes[1] ?? 0) === team) : [];
-    const starts = teamStarts.length ? teamStarts : allStarts;
-    const start = starts[Math.floor(Math.random() * starts.length)];
+    const start = this.chooseNetworkSpawn(player);
     if (start) {
       this.physics.spawn({ ...start.position, z: start.position.z + this.physics.player.eyeHeight }, start.attributes[0] ?? 0,
         performance.now());
     }
     else this.physics.reset(performance.now());
+    // physics.spawn() restores generic entity defaults. The server's N_SPAWNSTATE is
+    // authoritative for health, armour, weapon selection and ammo in multiplayer.
+    this.fpsClient.multiplayer.synchronizeLocalSpawnState();
     this.weaponHUD.render();
+  }
+
+  // Original: src/engine/world.cpp::gatherspawninfos()/poprandomspawn() and
+  // src/fpsgame/fps.cpp::ratespawn(). Native Sauerbraten uses a weighted random
+  // choice that favours starts away from visible, living enemies.
+  private chooseNetworkSpawn(localPlayer: NetworkPlayer | undefined): RegisteredMapEntity | undefined {
+    const multiplayer = this.fpsClient.multiplayer, mode = multiplayer.gameMode;
+    const allStarts = this.currentMap?.entityRegistry.filter((entity) => entity.type === 3) ?? [];
+    const team = ctfTeamFlag(localPlayer?.team ?? "");
+    const groupedMode = (gameModeHas(mode, GameModeFlag.Ctf) && !gameModeHas(mode, GameModeFlag.Hold)) ||
+      gameModeHas(mode, GameModeFlag.Collect);
+    const tag = groupedMode ? team : 0;
+    const taggedStarts = allStarts.filter((entity) => (entity.attributes[1] ?? 0) === tag);
+    const starts = taggedStarts.length ? taggedStarts : allStarts;
+    if (!starts.length) return undefined;
+    const clientMode = gameModeHas(mode, GameModeFlag.Ctf) || gameModeHas(mode, GameModeFlag.Capture) ||
+      gameModeHas(mode, GameModeFlag.Collect);
+    const maximumRange = !gameModeHas(mode, GameModeFlag.NoItems) ? 400 : clientMode ? 300 : 110;
+    const enemies = [...multiplayer.players.values()].filter((player) => player !== localPlayer && player.state === ClientState.Alive &&
+      (!localPlayer?.team || player.team !== localPlayer.team));
+    const weighted = starts.map((start) => {
+      const origin = { ...start.position, z: start.position.z + this.physics.player.eyeHeight };
+      let minimumDistance = maximumRange;
+      for (const enemy of enemies) {
+        const direction = subtract(enemy.position, origin), actualDistance = magnitude(direction);
+        if (actualDistance >= minimumDistance || actualDistance <= 0) continue;
+        normalize(direction);
+        const obstruction = this.physics.raycast(origin, direction, actualDistance, 0, true);
+        minimumDistance = Math.min(minimumDistance, obstruction && obstruction.distance < actualDistance ? actualDistance * 1.5 : actualDistance);
+      }
+      const proximity = this.nativeProximityScore(minimumDistance, 80, maximumRange);
+      let weight = 1 - proximity;
+      if (clientMode) weight = weight > 0 ? 2 * weight / (weight + 1) : 0;
+      return { start, weight };
+    });
+    const total = weighted.reduce((sum, candidate) => sum + candidate.weight, 0);
+    if (total <= 0) return weighted[Math.floor(Math.random() * weighted.length)]?.start;
+    let selection = Math.random() * total;
+    for (const candidate of weighted) {
+      selection -= candidate.weight;
+      if (selection <= 0) return candidate.start;
+    }
+    return weighted[weighted.length - 1]?.start;
+  }
+
+  private nativeProximityScore(distance: number, lower: number, upper: number): number {
+    if (distance <= lower) return 1;
+    if (distance >= upper) return 0;
+    const aboveLower = distance - lower, belowUpper = distance - upper;
+    return belowUpper * belowUpper / (aboveLower * aboveLower + belowUpper * belowUpper);
   }
 
   private updateNetworkPlayers(): void {

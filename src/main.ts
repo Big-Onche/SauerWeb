@@ -488,7 +488,7 @@ function renderServerList(): void {
 
 function launchServer(server: ServerListItem): void {
   const query = new URLSearchParams({ map: server.map ?? "", server: server.host, port: String(server.port) });
-  location.assign(`/game?${query}`);
+  launchGame(`/game?${query}`);
 }
 
 function renderMapsMenu(): void {
@@ -572,7 +572,20 @@ function launchMap(name: string): void {
   if (!name || (availableMaps && !availableMaps.get(name)?.supported)) return;
   const query = new URLSearchParams({ map: name, mode: String(selectedBotMode), bots: String(botMatchCount),
     minskill: String(botMatchMinSkill), maxskill: String(botMatchMaxSkill) });
-  location.assign(`/game?${query}`);
+  launchGame(`/game?${query}`);
+}
+
+function launchGame(url: string): void {
+  // Keep the launch click's user activation in this document. The game transfers
+  // this temporary lock to its canvas once the asynchronous map load completes.
+  try {
+    const request = document.documentElement.requestPointerLock();
+    if (request) void request.catch(() => undefined);
+  } catch {
+    // The viewport click remains a fallback where pointer lock is unavailable.
+  }
+  history.pushState(null, "", url);
+  route();
 }
 
 function menuButton(label: string, action: string, enabled: boolean, icon = "menu"): string {

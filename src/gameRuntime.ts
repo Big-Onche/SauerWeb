@@ -83,7 +83,6 @@ let teamChat = false;
 
 scene.setPlayerModel(savedPlayerModel());
 scene.setLocalGameMode(localGameMode);
-if (!server) scene.startLocalGame(savedPlayerName());
 gameConsole.add(`game mode is ${gameModeName(localGameMode)}`, "game-info");
 scene.onMultiplayer((event) => {
   if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMap.toLocaleLowerCase()) void loadMap(event.map);
@@ -114,6 +113,7 @@ chat.addEventListener("submit", (event) => {
   canvas.focus();
 });
 window.addEventListener("keydown", onKeyDown, { capture: true });
+window.addEventListener("popstate", leaveGame);
 window.addEventListener("pagehide", dispose, { once: true });
 void start();
 
@@ -122,7 +122,12 @@ async function start(): Promise<void> {
   await loadMap(requestedMap);
   if (server && activeMap) {
     await scene.connectMultiplayer({ host: server, port, playerName: savedPlayerName(), playerModel: savedPlayerModel(), map: activeMap });
+  } else if (activeMap) {
+    // Native startmap() establishes the map and spawn before the local client becomes alive.
+    scene.startLocalGame(savedPlayerName());
+    scene.configureBotMatch(botCount, botMinimumSkill, botMaximumSkill);
   }
+  if (activeMap) scene.captureMouse();
 }
 
 async function loadMap(name: string): Promise<void> {
@@ -137,7 +142,6 @@ async function loadMap(name: string): Promise<void> {
     await scene.loadMap(map, resolveMapTextures(map, manifest), manifest.skybox, manifest.lighting, manifest.fog, manifest.mapModels ?? [],
       manifest.entityModels?.teleporter, manifest.mapSounds ?? []);
     scene.setMultiplayerMapInfo(name, crc32(new Uint8Array(mapData)));
-    if (!server) scene.configureBotMatch(botCount, botMinimumSkill, botMaximumSkill);
     activeMap = name;
     document.title = `${name} — SauerWeb`;
     gameConsole.add(`read map ${name}`);
@@ -192,6 +196,7 @@ function onKeyDown(event: KeyboardEvent): void {
 
 function requestRespawn(): void {
   if (!scene.requestRespawn()) return;
+  scene.captureMouse();
   if (!server) { syncDeathMenu(); return; }
   respawnPending = true;
   respawnButton.disabled = true;
@@ -206,12 +211,14 @@ function syncDeathMenu(): void {
   respawnButton.textContent = respawnPending ? "respawning…" : "respawn";
   if (dead) {
     chat.hidden = true;
-    if (document.pointerLockElement === canvas) void document.exitPointerLock();
   } else {
     respawnPending = false;
     respawnButton.disabled = false;
     respawnButton.textContent = "respawn";
-    if (wasDead) canvas.focus();
+    if (wasDead) {
+      canvas.focus();
+      scene.captureMouse();
+    }
   }
 }
 
@@ -224,16 +231,28 @@ function setPaused(paused: boolean): void {
   pauseMenu.hidden = !paused;
   scene.setPhysicsPaused(paused && !server);
   if (paused && document.pointerLockElement === canvas) void document.exitPointerLock();
-  if (!paused) canvas.focus();
+  if (!paused) {
+    canvas.focus();
+    scene.captureMouse();
+  }
 }
 
 function dispose(): void {
   if (disposed) return;
   disposed = true;
   window.removeEventListener("keydown", onKeyDown, { capture: true });
+  window.removeEventListener("popstate", leaveGame);
   scene.dispose();
   gameConsole.dispose();
   fpsHud.dispose();
+}
+
+function leaveGame(): void {
+  if (location.pathname.replace(/\/+$/, "").toLocaleLowerCase() === "/game") return;
+  dispose();
+  // gameRuntime is a side-effect module. Reloading when browser history leaves the
+  // game gives a later launch a fresh runtime instead of reusing the disposed one.
+  location.reload();
 }
 
 function fail(message: string): void {

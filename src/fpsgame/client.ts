@@ -152,8 +152,10 @@ export class MultiplayerClient extends EventTarget {
     this.timeLeftSeconds = 10 * 60;
     const player = this.playerFor(this.clientNumber);
     Object.assign(player, { name: this.endpoint.playerName, model: playerModel, state: ClientState.Alive, alive: true });
+    this.copyLocalSpawnState(player);
     this.synchronizeLocalState();
     this.emit({ type: "players" });
+    this.emit({ type: "spawn", clientNumber: this.clientNumber });
   }
 
   disconnect(): void {
@@ -387,6 +389,10 @@ export class MultiplayerClient extends EventTarget {
 
   synchronizeLocalState(): void {
     this.syncLocalState();
+  }
+
+  synchronizeLocalSpawnState(): void {
+    this.syncLocalState(true);
   }
 
   setLocalTeam(team: string): void {
@@ -726,15 +732,7 @@ export class MultiplayerClient extends EventTarget {
     player.deadAt = 0;
     if (clientNumber === this.clientNumber) {
       this.respawnRequested = false;
-      this.physics.player.alive = true;
-      this.physics.player.clientState = ClientState.Alive;
-      this.weapons.controller.respawn(performance.now());
-      this.physics.player.health = player.health;
-      this.physics.player.maxHealth = player.maxHealth;
-      this.physics.player.armour = player.armour;
-      this.physics.player.armourType = player.armourType;
-      this.weapons.controller.inventory.selectedGun = player.selectedGun;
-      this.weapons.controller.inventory.ammo.set(player.ammo);
+      this.syncLocalState(true);
     }
     const confirmation = new PacketWriter();
     if (clientNumber !== this.clientNumber) confirmation.putInt(NetworkMessage.FromAi).putInt(clientNumber);
@@ -1210,23 +1208,41 @@ export class MultiplayerClient extends EventTarget {
     this.emit({ type: "players" });
   }
 
-  private syncLocalState(): void {
+  private syncLocalState(synchronizeSpawnState = false): void {
     const player = this.players.get(this.clientNumber);
     if (!player) return;
     this.physics.player.clientState = player.state;
     this.physics.player.alive = player.state === ClientState.Alive;
     if (player.state !== ClientState.Alive) this.weapons.controller.setAttacking(false);
+    if (!synchronizeSpawnState) return;
+    this.physics.player.health = player.health;
+    this.physics.player.maxHealth = player.maxHealth;
+    this.physics.player.armour = player.armour;
+    this.physics.player.armourType = player.armourType;
+    this.weapons.controller.respawn(performance.now());
+    this.weapons.controller.inventory.selectedGun = player.selectedGun;
+    this.weapons.controller.inventory.ammo.set(player.ammo);
   }
 
   private spawnLocalPlayer(): void {
     const player = this.players.get(this.clientNumber);
     if (!player) return;
+    this.weapons.controller.spawnForGameMode(this.gameMode, performance.now());
     player.state = ClientState.Alive;
     player.alive = true;
     player.lifeSequence++;
     this.physics.player.clientState = ClientState.Alive;
     this.physics.player.alive = true;
+    this.copyLocalSpawnState(player);
     this.emit({ type: "spawn", clientNumber: this.clientNumber });
+  }
+
+  private copyLocalSpawnState(player: NetworkPlayer): void {
+    Object.assign(player, {
+      health: this.physics.player.health, maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour,
+      armourType: this.physics.player.armourType, selectedGun: this.weapons.controller.inventory.selectedGun,
+      ammo: new Int32Array(this.weapons.controller.inventory.ammo),
+    });
   }
 
   private syncLocalPlayer(): void {

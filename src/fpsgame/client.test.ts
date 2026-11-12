@@ -106,6 +106,28 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.remaining).toBe(0);
   });
 
+  it("restores the authoritative spawn loadout after map placement resets local physics", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    client.multiplayer.clientNumber = 4;
+    vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+    const spawn = new PacketWriter()
+      .putInt(NetworkMessage.SpawnState).putInt(4)
+      .putInt(1).putInt(1).putInt(100).putInt(0).putInt(0).putInt(Gun.Rifle)
+      .putInt(0).putInt(0).putInt(0).putInt(100).putInt(0).putInt(0)
+      .finish();
+
+    Reflect.apply(Reflect.get(client.multiplayer, "parseMessages"), client.multiplayer, [-1, new PacketReader(spawn)]);
+    client.physics.reset(1000);
+    client.weapons.controller.respawn(1000);
+    client.multiplayer.synchronizeLocalSpawnState();
+
+    expect(client.physics.player).toMatchObject({ alive: true, clientState: ClientState.Alive, health: 1, armour: 0 });
+    expect(client.weapons.controller.inventory.selectedGun).toBe(Gun.Rifle);
+    expect(Array.from(client.weapons.controller.inventory.ammo.slice(0, 7))).toEqual([1, 0, 0, 0, 100, 0, 0]);
+  });
+
   it.each([
     { team: false, type: NetworkMessage.Text },
     { team: true, type: NetworkMessage.SayTeam },
@@ -128,6 +150,21 @@ describe("Sauerbraten rifle protocol", () => {
 });
 
 describe("native server message framing", () => {
+  it("keeps the native insta-CTF rifle loadout when a local match starts and respawns", () => {
+    const client = createClient();
+    client.multiplayer.gameMode = 12;
+    client.weapons.controller.spawnForGameMode(12);
+
+    client.multiplayer.startLocalGame("local player");
+
+    expect(client.weapons.controller.inventory.selectedGun).toBe(Gun.Rifle);
+    expect(Array.from(client.weapons.controller.inventory.ammo.slice(0, 7))).toEqual([1, 0, 0, 0, 100, 0, 0]);
+    client.physics.player.alive = false;
+    expect(client.multiplayer.requestRespawn()).toBe(true);
+    expect(client.weapons.controller.inventory.selectedGun).toBe(Gun.Rifle);
+    expect(Array.from(client.weapons.controller.inventory.ammo.slice(0, 7))).toEqual([1, 0, 0, 0, 100, 0, 0]);
+  });
+
   it("uses the normal client lifecycle for a local bot match", () => {
     const client = createClient();
     const events: string[] = [];

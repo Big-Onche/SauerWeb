@@ -25,6 +25,17 @@ export class BrowserPhysicsInput {
     return sampled;
   }
 
+  capture(): void {
+    if (!this.enabled || document.pointerLockElement === this.canvas) return;
+    try {
+      const request = this.canvas.requestPointerLock();
+      if (request) void request.catch(() => undefined);
+    } catch {
+      // Browsers require a user activation for the first pointer lock. Entry makes a
+      // best-effort request; respawn/resume handlers call this again from their gesture.
+    }
+  }
+
   dispose(): void {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
@@ -53,7 +64,7 @@ export class BrowserPhysicsInput {
   };
 
   private readonly onCanvasClick = (): void => {
-    if (this.enabled && document.pointerLockElement !== this.canvas) void this.canvas.requestPointerLock();
+    this.capture();
   };
 
   private readonly clear = (): void => {
