@@ -48,6 +48,7 @@ import { ctfTeamFlag } from "../fpsgame/ctf";
 import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
 import type { RuntimeMode } from "../runtime";
 import { lineCylinderIntersection } from "../fpsgame/weapon/HitscanSystem";
+import type { Damageable } from "../fpsgame/weapon/DamageSystem";
 import { magnitude, normalize, subtract } from "../engine/physics/vector";
 import { AiStateType, AiTargetType, BotManager, type AiInterest, type BotActor } from "../fpsgame/ai";
 import { GameModeFlag, gameModeHas } from "../fpsgame/game";
@@ -152,6 +153,7 @@ export class MapScene {
   private readonly frameProfiler = new FrameProfiler();
   private readonly renderDiagnostics: RendererDiagnosticState = { particles: true, bots: true, world: true };
   private particleUpdateStartedAt = 0;
+  private readonly botUpdatePlayers: Damageable[] = [];
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
     this.canvas = canvas;
@@ -925,8 +927,11 @@ export class MapScene {
     if (followed) this.frameProfiler.measure("hud", () =>
       this.weaponHUD.render({ health: followed.health, selectedGun: followed.selectedGun, ammo: followed.ammo }));
     this.frameProfiler.measure("weaponSimulation", () => this.weapons.update(nowMilliseconds, aimTarget));
-    this.bots.update(nowMilliseconds, [...this.fpsClient.multiplayer.players.values()].filter((player) =>
-      player.aiType === 0 || player.ownerNumber >= 0), !dead);
+    this.botUpdatePlayers.length = 0;
+    for (const player of this.fpsClient.multiplayer.players.values()) {
+      if (player.aiType === 0 || player.ownerNumber >= 0) this.botUpdatePlayers.push(player);
+    }
+    this.bots.update(nowMilliseconds, this.botUpdatePlayers, !dead);
     this.frameProfiler.measure("networking", () => {
       for (const bot of this.bots.bots.values()) if (bot.ownerNumber < 0) this.fpsClient.multiplayer.syncLocalBot(bot);
       this.syncBotTargets();
@@ -1153,10 +1158,13 @@ export class MapScene {
   }
 
   private syncBotTargets(): void {
-    const botTargets = [...this.bots.bots.values()];
-    const networkTargets = [...this.fpsClient.multiplayer.players.values()]
-      .filter((player) => player.clientNumber !== this.fpsClient.multiplayer.clientNumber && !(player.aiType !== 0 && player.ownerNumber < 0));
-    this.weapons.targets.splice(1, this.weapons.targets.length - 1, ...networkTargets, ...botTargets);
+    this.weapons.targets.length = Math.min(1, this.weapons.targets.length);
+    for (const player of this.fpsClient.multiplayer.players.values()) {
+      if (player.clientNumber !== this.fpsClient.multiplayer.clientNumber && !(player.aiType !== 0 && player.ownerNumber < 0)) {
+        this.weapons.targets.push(player);
+      }
+    }
+    for (const bot of this.bots.bots.values()) this.weapons.targets.push(bot);
   }
 
   // Original: src/fpsgame/ctf.h, ctfclientmode::aicheck() / aihomerun().

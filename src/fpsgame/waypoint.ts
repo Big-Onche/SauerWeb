@@ -30,6 +30,24 @@ export interface WaypointSelection {
   max: Vec3;
 }
 
+interface WaypointSpatialNode {
+  index: number;
+  axis: 0 | 1 | 2;
+  left?: WaypointSpatialNode;
+  right?: WaypointSpatialNode;
+}
+
+interface RouteScratch {
+  cameFrom: Int32Array;
+  score: Float64Array;
+  estimate: Float64Array;
+  visited: Uint8Array;
+  blocked: Uint8Array;
+  heap: Int32Array;
+  heapPositions: Int32Array;
+  insertionOrder: Int32Array;
+}
+
 // Original: src/fpsgame/waypoint.cpp, src/fpsgame/ai.h
 // Functions: closestwaypoint(), findwaypointswithin(), route(), loadwaypoints(), savewaypoints(), waypoint editing commands
 // The zero entry is deliberately retained: native waypoint indices are one-based and serialized links refer to those indices.
@@ -39,6 +57,13 @@ export class WaypointSystem {
   dropWaypoints = false;
   showWaypoints = false;
   showWaypointsRadius = 200;
+  private spatialIndex?: WaypointSpatialNode;
+  private spatialIndexDirty = true;
+  private nearestPosition: Vec3 = { x: 0, y: 0, z: 0 };
+  private nearestDistance = 0;
+  private nearestIndex = -1;
+  private nearestRequireLinks = false;
+  private routeScratch?: RouteScratch;
 
   constructor(private readonly weightAt: (position: Vec3) => number = () => 1) {
     this.clearwaypoints();
@@ -51,6 +76,8 @@ export class WaypointSystem {
   clearwaypoints(full = false): void {
     this.waypoints.length = 0;
     this.waypoints.push({ o: { x: 0, y: 0, z: 0 }, weight: 1, links: [] });
+    this.spatialIndex = undefined;
+    this.spatialIndexDirty = true;
     if (full) {
       this.loadedWaypoints = "";
       this.dropWaypoints = false;
@@ -68,6 +95,7 @@ export class WaypointSystem {
   addwaypoint(o: Vec3, weight = this.weightAt(o)): number {
     if (this.waypoints.length > MAXWAYPOINTS) return -1;
     this.waypoints.push({ o: { ...o }, weight, links: [] });
+    this.spatialIndexDirty = true;
     return this.waypoints.length - 1;
   }
 
@@ -94,50 +122,55 @@ export class WaypointSystem {
   }
 
   closestwaypoint(position: Vec3, minimumDistance: number, requireLinks: boolean): number {
-    let closest = -1, closestDistance = minimumDistance * minimumDistance;
-    for (let index = 1; index < this.waypoints.length; index++) {
-      const waypoint = this.waypoints[index];
-      if (requireLinks && !waypoint.links.length) continue;
-      const distance = squaredDistance(position, waypoint.o);
-      if (distance <= closestDistance) { closest = index; closestDistance = distance; }
-    }
-    return closest;
+    this.ensureSpatialIndex();
+    this.nearestPosition = position;
+    this.nearestDistance = minimumDistance * minimumDistance;
+    this.nearestIndex = -1;
+    this.nearestRequireLinks = requireLinks;
+    if (this.spatialIndex) this.visitClosest(this.spatialIndex);
+    return this.nearestIndex;
   }
 
   findwaypointswithin(position: Vec3, minimumDistance: number, maximumDistance: number): number[] {
     const minimumSquared = minimumDistance * minimumDistance, maximumSquared = maximumDistance * maximumDistance;
     const results: number[] = [];
-    for (let index = 1; index < this.waypoints.length; index++) {
-      const distance = squaredDistance(position, this.waypoints[index].o);
-      if (distance >= minimumSquared && distance <= maximumSquared) results.push(index);
-    }
+    this.ensureSpatialIndex();
+    if (this.spatialIndex) queryWaypointRange(this.spatialIndex, this.waypoints, position, minimumSquared, maximumSquared, results);
+    results.sort(ascending);
     return results;
   }
 
   route(node: number, goal: number, options: RouteOptions = {}): number[] {
     if (!this.iswaypoint(node) || !this.iswaypoint(goal) || node === goal || !this.waypoints[node].links.length) return [];
     const retries = options.retries ?? 0;
-    const blocked = new Set<number>();
-    if (retries <= 1) for (const previous of options.previousNodes ?? []) if (previous !== node && this.iswaypoint(previous)) blocked.add(previous);
+    const scratch = this.ensureRouteScratch(), blocked = scratch.blocked;
+    scratch.cameFrom.fill(0);
+    scratch.score.fill(Number.POSITIVE_INFINITY);
+    scratch.estimate.fill(Number.POSITIVE_INFINITY);
+    scratch.visited.fill(0);
+    blocked.fill(0);
+    scratch.heapPositions.fill(-1);
+    if (retries <= 1) for (const previous of options.previousNodes ?? []) {
+      if (previous !== node && this.iswaypoint(previous)) blocked[previous] = 1;
+    }
     if (retries <= 0) for (const avoided of options.avoidedNodes ?? []) {
       if (avoided !== node && avoided !== goal && !this.waypoints[node].links.includes(avoided) && !this.waypoints[goal].links.includes(avoided)) {
-        blocked.add(avoided);
+        blocked[avoided] = 1;
       }
     }
-    const open = [node], cameFrom = new Int32Array(this.waypoints.length), score = new Float64Array(this.waypoints.length);
-    const estimate = new Float64Array(this.waypoints.length), visited = new Uint8Array(this.waypoints.length);
-    score.fill(Number.POSITIVE_INFINITY);
-    estimate.fill(Number.POSITIVE_INFINITY);
+    const { cameFrom, score, estimate, visited, heap, heapPositions, insertionOrder } = scratch;
     score[node] = estimate[node] = 0;
-    let lowest = -1;
-    while (open.length) {
-      let bestAt = 0;
-      for (let index = 1; index < open.length; index++) if (score[open[index]] + estimate[open[index]] < score[open[bestAt]] + estimate[open[bestAt]]) bestAt = index;
-      const current = open.splice(bestAt, 1)[0];
+    heap[0] = node;
+    heapPositions[node] = 0;
+    insertionOrder[node] = 0;
+    let heapSize = 1, nextInsertionOrder = 1, lowest = -1;
+    while (heapSize) {
+      const current = heap[0];
+      heapSize = popRouteHeap(heap, heapPositions, insertionOrder, score, estimate, heapSize);
       if (current === goal) { lowest = goal; break; }
       visited[current] = 1;
       for (const link of this.waypoints[current].links) {
-        if (!this.iswaypoint(link) || blocked.has(link) || visited[link] || link !== goal && !this.waypoints[link].links.length) continue;
+        if (!this.iswaypoint(link) || blocked[link] || visited[link] || link !== goal && !this.waypoints[link].links.length) continue;
         const weight = Math.max(this.waypoints[link].weight, 1);
         const candidate = score[current] + distance(this.waypoints[current].o, this.waypoints[link].o) * weight;
         if (candidate >= score[link]) continue;
@@ -145,7 +178,11 @@ export class WaypointSystem {
         score[link] = candidate;
         estimate[link] = distance(this.waypoints[link].o, this.waypoints[goal].o) * weight;
         if (estimate[link] <= WAYPOINTRADIUS * 4 && (lowest < 0 || estimate[link] <= estimate[lowest])) lowest = link;
-        if (!open.includes(link)) open.push(link);
+        const heapPosition = heapPositions[link];
+        if (heapPosition < 0) {
+          insertionOrder[link] = nextInsertionOrder++;
+          heapSize = pushRouteHeap(link, heap, heapPositions, insertionOrder, score, estimate, heapSize);
+        } else bubbleRouteHeapUp(heapPosition, heap, heapPositions, insertionOrder, score, estimate);
       }
     }
     const result: number[] = [];
@@ -154,6 +191,44 @@ export class WaypointSystem {
       if (!cameFrom[current]) break;
     }
     return result;
+  }
+
+  private ensureSpatialIndex(): void {
+    if (!this.spatialIndexDirty) return;
+    const indices = Array.from({ length: Math.max(0, this.waypoints.length - 1) }, (_, index) => index + 1);
+    this.spatialIndex = buildWaypointSpatialIndex(indices, this.waypoints, 0);
+    this.spatialIndexDirty = false;
+  }
+
+  private visitClosest(node: WaypointSpatialNode): void {
+    const waypoint = this.waypoints[node.index];
+    if (!this.nearestRequireLinks || waypoint.links.length) {
+      const candidateDistance = squaredDistance(this.nearestPosition, waypoint.o);
+      if (candidateDistance < this.nearestDistance || candidateDistance === this.nearestDistance && node.index > this.nearestIndex) {
+        this.nearestIndex = node.index;
+        this.nearestDistance = candidateDistance;
+      }
+    }
+    const axis = axisName(node.axis), delta = this.nearestPosition[axis] - waypoint.o[axis];
+    const first = delta <= 0 ? node.left : node.right, second = delta <= 0 ? node.right : node.left;
+    if (first) this.visitClosest(first);
+    if (second && delta * delta <= this.nearestDistance) this.visitClosest(second);
+  }
+
+  private ensureRouteScratch(): RouteScratch {
+    if (this.routeScratch?.score.length === this.waypoints.length) return this.routeScratch;
+    const length = this.waypoints.length;
+    this.routeScratch = {
+      cameFrom: new Int32Array(length),
+      score: new Float64Array(length),
+      estimate: new Float64Array(length),
+      visited: new Uint8Array(length),
+      blocked: new Uint8Array(length),
+      heap: new Int32Array(length),
+      heapPositions: new Int32Array(length),
+      insertionOrder: new Int32Array(length),
+    };
+    return this.routeScratch;
   }
 
   async loadwaypoints(mapName: string, force = false): Promise<boolean> {
@@ -233,8 +308,95 @@ export class WaypointSystem {
     }
     for (const waypoint of kept.slice(1)) waypoint.links = waypoint.links.map((link) => remap[link]).filter(Boolean).slice(0, MAXWAYPOINTLINKS);
     this.waypoints.splice(0, this.waypoints.length, ...kept);
+    this.spatialIndexDirty = true;
     return removed;
   }
+}
+
+function buildWaypointSpatialIndex(indices: number[], waypoints: readonly Waypoint[], depth: number): WaypointSpatialNode | undefined {
+  if (!indices.length) return undefined;
+  const axis = depth % 3 as 0 | 1 | 2, name = axisName(axis);
+  indices.sort((left, right) => waypoints[left].o[name] - waypoints[right].o[name] || left - right);
+  const middle = Math.floor(indices.length / 2), index = indices[middle];
+  return {
+    index,
+    axis,
+    left: buildWaypointSpatialIndex(indices.slice(0, middle), waypoints, depth + 1),
+    right: buildWaypointSpatialIndex(indices.slice(middle + 1), waypoints, depth + 1),
+  };
+}
+
+function queryWaypointRange(node: WaypointSpatialNode, waypoints: readonly Waypoint[], position: Vec3, minimumSquared: number,
+                            maximumSquared: number, result: number[]): void {
+  const waypoint = waypoints[node.index], candidateDistance = squaredDistance(position, waypoint.o);
+  if (candidateDistance >= minimumSquared && candidateDistance <= maximumSquared) result.push(node.index);
+  const name = axisName(node.axis), delta = position[name] - waypoint.o[name];
+  if (node.left && (delta <= 0 || delta * delta <= maximumSquared)) {
+    queryWaypointRange(node.left, waypoints, position, minimumSquared, maximumSquared, result);
+  }
+  if (node.right && (delta >= 0 || delta * delta <= maximumSquared)) {
+    queryWaypointRange(node.right, waypoints, position, minimumSquared, maximumSquared, result);
+  }
+}
+
+function pushRouteHeap(node: number, heap: Int32Array, positions: Int32Array, order: Int32Array, score: Float64Array,
+                       estimate: Float64Array, size: number): number {
+  heap[size] = node;
+  positions[node] = size;
+  bubbleRouteHeapUp(size, heap, positions, order, score, estimate);
+  return size + 1;
+}
+
+function popRouteHeap(heap: Int32Array, positions: Int32Array, order: Int32Array, score: Float64Array, estimate: Float64Array,
+                      size: number): number {
+  const removed = heap[0], nextSize = size - 1;
+  positions[removed] = -1;
+  if (!nextSize) return 0;
+  heap[0] = heap[nextSize];
+  positions[heap[0]] = 0;
+  let parent = 0;
+  while (true) {
+    const left = parent * 2 + 1;
+    if (left >= nextSize) break;
+    const right = left + 1;
+    const best = right < nextSize && routeHeapLess(heap[right], heap[left], order, score, estimate) ? right : left;
+    if (!routeHeapLess(heap[best], heap[parent], order, score, estimate)) break;
+    swapRouteHeap(parent, best, heap, positions);
+    parent = best;
+  }
+  return nextSize;
+}
+
+function bubbleRouteHeapUp(position: number, heap: Int32Array, positions: Int32Array, order: Int32Array, score: Float64Array,
+                           estimate: Float64Array): void {
+  let child = position;
+  while (child > 0) {
+    const parent = Math.floor((child - 1) / 2);
+    if (!routeHeapLess(heap[child], heap[parent], order, score, estimate)) break;
+    swapRouteHeap(child, parent, heap, positions);
+    child = parent;
+  }
+}
+
+function routeHeapLess(left: number, right: number, order: Int32Array, score: Float64Array, estimate: Float64Array): boolean {
+  const leftScore = score[left] + estimate[left], rightScore = score[right] + estimate[right];
+  return leftScore < rightScore || leftScore === rightScore && order[left] < order[right];
+}
+
+function swapRouteHeap(left: number, right: number, heap: Int32Array, positions: Int32Array): void {
+  const value = heap[left];
+  heap[left] = heap[right];
+  heap[right] = value;
+  positions[heap[left]] = left;
+  positions[heap[right]] = right;
+}
+
+function axisName(axis: 0 | 1 | 2): keyof Vec3 {
+  return axis === 0 ? "x" : axis === 1 ? "y" : "z";
+}
+
+function ascending(left: number, right: number): number {
+  return left - right;
 }
 
 function squaredDistance(left: Vec3, right: Vec3): number {

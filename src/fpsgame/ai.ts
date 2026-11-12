@@ -118,6 +118,10 @@ export class BotManager {
   private nextLocalClientNumber = 128;
   private random: () => number;
   private readonly itemCooldowns = new Map<string, number>();
+  private readonly updateActors: BotActor[] = [];
+  private readonly damageTargets: Damageable[] = [];
+  private readonly enemyTargets: Damageable[] = [];
+  private readonly teammateTargets: Damageable[] = [];
 
   constructor(private readonly physics: PhysicsSimulation, private readonly localPlayer: Damageable, private readonly callbacks: BotCallbacks = {},
               random: () => number = Math.random) {
@@ -261,10 +265,16 @@ export class BotManager {
     if (!this.lastUpdate) this.lastUpdate = now;
     const elapsed = Math.min(100, Math.max(0, now - this.lastUpdate));
     this.lastUpdate = now;
-    const actors = [...this.bots.values()];
+    const actors = this.updateActors;
+    actors.length = 0;
+    for (const bot of this.bots.values()) actors.push(bot);
     if (!actors.length) return;
-    const damageTargets: Damageable[] = [this.localPlayer, ...players, ...actors];
-    for (const bot of actors) bot.weaponSystem.targets.splice(0, bot.weaponSystem.targets.length, ...damageTargets);
+    const damageTargets = this.damageTargets;
+    damageTargets.length = 0;
+    damageTargets.push(this.localPlayer);
+    for (const player of players) damageTargets.push(player);
+    for (const bot of actors) damageTargets.push(bot);
+    for (const bot of actors) replaceTargets(bot.weaponSystem.targets, damageTargets);
     this.iteration = (this.iteration + 1) % actors.length;
     for (let index = 0; index < actors.length; index++) {
       const bot = actors[index];
@@ -397,15 +407,21 @@ export class BotManager {
   private find(bot: BotActor, state: AiState, interests: AiInterest[], players: readonly Damageable[], localAlive: boolean): void {
     this.findObjectiveInterests(bot, interests);
     if (gameModeHas(this.gameMode, GameModeFlag.Team)) {
-      const teammates: Damageable[] = [...this.bots.values(), ...players];
+      const teammates = this.teammateTargets;
+      teammates.length = 0;
+      for (const teammate of this.bots.values()) teammates.push(teammate);
+      for (const teammate of players) teammates.push(teammate);
       if (localAlive) teammates.push(this.localPlayer);
       for (const teammate of teammates) {
         if (teammate === bot || !("team" in teammate) || teammate.team !== bot.team || !teammate.alive) continue;
         const node = this.waypoints.closestwaypoint(teammate.position, SIGHTMIN, true);
         if (!this.waypoints.iswaypoint(node)) continue;
-        const target = this.actorNumber(teammate), assigned = [...this.bots.values()].filter((other) => other !== bot &&
-          other.ai.state.some((candidate) => candidate.type === AiStateType.Defend && candidate.targetType === AiTargetType.Player &&
-            candidate.target === target)).length;
+        const target = this.actorNumber(teammate);
+        let assigned = 0;
+        for (const other of this.bots.values()) {
+          if (other !== bot && other.ai.state.some((candidate) => candidate.type === AiStateType.Defend &&
+              candidate.targetType === AiTargetType.Player && candidate.target === target)) assigned++;
+        }
         interests.push({ state: AiStateType.Defend, node, target, targetType: AiTargetType.Player,
           score: distance(bot.position, teammate.position) * (assigned + 1) / (this.hasGoodAmmo(bot) ? 100 : 10) });
       }
@@ -438,28 +454,37 @@ export class BotManager {
   private findObjectiveInterests(bot: BotActor, interests: AiInterest[]): void {
     if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
       const team = bot.team === "good" ? 1 : bot.team === "evil" ? 2 : 0;
-      for (const flag of this.entities.filter((entity) => entity.typeName === "flag")) {
+      for (const flag of this.entities) {
+        if (flag.typeName !== "flag") continue;
         const flagTeam = flag.attributes[1] ?? 0, own = flagTeam === team;
         const protect = gameModeHas(this.gameMode, GameModeFlag.Protect), hold = gameModeHas(this.gameMode, GameModeFlag.Hold);
         const type = hold || own === protect ? AiStateType.Pursue : AiStateType.Defend;
         const node = this.waypoints.closestwaypoint(flag.position, SIGHTMIN, true);
         if (!this.waypoints.iswaypoint(node)) continue;
-        const assigned = [...this.bots.values()].filter((other) => other !== bot && other.ai.state.some((candidate) =>
-          candidate.targetType === AiTargetType.Affinity && candidate.target === flag.index)).length;
+        let assigned = 0;
+        for (const other of this.bots.values()) {
+          if (other !== bot && other.ai.state.some((candidate) =>
+            candidate.targetType === AiTargetType.Affinity && candidate.target === flag.index)) assigned++;
+        }
         interests.push({ state: type, node, target: flag.index, targetType: AiTargetType.Affinity,
           score: distance(bot.position, flag.position) * (assigned + 1) / (type === AiStateType.Pursue ? 10 : 4) });
       }
     } else if (gameModeHas(this.gameMode, GameModeFlag.Capture)) {
-      for (const base of this.entities.filter((entity) => entity.type === 24)) {
+      for (const base of this.entities) {
+        if (base.type !== 24) continue;
         const node = this.waypoints.closestwaypoint(base.position, SIGHTMIN, true);
         if (!this.waypoints.iswaypoint(node)) continue;
-        const assigned = [...this.bots.values()].filter((other) => other !== bot && other.ai.state.some((candidate) =>
-          candidate.targetType === AiTargetType.Affinity && candidate.target === base.index)).length;
+        let assigned = 0;
+        for (const other of this.bots.values()) {
+          if (other !== bot && other.ai.state.some((candidate) =>
+            candidate.targetType === AiTargetType.Affinity && candidate.target === base.index)) assigned++;
+        }
         interests.push({ state: AiStateType.Defend, node, target: base.index, targetType: AiTargetType.Affinity,
           score: distance(bot.position, base.position) * (assigned + 1) / 6 });
       }
     } else if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
-      for (const base of this.entities.filter((entity) => entity.type === 31)) {
+      for (const base of this.entities) {
+        if (base.type !== 31) continue;
         const node = this.waypoints.closestwaypoint(base.position, SIGHTMIN, true);
         if (this.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Pursue, node, target: base.index,
           targetType: AiTargetType.Affinity, score: distance(bot.position, base.position) / 8 });
@@ -484,8 +509,10 @@ export class BotManager {
 
   private hunt(bot: BotActor, state: AiState, now: number): void {
     if (!bot.ai.route.length) {
-      const candidates = this.waypoints.findwaypointswithin(bot.position, SIGHTMIN, SIGHTMAX)
-        .filter((node) => !bot.ai.previousNodes.includes(node));
+      const candidates = this.waypoints.findwaypointswithin(bot.position, SIGHTMIN, SIGHTMAX);
+      let kept = 0;
+      for (const node of candidates) if (!bot.ai.previousNodes.includes(node)) candidates[kept++] = node;
+      candidates.length = kept;
       if (candidates.length) bot.ai.route = this.makeroute(bot, candidates[this.rnd(candidates.length)]);
     }
     const node = bot.ai.route.at(-1);
@@ -535,7 +562,10 @@ export class BotManager {
   }
 
   private findEnemy(bot: BotActor, players: readonly Damageable[], localAlive: boolean): Damageable | undefined {
-    const targets = [...players, ...this.bots.values()].filter((target) => target !== bot && this.targetable(bot, target));
+    const targets = this.enemyTargets;
+    targets.length = 0;
+    for (const target of players) if (target !== bot && this.targetable(bot, target)) targets.push(target);
+    for (const target of this.bots.values()) if (target !== bot && this.targetable(bot, target)) targets.push(target);
     if (localAlive && this.targetable(bot, this.localPlayer)) targets.push(this.localPlayer);
     let best: Damageable | undefined, bestDistance = bot.ai.views[2];
     for (const target of targets) {
@@ -680,8 +710,11 @@ export class BotManager {
   }
 
   private syncTargets(): void {
-    const targets: Damageable[] = [this.localPlayer, ...this.bots.values()];
-    for (const bot of this.bots.values()) bot.weaponSystem.targets.splice(0, bot.weaponSystem.targets.length, ...targets);
+    const targets = this.damageTargets;
+    targets.length = 0;
+    targets.push(this.localPlayer);
+    for (const bot of this.bots.values()) targets.push(bot);
+    for (const bot of this.bots.values()) replaceTargets(bot.weaponSystem.targets, targets);
   }
 
   private syncWeaponState(bot: BotActor): void {
@@ -710,6 +743,11 @@ export class BotManager {
   }
 
   private rnd(maximum: number): number { return maximum > 0 ? Math.floor(this.random() * maximum) : 0; }
+}
+
+function replaceTargets(target: Damageable[], source: readonly Damageable[]): void {
+  target.length = 0;
+  for (const actor of source) target.push(actor);
 }
 
 function createAiInfo(now: number, skill: number): AiInfo {
