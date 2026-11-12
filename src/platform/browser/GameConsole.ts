@@ -75,8 +75,7 @@ export class GameConsole {
     const end = Math.max(0, this.lines.length - this.skip);
     const visible = this.fullConsole
       ? this.lines.slice(0, end)
-      : this.lines.filter((line) => line.type !== "chat" && line.type !== "team-chat" && line.type !== "frag-other")
-        .slice(-HUD_LINE_COUNT).filter((line) => now - line.outTime < HUD_FADE_MILLISECONDS);
+      : this.lines.slice(-HUD_LINE_COUNT).filter((line) => now - line.outTime < HUD_FADE_MILLISECONDS);
     this.linesElement.replaceChildren(...visible.map((line) => {
       const element = document.createElement("p");
       element.className = `console-line ${line.type}`;
@@ -84,14 +83,8 @@ export class GameConsole {
       return element;
     }));
     if (this.fullConsole) this.linesElement.scrollTop = this.linesElement.scrollHeight;
-    const chatLines = this.lines.filter((line) => line.type === "chat" || line.type === "team-chat")
-      .slice(-HUD_LINE_COUNT).filter((line) => now - line.outTime < HUD_FADE_MILLISECONDS);
-    this.miniElement.replaceChildren(...chatLines.map((line) => {
-      const element = document.createElement("p");
-      element.className = `console-line ${line.type}`;
-      element.textContent = line.text;
-      return element;
-    }));
+    // Native miniconfilter defaults to zero; chat and frag lines are part of the normal five-line console above.
+    this.miniElement.replaceChildren();
   }
 }
 

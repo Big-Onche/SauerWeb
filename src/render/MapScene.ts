@@ -192,7 +192,7 @@ export class MapScene {
       const key = phase === "ai" ? "botAi" : phase === "physics" ? "botPhysics" : "weaponSimulation";
       this.frameProfiler.measure(key, operation);
     };
-    this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
+    this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events, this.fpsClient.multiplayer);
     this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
     this.spectatorHUD = new SpectatorHUD(viewport);
@@ -944,8 +944,16 @@ export class MapScene {
     const aimTarget = this.frameProfiler.measure("weaponSimulation", () => this.aimTarget());
     this.frameProfiler.measure("hud", () => this.crosshairHUD.update(this.aimingAtTeammate(aimTarget)));
     this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
-    if (followed) this.frameProfiler.measure("hud", () =>
-      this.weaponHUD.render({ health: followed.health, selectedGun: followed.selectedGun, ammo: followed.ammo }));
+    const hudPlayer = followed ?? this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
+    this.frameProfiler.measure("hud", () => this.weaponHUD.render(hudPlayer ? {
+      health: hudPlayer.health, maxHealth: hudPlayer.maxHealth, armour: hudPlayer.armour, armourType: hudPlayer.armourType,
+      selectedGun: hudPlayer.selectedGun, ammo: hudPlayer.ammo, state: hudPlayer.state, flags: hudPlayer.flags,
+      clientNumber: hudPlayer.clientNumber,
+    } : {
+      health: this.physics.player.health, maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour,
+      armourType: this.physics.player.armourType, selectedGun: this.weapons.controller.inventory.selectedGun,
+      ammo: this.weapons.controller.inventory.ammo, state: this.physics.player.clientState, flags: 0,
+    }));
     this.frameProfiler.measure("weaponSimulation", () => this.weapons.update(nowMilliseconds, aimTarget));
     this.botUpdatePlayers.length = 0;
     for (const player of this.fpsClient.multiplayer.players.values()) {
@@ -1432,7 +1440,8 @@ export class MapScene {
     const followed = this.followedPlayer();
     this.physicsInput.enabled = this.runtimeMode === "game";
     this.weaponInput.enabled = this.runtimeMode === "game" && !dead && !spectator;
-    this.weaponHUD.setVisible(this.runtimeMode === "game" && !dead && (!spectator || Boolean(followed)));
+    // Native gameplayhud remains active while dead and while freely spectating (health 0, clock/scores, and spectator text still render).
+    this.weaponHUD.setVisible(this.runtimeMode === "game");
     this.crosshairHUD.setVisible(this.runtimeMode === "game" && !dead && (!spectator || followed?.state !== ClientState.Dead && Boolean(followed)));
     this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson && !dead &&

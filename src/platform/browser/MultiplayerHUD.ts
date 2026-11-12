@@ -41,12 +41,8 @@ export class MultiplayerHUD {
   render(): void {
     if (!this.visible) return;
     const player = this.client.players.get(this.client.clientNumber);
-    if (!this.client.connected && !this.client.isLocalGame) this.status.textContent = this.connectionStatus;
-    else {
-      this.status.innerHTML = `<span>${escapeHtml(this.client.serverDescription || "Sauerbraten")}</span>` +
-        `<strong>${escapeHtml(gameModeName(this.client.gameMode))}</strong><span>${escapeHtml(this.client.mapName)}</span>` +
-        `<b>${player?.health ?? 0} HP</b><span>${formatTime(this.client.timeLeftSeconds)}</span>`;
-    }
+    this.status.hidden = this.client.connected || this.client.isLocalGame;
+    if (!this.status.hidden) this.status.textContent = this.connectionStatus;
     this.scoreboard.innerHTML = this.renderScoreboard(player?.team ?? "");
   }
 
@@ -66,7 +62,7 @@ export class MultiplayerHUD {
       this.client.getTeamScore(rightTeam) - this.client.getTeamScore(leftTeam) || right.length - left.length || leftTeam.localeCompare(rightTeam));
     const groupMarkup = sortedGroups.map(([team, entries]) => this.renderGroup(team, entries, localTeam)).join("");
     const title = escapeHtml(this.client.serverDescription || "scoreboard");
-    const details = `${escapeHtml(gameModeName(this.client.gameMode))} · ${escapeHtml(this.client.mapName)} · ` +
+    const details = `${escapeHtml(gameModeName(this.client.gameMode))}  ${escapeHtml(this.client.mapName)}  ` +
       formatTime(this.client.timeLeftSeconds);
     return `${guiSkinMarkup()}<header><span>${title}</span>` +
       `<small>${details}</small></header><div class="score-groups ${teamMode ? "team-groups" : ""}">${groupMarkup}</div>` +
