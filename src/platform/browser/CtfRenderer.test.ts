@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadSauerbratenDirectory } from "../../../sauerbratenDirectory";
 import { parseMd2 } from "../../engine/rendermodel";
 import { flagModelPositions } from "./CtfRenderer";
 
+const sauerbratenDirectory = loadSauerbratenDirectory("test");
+
 describe("CTF flag rendering", () => {
   it("keeps the bundled flag upright in Babylon coordinates", () => {
-    const bytes = fs.readFileSync(path.resolve(".Sauerbraten/packages/models/flags/tris.md2"));
+    const bytes = fs.readFileSync(path.join(sauerbratenDirectory, "packages", "models", "flags", "tris.md2"));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const source = parseMd2(buffer).meshes[0];
     const positions = flagModelPositions(source.positions);

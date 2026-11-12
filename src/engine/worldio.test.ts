@@ -2,14 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { loadSauerbratenDirectory } from "../../sauerbratenDirectory";
 import { generateGeometry } from "./renderva";
 import { createInputState } from "./physics/input";
 import { PhysicsSimulation } from "./physics";
 import { SauerMapParser } from "./worldio";
 
+const sauerbratenDirectory = loadSauerbratenDirectory("test");
+
 describe("SauerMapParser", () => {
   it.each(["aard3c", "triforts"])("decodes bundled v33 map %s through its octree", (mapName) => {
-    const filePath = path.resolve(`.Sauerbraten/packages/base/${mapName}.ogz`);
+    const filePath = path.join(sauerbratenDirectory, "packages", "base", `${mapName}.ogz`);
     const bytes = zlib.gunzipSync(fs.readFileSync(filePath));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const map = new SauerMapParser().parse(buffer, mapName);

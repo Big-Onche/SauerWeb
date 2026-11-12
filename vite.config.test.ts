@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SAUERBRATEN_DIR, resolveSauerbratenDirectory, validateSauerbratenDirectory } from "./vite.config";
+import { DEFAULT_SAUERBRATEN_DIR, loadSauerbratenDirectory, resolveSauerbratenDirectory,
+  validateSauerbratenDirectory } from "./sauerbratenDirectory";
 
 const temporaryDirectories: string[] = [];
 
@@ -41,6 +42,20 @@ describe("SAUERBRATEN_DIR", () => {
     const projectRoot = temporaryDirectory();
 
     expect(resolveSauerbratenDirectory(projectRoot, "../shared/sauerbraten")).toBe(path.resolve(projectRoot, "../shared/sauerbraten"));
+  });
+
+  it("loads a persistent relative root from .env.local", () => {
+    const projectRoot = temporaryDirectory();
+    fs.writeFileSync(path.join(projectRoot, ".env.local"), 'SAUERBRATEN_DIR="../shared/sauerbraten"\n');
+    const configuredDirectory = process.env.SAUERBRATEN_DIR;
+    delete process.env.SAUERBRATEN_DIR;
+
+    try {
+      expect(loadSauerbratenDirectory("test", projectRoot)).toBe(path.resolve(projectRoot, "../shared/sauerbraten"));
+    } finally {
+      if (configuredDirectory === undefined) delete process.env.SAUERBRATEN_DIR;
+      else process.env.SAUERBRATEN_DIR = configuredDirectory;
+    }
   });
 
   it("reports every missing required directory", () => {

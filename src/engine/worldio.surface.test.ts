@@ -2,12 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { loadSauerbratenDirectory } from "../../sauerbratenDirectory";
 import type { OctreeCube, Surface } from "./octa";
 import { SauerMapParser } from "./worldio";
 
+const sauerbratenDirectory = loadSauerbratenDirectory("test");
+
 describe("surface reconstruction", () => {
   it.each([["triforts", 1661], ["flagstone", 99]] as const)("uses the second triangle's plane for collapsed faces in %s", (name, expectedCount) => {
-    const compressed = fs.readFileSync(path.resolve(`.Sauerbraten/packages/base/${name}.ogz`));
+    const compressed = fs.readFileSync(path.join(sauerbratenDirectory, "packages", "base", `${name}.ogz`));
     const bytes = zlib.gunzipSync(compressed);
     const map = new SauerMapParser().parse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), name);
     let matches = 0;

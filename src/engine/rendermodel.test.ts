@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadSauerbratenDirectory } from "../../sauerbratenDirectory";
 import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd2, parseMd5, prepareMd5Animation,
   prepareMd5Model, skinMd5Model } from "./rendermodel";
 
+const modelsDirectory = path.join(loadSauerbratenDirectory("test"), "packages", "models");
+
 describe("MD2 mapmodel loading", () => {
   it.each(["dcp/palmtree", "objects/well_roof", "objects/well_base"])('decodes the bundled model "%s"', (name) => {
-    const bytes = fs.readFileSync(path.resolve(`.Sauerbraten/packages/models/${name}/tris.md2`));
+    const bytes = fs.readFileSync(path.join(modelsDirectory, name, "tris.md2"));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const geometry = parseMd2(buffer);
 
@@ -20,7 +23,7 @@ describe("MD2 mapmodel loading", () => {
 
 describe("IQM mapmodel loading", () => {
   it("decodes the bundled firefly mesh", () => {
-    const bytes = fs.readFileSync(path.resolve(".Sauerbraten/packages/models/razgriz/insects/firefly/mesh.iqm"));
+    const bytes = fs.readFileSync(path.join(modelsDirectory, "razgriz", "insects", "firefly", "mesh.iqm"));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const geometry = parseIqm(buffer);
 
@@ -33,7 +36,7 @@ describe("IQM mapmodel loading", () => {
 describe("MD5 model loading", () => {
   it.each(["fist/chainsaw", "shotg/shotgun", "chaing/chaing", "rocket/rl", "rifle/rifle", "gl/gl", "pistol/revolver"])(
     'skins the bundled HUD-gun model "%s" in its bind pose', (name) => {
-      const source = fs.readFileSync(path.resolve(`.Sauerbraten/packages/models/hudguns/${name}.md5mesh`), "utf8");
+      const source = fs.readFileSync(path.join(modelsDirectory, "hudguns", `${name}.md5mesh`), "utf8");
       const geometry = parseMd5(source);
 
       expect(geometry.meshes.length).toBeGreaterThan(0);
@@ -44,8 +47,8 @@ describe("MD5 model loading", () => {
   );
 
   it("applies Sauerbraten bone adjustments on top of an idle pose", () => {
-    const directory = path.resolve(".Sauerbraten/packages/models/hudguns/pistol");
-    const mesh = fs.readFileSync(path.resolve(".Sauerbraten/packages/models/mrfixit/hudguns/fixit_hands.md5mesh"), "utf8");
+    const directory = path.join(modelsDirectory, "hudguns", "pistol");
+    const mesh = fs.readFileSync(path.join(modelsDirectory, "mrfixit", "hudguns", "fixit_hands.md5mesh"), "utf8");
     const animation = fs.readFileSync(path.join(directory, "hands_revolver_idle.md5anim"), "utf8");
     const unadjusted = parseMd5(mesh, animation);
     const adjusted = parseMd5(mesh, animation, [{ bone: "Root", yaw: 10.5, pitch: -10, roll: 0, translate: [0, 0, 0] }]);
@@ -54,7 +57,7 @@ describe("MD5 model loading", () => {
   });
 
   it("skins a player model at successive MD5 animation frames", () => {
-    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const directory = path.join(modelsDirectory, "mrfixit");
     const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
     const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
 
@@ -65,7 +68,7 @@ describe("MD5 model loading", () => {
   });
 
   it("reuses prepared MD5 topology across skinned animation frames", () => {
-    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const directory = path.join(modelsDirectory, "mrfixit");
     const model = prepareMd5Model(fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8"));
     const animation = prepareMd5Animation(fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8"));
     const first = skinMd5Model(model, animation, 0).meshes[0];
@@ -79,7 +82,7 @@ describe("MD5 model loading", () => {
   });
 
   it("interpolates skinned player geometry between animation frames", () => {
-    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const directory = path.join(modelsDirectory, "mrfixit");
     const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
     const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
     const current = parseMd5(mesh, animation, [], 0);
@@ -92,7 +95,7 @@ describe("MD5 model loading", () => {
   });
 
   it("reuses interpolated player geometry buffers", () => {
-    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const directory = path.join(modelsDirectory, "mrfixit");
     const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
     const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
     const current = parseMd5(mesh, animation, [], 0);
@@ -109,7 +112,7 @@ describe("MD5 model loading", () => {
   });
 
   it("skins the Ogro player model at successive IQM animation frames", () => {
-    const directory = path.resolve(".Sauerbraten/packages/models/ogro2");
+    const directory = path.join(modelsDirectory, "ogro2");
     const meshBytes = fs.readFileSync(path.join(directory, "ogro.iqm"));
     const animationBytes = fs.readFileSync(path.join(directory, "run.iqm"));
     const mesh = meshBytes.buffer.slice(meshBytes.byteOffset, meshBytes.byteOffset + meshBytes.byteLength) as ArrayBuffer;
