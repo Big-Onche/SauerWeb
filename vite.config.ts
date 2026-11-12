@@ -1,12 +1,45 @@
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import { attachSauerRelay, configuredServers, serverListMiddleware } from "./relay/relay.mjs";
 
-const mapsDirectory = path.resolve(".Sauerbraten/packages/base");
-const sauerRoot = path.resolve(".Sauerbraten");
-const packagesDirectory = path.join(sauerRoot, "packages");
+export const DEFAULT_SAUERBRATEN_DIR = ".Sauerbraten";
+const requiredSauerbratenDirectories = ["data", "packages/base", "packages/models"];
+
+let sauerRoot = "";
+let mapsDirectory = "";
+let packagesDirectory = "";
+
+export function resolveSauerbratenDirectory(projectRoot: string, configuredDirectory?: string): string {
+  return path.resolve(projectRoot, configuredDirectory?.trim() || DEFAULT_SAUERBRATEN_DIR);
+}
+
+export function validateSauerbratenDirectory(directory: string): void {
+  const missing = requiredSauerbratenDirectories.filter((relativeDirectory) => {
+    try {
+      return !fs.statSync(path.join(directory, relativeDirectory)).isDirectory();
+    } catch {
+      return true;
+    }
+  });
+  if (!missing.length) return;
+
+  const diagnostic = [
+    `Invalid SAUERBRATEN_DIR: ${directory}`,
+    "The configured Sauerbraten source/assets root is missing required directories:",
+    ...missing.map((relativeDirectory) => `  - ${relativeDirectory}`),
+    "Set SAUERBRATEN_DIR to an absolute path or a path relative to the SauerWeb project root.",
+  ].join("\n");
+  console.error(diagnostic);
+  throw new Error(diagnostic);
+}
+
+function configureSauerbratenDirectory(directory: string): void {
+  sauerRoot = directory;
+  packagesDirectory = path.join(sauerRoot, "packages");
+  mapsDirectory = path.join(packagesDirectory, "base");
+}
 
 type TextureKind = "diffuse" | "normal" | "glow" | "specular" | "depth" | "alpha" | "decal" | "environment" | "unknown";
 
@@ -809,7 +842,15 @@ function sauerMapsPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [sauerMapsPlugin()],
-  server: { host: "127.0.0.1" },
+export default defineConfig(({ mode }) => {
+  const projectRoot = process.cwd();
+  const env = loadEnv(mode, projectRoot, "SAUERBRATEN_");
+  const directory = resolveSauerbratenDirectory(projectRoot, env.SAUERBRATEN_DIR);
+  validateSauerbratenDirectory(directory);
+  configureSauerbratenDirectory(directory);
+
+  return {
+    plugins: [sauerMapsPlugin()],
+    server: { host: "127.0.0.1" },
+  };
 });

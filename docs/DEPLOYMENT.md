@@ -43,7 +43,8 @@ application; open its game ports only if it runs on the same host.
 - A DNS `A` record (and `AAAA` record if IPv6 is used) for `play.example.com` pointing to the server.
 - TCP ports 80 and 443 reachable from the Internet.
 - Enough disk space for the repository, `node_modules`, the build, and the Sauerbraten asset tree. The assets are much larger than the application source.
-- The Sauerbraten data files in `.Sauerbraten/`. This directory is intentionally ignored by Git and is not supplied by `git clone`.
+- The Sauerbraten data files in `.Sauerbraten/`, or another directory selected with `SAUERBRATEN_DIR`. The default directory is intentionally ignored
+  by Git and is not supplied by `git clone`.
 - Node.js 22 LTS (Vite 7 requires Node.js 20.19+ or 22.12+; Node.js 22 LTS is recommended).
 
 The browser relay also needs outbound access to:
@@ -94,6 +95,29 @@ For example, if the asset directory has already been uploaded to `/tmp/.Sauerbra
 sudo cp -a /tmp/.Sauerbraten /opt/sauerweb/.Sauerbraten
 sudo chown -R sauerweb:sauerweb /opt/sauerweb/.Sauerbraten
 ```
+
+The default above requires no configuration. To keep assets elsewhere, set `SAUERBRATEN_DIR` to an absolute path or a path relative to
+`/opt/sauerweb`. For example, an external Linux asset tree can use:
+
+```bash
+sudo install -d -o sauerweb -g sauerweb /srv/sauerbraten
+sudo cp -a /tmp/.Sauerbraten/. /srv/sauerbraten/
+sudo -u sauerweb test -d /srv/sauerbraten/data
+sudo -u sauerweb test -d /srv/sauerbraten/packages/base
+sudo -u sauerweb test -d /srv/sauerbraten/packages/models
+```
+
+For interactive Vite commands, persist the setting in `/opt/sauerweb/.env.local`:
+
+```bash
+sudo -u sauerweb tee /opt/sauerweb/.env.local >/dev/null <<'EOF'
+SAUERBRATEN_DIR=/srv/sauerbraten
+EOF
+```
+
+On a Windows host, the equivalent `.env.local` value can be `SAUERBRATEN_DIR="D:/Games/Sauerbraten"`; project-relative values such as
+`SAUERBRATEN_DIR="../sauerbraten"` work on both platforms. Vite loads `.env.local` automatically. Shell environment values take precedence and are
+also honored by `scripts/build-enet-wasm.ps1`.
 
 Install exactly the dependency versions in `package-lock.json`, run the tests, and build:
 
@@ -190,6 +214,7 @@ User=sauerweb
 Group=sauerweb
 WorkingDirectory=/opt/sauerweb
 Environment=NODE_ENV=production
+Environment=SAUERBRATEN_DIR=/srv/sauerbraten
 ExecStart=/usr/bin/npm run dev -- --host 127.0.0.1 --port 8081 --strictPort
 Restart=on-failure
 RestartSec=5s
@@ -216,9 +241,10 @@ WantedBy=multi-user.target
 EOF
 ```
 
-The asset service uses Vite's middleware because the current application generates several metadata responses in its Vite plugin. It is isolated on
-`127.0.0.1`, runs as an unprivileged user, and is exposed only through the Nginx routes below. A future dedicated production metadata server can replace
-this service without changing the public URL layout.
+The asset service uses Vite's middleware because the current application generates several metadata responses in its Vite plugin. Change or remove the
+`SAUERBRATEN_DIR` line when using a different location or the default `/opt/sauerweb/.Sauerbraten`. A relative value is resolved from the service's
+`WorkingDirectory`. The service is isolated on `127.0.0.1`, runs as an unprivileged user, and is exposed only through the Nginx routes below. A future
+dedicated production metadata server can replace this service without changing the public URL layout.
 
 Start both services:
 
@@ -404,8 +430,8 @@ after all checks pass.
 
 ### Troubleshooting
 
-- **The page loads but maps or models fail:** verify `.Sauerbraten/data` and `.Sauerbraten/packages`, then inspect
-  `journalctl -u sauerweb-assets.service` and the failing `/api/*` request.
+- **The page loads but maps or models fail:** verify the `SAUERBRATEN_DIR` shown in the asset service and its `data`, `packages/base`, and
+  `packages/models` directories, then inspect `journalctl -u sauerweb-assets.service` and the failing `/api/*` request.
 - **`502 Bad Gateway`:** confirm both systemd services are running and listening on their expected loopback ports.
 - **WebSocket returns 403:** ensure `SAUER_RELAY_ORIGINS` exactly matches the browser origin, including `https://` and any nonstandard port, then restart
   `sauerweb-relay.service`.

@@ -14,9 +14,33 @@ npm install
 npm run dev
 ```
 
-The Vite development server indexes maps directly from `.Sauerbraten/packages/base`; the reference tree is never modified. Open the printed local URL,
-filter the archive, and select any enabled v33 map. You can also open a v33 `.ogz` from disk. The development server also starts the WebSocket-to-UDP
-relay and server browser API.
+The Vite development server indexes maps from the Sauerbraten source/assets root; the reference tree is never modified. The root defaults to
+`.Sauerbraten` in the project directory. To keep a machine-specific location across runs, create an ignored `.env.local` file in the project root:
+
+```dotenv
+# Windows (forward slashes avoid escaping backslashes)
+SAUERBRATEN_DIR="D:/Games/Sauerbraten"
+```
+
+```dotenv
+# Linux
+SAUERBRATEN_DIR="/srv/sauerbraten"
+```
+
+Project-relative paths are also supported, for example `SAUERBRATEN_DIR="../sauerbraten"`. The configured directory must contain `data`,
+`packages/base`, and `packages/models`. A shell environment variable can be used for a single run instead:
+
+```powershell
+$env:SAUERBRATEN_DIR = "D:\Games\Sauerbraten"
+npm run dev
+```
+
+```bash
+SAUERBRATEN_DIR=/srv/sauerbraten npm run dev
+```
+
+Open the printed local URL, filter the archive, and select any enabled v33 map. You can also open a v33 `.ogz` from disk. The development server also
+starts the WebSocket-to-UDP relay and server browser API.
 
 Controls: **WASD / arrows** move, the **mouse** aims, **left click** fires, **T** chats, **Y** team-chats, **G** drops a carried flag, **Tab** opens the
 multiplayer scoreboard, **F11** toggles the full console, and the diamond button toggles wireframe. Page Up/Down or keypad +/- scrolls the full console.
@@ -46,9 +70,10 @@ routes from the Vite plugin, so a static build and the standalone relay are not 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for a complete Ubuntu/Debian production deployment with systemd, Nginx, HTTPS, and UFW.
 
 Precompiled ENet JavaScript and WebAssembly artifacts are committed, so Emscripten is not needed for ordinary development or deployment. To reproduce
-them with an activated emsdk:
+them with an activated emsdk, set `SAUERBRATEN_DIR` in the shell when the source tree is not at the default `.Sauerbraten` location:
 
 ```powershell
+$env:SAUERBRATEN_DIR = "D:\Games\Sauerbraten"
 npm run build:enet
 ```
 

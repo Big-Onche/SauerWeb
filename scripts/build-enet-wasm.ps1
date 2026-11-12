@@ -2,7 +2,13 @@ $ErrorActionPreference = "Stop"
 
 $repository = Split-Path -Parent $PSScriptRoot
 $emcc = if ($env:EMSDK) { Join-Path $env:EMSDK "upstream/emscripten/emcc.exe" } else { "C:/dev/emsdk/upstream/emscripten/emcc.exe" }
-$enet = Join-Path $repository ".Sauerbraten/src/enet"
+$sauerbratenDirectory = if ($env:SAUERBRATEN_DIR) { $env:SAUERBRATEN_DIR } else { ".Sauerbraten" }
+$sauerbratenRoot = if ([System.IO.Path]::IsPathRooted($sauerbratenDirectory)) {
+    [System.IO.Path]::GetFullPath($sauerbratenDirectory)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $repository $sauerbratenDirectory))
+}
+$enet = Join-Path $sauerbratenRoot "src/enet"
 $output = Join-Path $repository "src/network/enet/generated"
 New-Item -ItemType Directory -Force $output | Out-Null
 
