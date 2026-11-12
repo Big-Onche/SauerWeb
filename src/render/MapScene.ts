@@ -52,6 +52,7 @@ import { magnitude, normalize, subtract } from "../engine/physics/vector";
 import { AiStateType, AiTargetType, BotManager, type AiInterest, type BotActor } from "../fpsgame/ai";
 import { GameModeFlag, gameModeHas } from "../fpsgame/game";
 import { SIGHTMIN } from "../fpsgame/waypoint";
+import { RendererPerformanceOverlay } from "../platform/browser/RendererPerformanceOverlay";
 
 export type CameraMode = "free" | "player";
 
@@ -145,6 +146,7 @@ export class MapScene {
   private followDirection = 0;
   private lastBotNetworkUpdate = 0;
   private readonly resizeObserver: ResizeObserver;
+  private readonly performanceOverlay: RendererPerformanceOverlay;
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
     this.canvas = canvas;
@@ -172,6 +174,7 @@ export class MapScene {
     this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
+    this.performanceOverlay = new RendererPerformanceOverlay(viewport, this.engine, this.scene);
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
@@ -219,8 +222,12 @@ export class MapScene {
     window.addEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
 
     this.engine.runRenderLoop(() => {
+      const frameStartedAt = performance.now();
       this.updatePhysics(performance.now());
+      const gameLogicFinishedAt = performance.now();
       this.scene.render();
+      const frameFinishedAt = performance.now();
+      this.performanceOverlay.recordFrame(gameLogicFinishedAt - frameStartedAt, frameFinishedAt - frameStartedAt, frameFinishedAt);
     });
     window.addEventListener("resize", this.resize);
     this.resizeObserver = new ResizeObserver(this.resize);
@@ -515,6 +522,7 @@ export class MapScene {
     window.removeEventListener("resize", this.resize);
     if (document.pointerLockElement === this.canvas) void document.exitPointerLock();
     this.engine.stopRenderLoop();
+    this.performanceOverlay.dispose();
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
     this.particleRenderer.clear();
