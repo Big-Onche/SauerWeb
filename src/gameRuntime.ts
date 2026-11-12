@@ -7,6 +7,7 @@ import { GameModeFlag, gameModeHas, gameModeName } from "./fpsgame/game";
 import { guiSkinMarkup } from "./guiSkin";
 import { GameConsole } from "./platform/browser/GameConsole";
 import { FpsHud } from "./platform/browser/FpsHud";
+import { musicPlayer } from "./platform/browser/MusicPlayer";
 import { MapScene } from "./render/MapScene";
 import { bindCrosshairSettings, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 
@@ -133,6 +134,7 @@ async function start(): Promise<void> {
 async function loadMap(name: string): Promise<void> {
   loading.hidden = false;
   error.hidden = true;
+  musicPlayer.playMapLoadingMusic();
   try {
     const response = await fetch(`/api/maps/${encodeURIComponent(name)}.ogz`);
     if (!response.ok) throw new Error(`Could not fetch ${name}.ogz (${response.status}).`);

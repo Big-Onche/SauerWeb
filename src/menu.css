@@ -58,13 +58,18 @@ button { color: inherit; }
 .option-content { flex: 1; min-height: 0; overflow: auto; padding: 22px 8px 16px; }
 .option-group { width: min(620px, 100%); margin: 0 auto; }
 .option-group h2 { margin: 0 0 13px; color: #ffc77f; font-size: 25px; font-weight: 600; text-transform: lowercase; text-shadow: 0 2px 2px #000; }
-.option-info, .option-check, .option-action { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 48px; padding: 8px 12px;
+.option-info, .option-check, .option-action, .option-slider { display: flex; align-items: center; justify-content: space-between; width: 100%;
+  min-height: 48px; padding: 8px 12px;
   border: 1px solid transparent; border-bottom-color: #ffffff18; background: transparent; color: #e3e6e1; text-align: left; }
 .option-info > span { color: #b9c0bb; font-size: 17px; }.option-info > strong { color: #f0bc78; font-weight: 500; }
 .option-check { cursor: pointer; }.option-check:hover, .option-action:hover, .option-action:focus-visible { border-color: #d48e3d77; outline: none;
   background: linear-gradient(90deg, #bc671d55, transparent); color: #ffd39a; }
 .option-check span, .option-action span { display: grid; }.option-check strong, .option-action strong { font-size: 18px; font-weight: 500; }
 .option-check small, .option-action small { color: #8d9791; font-size: 12px; }.option-check input { width: 18px; height: 18px; accent-color: #c47b32; }
+.option-slider > span { color: #b9c0bb; font-size: 17px; }
+.option-slider > div { display: grid; grid-template-columns: minmax(150px, 260px) 38px; align-items: center; gap: 12px; }
+.option-slider input { width: 100%; accent-color: #c47b32; }
+.option-slider output { color: #f0bc78; font-variant-numeric: tabular-nums; text-align: right; }
 .option-action { cursor: pointer; }.option-action b { color: #e7a95f; font-weight: 500; }.option-note { margin: 16px 12px; color: #89928d; font-size: 14px; line-height: 1.45; }
 .options-dialog footer { display: flex; justify-content: space-between; padding-top: 9px; border-top: 1px solid #69737477; color: #7f898a; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
 @media (max-width: 720px) { .option-tabs { overflow-x: auto; }.options-dialog { width: calc(100vw - 32px); height: calc(100vh - 32px); padding: 15px; } }

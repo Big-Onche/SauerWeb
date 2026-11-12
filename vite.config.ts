@@ -80,7 +80,8 @@ const textureKinds: Record<string, TextureKind> = {
   "0": "diffuse", c: "diffuse", n: "normal", g: "glow", s: "specular", z: "depth", a: "alpha", d: "decal", e: "environment", u: "unknown",
 };
 const ignoredConfigCommands = new Set(["setshader", "setshaderparam", "setshaderparamf", "autograss", "materialreset"]);
-const mimeTypes: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".dds": "image/vnd-ms.dds", ".tga": "image/x-tga" };
+const mimeTypes: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".dds": "image/vnd-ms.dds",
+  ".tga": "image/x-tga", ".ogg": "audio/ogg" };
 
 function defaultVSlot(): ServerVSlot {
   return { changed: 0, previous: -1, scale: 1, rotation: 0, offset: [0, 0], scroll: [0, 0], layer: 0, alpha: [0.5, 0], color: [1, 1, 1] };

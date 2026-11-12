@@ -6,6 +6,7 @@ import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
 import { guiSkinMarkup } from "./guiSkin";
 import { bindCrosshairSettings, CROSSHAIRS, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 import { loadHudSettings, saveHudSettings } from "./platform/browser/HudSettings";
+import { loadMusicVolume, musicPlayer } from "./platform/browser/MusicPlayer";
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
 
 interface MapListItem {
@@ -55,6 +56,7 @@ function route(): void {
     void import("./gameRuntime");
     return;
   }
+  musicPlayer.playMenu();
   document.title = path === "/maps" ? "SauerWeb — Maps" : path === "/servers" ? "SauerWeb — Servers"
     : path === "/options" ? "SauerWeb — Options" : "SauerWeb";
   if (path === "/options") renderOptionsMenu();
@@ -214,6 +216,7 @@ function renderMainMenu(): void {
   const experimentalDisclaimer = required<HTMLDialogElement>("#experimental-disclaimer");
   experimentalDisclaimer.addEventListener("cancel", (event) => event.preventDefault());
   required<HTMLButtonElement>("[data-action='dismiss-experimental-disclaimer']").addEventListener("click", () => {
+    musicPlayer.resumeAfterUserGesture();
     dismissExperimentalDisclaimer();
     experimentalDisclaimer.close();
   });
@@ -252,6 +255,11 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
   }));
   const showFps = document.querySelector<HTMLInputElement>("#show-fps");
   showFps?.addEventListener("change", () => saveHudSettings({ showFps: showFps.checked }));
+  const musicVolume = document.querySelector<HTMLInputElement>("#music-volume");
+  musicVolume?.addEventListener("input", () => {
+    musicPlayer.setVolume(Number(musicVolume.value));
+    syncSliderOutput(musicVolume);
+  });
   document.querySelector<HTMLButtonElement>("[data-action='open-crosshair']")?.addEventListener("click", () => {
     navigate("/");
     document.querySelector<HTMLButtonElement>("[data-action='crosshair']")?.click();
@@ -286,8 +294,8 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
     optionNote("The viewport follows the browser window and scales automatically."),
   ]);
   if (tab === "sound") return optionGroup("sound", [
-    optionInfo("sound effects", "enabled"), optionInfo("music", "map controlled"),
-    optionNote("SauerWeb uses the browser audio mixer. Site volume can be adjusted from the browser tab."),
+    optionInfo("sound effects", "enabled"), optionSlider("music volume", "music-volume", loadMusicVolume(), 0, 100),
+    optionNote("Music follows Sauerbraten's menu and map rotation playlist."),
   ]);
   if (tab === "mouse") return optionGroup("mouse", [
     optionInfo("mouse capture", "pointer lock"), optionInfo("weapon selection", "mouse wheel"),
@@ -310,6 +318,11 @@ function optionGroup(title: string, rows: string[]): string {
 function optionCheck(label: string, id: string, checked: boolean, description: string): string {
   return `<label class="option-check" for="${id}"><span><strong>${label}</strong><small>${description}</small></span>
     <input id="${id}" type="checkbox" ${checked ? "checked" : ""} /></label>`;
+}
+
+function optionSlider(label: string, id: string, value: number, minimum: number, maximum: number): string {
+  return `<label class="option-slider" for="${id}"><span>${label}</span><div><input id="${id}" type="range" min="${minimum}" max="${maximum}"
+    value="${value}" /><output for="${id}">${value}</output></div></label>`;
 }
 
 function optionInfo(label: string, value: string): string {
