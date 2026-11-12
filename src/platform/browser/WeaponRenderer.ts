@@ -30,6 +30,7 @@ interface HudComponent {
   model: PreparedMd5Model;
   shootAnimation: PreparedMd5Animation;
   shootFrameCount: number;
+  shootAnimationSpeed: number;
   meshes: Mesh[];
   idleGeometry: ModelGeometry;
   interpolatedGeometry?: ModelGeometry;
@@ -100,11 +101,11 @@ export class WeaponRenderer {
         issues.push(`${asset.model}: ${asset.hands.reason || asset.weapon.reason}`);
       } else try {
         const hands = await this.loadHudComponent(asset.hands, asset.handsAnimationPath, asset.handsShootAnimationPath,
-          asset.handsAdjustments, asset.gun, "hands");
+          asset.handsShootAnimationSpeed, asset.handsAdjustments, asset.gun, "hands");
         const attachment = hands.idleGeometry.joints?.find((joint) => joint.name === asset.attachmentBone);
         if (!attachment) throw new Error(`attachment bone ${asset.attachmentBone} was not found.`);
         const weapon = await this.loadHudComponent(asset.weapon, asset.weaponAnimationPath, asset.weaponShootAnimationPath,
-          asset.weaponAdjustments, asset.gun, "weapon", attachment);
+          asset.weaponShootAnimationSpeed, asset.weaponAdjustments, asset.gun, "weapon", attachment);
         meshes.push(...hands.meshes, ...weapon.meshes);
         const muzzleBone = asset.weapon.tags?.tag_muzzle;
         const muzzle = weapon.idleGeometry.joints?.find((joint) => joint.name === muzzleBone);
@@ -151,7 +152,7 @@ export class WeaponRenderer {
     }
   }
 
-  private async loadHudComponent(asset: MapModelAsset, animationPath: string, shootAnimationPath: string,
+  private async loadHudComponent(asset: MapModelAsset, animationPath: string, shootAnimationPath: string, shootAnimationSpeed: number,
                                  adjustments: HudGunAsset["handsAdjustments"], gun: number, part: string,
                                  attachment?: ModelJointPose): Promise<HudComponent> {
     const url = packageAssetUrl(asset.geometryPath);
@@ -178,6 +179,7 @@ export class WeaponRenderer {
       model,
       shootAnimation,
       shootFrameCount: shootAnimation.frames.length,
+      shootAnimationSpeed,
       idleGeometry,
       meshes: idleGeometry.meshes.map((source) => this.createHudMesh(source, asset, gun, attachment)),
     };
@@ -302,7 +304,7 @@ export class WeaponRenderer {
   }
 
   private hudShootPosition(component: HudComponent, elapsed: number, delay: number): ModelAnimationPosition {
-    return hudGunShootAnimationPosition(component.shootFrameCount, elapsed, delay);
+    return hudGunShootAnimationPosition(component.shootFrameCount, elapsed, delay, component.shootAnimationSpeed);
   }
 
   private hudGeometry(component: HudComponent, position: ModelAnimationPosition): ModelGeometry {
@@ -372,9 +374,11 @@ export class WeaponRenderer {
 
 }
 
-// drawhudgun() overrides the configured MD5 speed so approximately 17 animation frames span attackdelay.
-export function hudGunShootAnimationPosition(frameCount: number, elapsed: number, attackDelay: number): ModelAnimationPosition {
-  return modelAnimationPosition(frameCount, 17_000 / Math.max(1, attackDelay), elapsed, false);
+// animmodel::calcanim() uses a configured animation speed in preference to ANIM_SETSPEED's attackdelay / 17 fallback.
+export function hudGunShootAnimationPosition(frameCount: number, elapsed: number, attackDelay: number,
+                                             configuredSpeed = 0): ModelAnimationPosition {
+  const speed = configuredSpeed > 0 ? configuredSpeed : 1_000 / Math.ceil(Math.max(1, attackDelay) / 17);
+  return modelAnimationPosition(frameCount, speed, elapsed, false);
 }
 
 function selectHudSkin(skins: MapModelSkin[], meshName: string): MapModelSkin | undefined {

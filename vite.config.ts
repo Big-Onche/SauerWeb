@@ -693,6 +693,8 @@ function resolveHudGuns() {
       weaponAnimationPath: resolveModelAssetPath(directory, pose.animations[1]),
       handsShootAnimationPath: resolveModelAssetPath(directory, pose.shootAnimations[0] || pose.animations[0]),
       weaponShootAnimationPath: resolveModelAssetPath(directory, pose.shootAnimations[1] || pose.animations[1]),
+      handsShootAnimationSpeed: pose.shootAnimationSpeeds[0],
+      weaponShootAnimationSpeed: pose.shootAnimationSpeeds[1],
       attachmentBone,
       handsAdjustments: pose.adjustments[0],
       weaponAdjustments: pose.adjustments[1],
@@ -704,6 +706,7 @@ function resolveHudGunPose(source: string) {
   type Adjustment = { bone: string; yaw: number; pitch: number; roll: number; translate: [number, number, number] };
   const animations = ["", ""];
   const shootAnimations = ["", ""];
+  const shootAnimationSpeeds = [0, 0];
   const adjustments: [Adjustment[], Adjustment[]] = [[], []];
   let part = 0;
   let current = new Map<string, Adjustment>();
@@ -727,9 +730,10 @@ function resolveHudGunPose(source: string) {
       adjustments[part] = [...current.values()];
     } else if (command === "md5anim" && args[0]?.toLowerCase() === "gun shoot" && !shootAnimations[part]) {
       shootAnimations[part] = args[1] ?? "";
+      shootAnimationSpeeds[part] = numberArg(args[2], 0);
     }
   }
-  return { animations, shootAnimations, adjustments };
+  return { animations, shootAnimations, shootAnimationSpeeds, adjustments };
 }
 
 function sauerMapsPlugin(): Plugin {

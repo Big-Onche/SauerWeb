@@ -52,6 +52,8 @@ export interface HudGunAsset {
   weaponAnimationPath: string;
   handsShootAnimationPath: string;
   weaponShootAnimationPath: string;
+  handsShootAnimationSpeed: number;
+  weaponShootAnimationSpeed: number;
   attachmentBone: string;
   handsAdjustments: HudGunAdjustment[];
   weaponAdjustments: HudGunAdjustment[];

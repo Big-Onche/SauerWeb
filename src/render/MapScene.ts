@@ -980,7 +980,7 @@ export class MapScene {
       }
     });
     this.frameProfiler.measure("hud", () => this.multiplayerHUD.render());
-    this.updateNetworkPlayers();
+    this.updateNetworkPlayers(renderPosition);
   }
 
   private toggleRenderDiagnostic(diagnostic: keyof RendererDiagnosticState): void {
@@ -1139,7 +1139,7 @@ export class MapScene {
     return belowUpper * belowUpper / (aboveLower * aboveLower + belowUpper * belowUpper);
   }
 
-  private updateNetworkPlayers(): void {
+  private updateNetworkPlayers(localRenderPosition: RegisteredMapEntity["position"]): void {
     const multiplayer = this.fpsClient.multiplayer;
     const nowMilliseconds = performance.now();
     const followed = this.followedPlayer();
@@ -1160,8 +1160,11 @@ export class MapScene {
         model: local ? this.playerModel : player.model,
         team: player.team,
         local,
-        visible: player.state !== ClientState.Spectator && player.state !== ClientState.Spawning,
-        position: { ...source.position, z: source.position.z - source.eyeHeight },
+        visible: player.positionReady && player.state !== ClientState.Spectator && player.state !== ClientState.Spawning,
+        position: {
+          ...(local ? localRenderPosition : source.position),
+          z: (local ? localRenderPosition.z : source.position.z) - source.eyeHeight,
+        },
         yaw: source.yaw,
         pitch: source.pitch,
         selectedGun: local ? this.weapons.controller.inventory.selectedGun : player.selectedGun,
@@ -1174,11 +1177,11 @@ export class MapScene {
         physicsState: source.physicsState,
         inWater: local ? this.physics.player.inWater : 0,
         timeInAir: local ? this.physics.player.timeInAir : undefined,
-        velocityZ: source.velocity.z + (local ? this.physics.player.falling.z : 0),
+        velocityZ: source.velocity.z + (local ? this.physics.player.falling.z : player.falling.z),
         velocity: {
-          x: source.velocity.x + (local ? this.physics.player.falling.x : 0),
-          y: source.velocity.y + (local ? this.physics.player.falling.y : 0),
-          z: source.velocity.z + (local ? this.physics.player.falling.z : 0),
+          x: source.velocity.x + (local ? this.physics.player.falling.x : player.falling.x),
+          y: source.velocity.y + (local ? this.physics.player.falling.y : player.falling.y),
+          z: source.velocity.z + (local ? this.physics.player.falling.z : player.falling.z),
         },
         lastPain: player.lastPain,
         deadAt: player.deadAt || this.localDeadAt,
@@ -1206,7 +1209,7 @@ export class MapScene {
         team: "",
         local: true,
         visible: player.clientState !== ClientState.Spectator,
-        position: { ...player.position, z: player.position.z - player.eyeHeight },
+        position: { ...localRenderPosition, z: localRenderPosition.z - player.eyeHeight },
         yaw: player.yaw,
         pitch: player.pitch,
         selectedGun: this.weapons.controller.inventory.selectedGun,

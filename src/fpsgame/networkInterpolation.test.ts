@@ -31,6 +31,16 @@ describe("Sauerbraten network player interpolation", () => {
     expect(player.yaw).toBeCloseTo(0);
   });
 
+  it("predicts packet position every render frame from velocity and falling like predictplayer", () => {
+    const player = { ...entity(), velocity: { x: 20, y: 0, z: 5 }, falling: { x: 0, y: 0, z: -10 } };
+    applyNetworkPosition(player, player.position, 0, 0, 0, 100);
+
+    interpolateNetworkEntity(player, 125);
+    expect(player.position).toEqual({ x: 0.5, y: 0, z: 13.875 });
+    interpolateNetworkEntity(player, 150);
+    expect(player.position).toEqual({ x: 1, y: 0, z: 13.75 });
+  });
+
   it("snaps large corrections and the first packet after a respawn reset", () => {
     const player = entity();
     applyNetworkPosition(player, player.position, 0, 0, 0, 0);

@@ -128,6 +128,27 @@ describe("Sauerbraten rifle protocol", () => {
     expect(Array.from(client.weapons.controller.inventory.ammo.slice(0, 7))).toEqual([1, 0, 0, 0, 100, 0, 0]);
   });
 
+  it("keeps a remote respawn hidden until its first position packet snaps to the spawn point", () => {
+    const client = createClient();
+    const multiplayer = client.multiplayer;
+    const player = Reflect.apply(Reflect.get(multiplayer, "playerFor"), multiplayer, [7]) as NetworkPlayer;
+    player.state = ClientState.Dead;
+    player.positionReady = true;
+    const spawn = new PacketWriter().putInt(NetworkMessage.Spawn);
+    for (const value of [1, 100, 100, 0, 0, Gun.Pistol, 10, 10, 10, 10, 10, 10]) spawn.putInt(value);
+
+    Reflect.apply(Reflect.get(multiplayer, "parseMessages"), multiplayer, [7, new PacketReader(spawn.finish())]);
+
+    expect(player.state).toBe(ClientState.Spawning);
+    expect(player.positionReady).toBe(false);
+    client.physics.player.position = { x: 64, y: 96, z: 28 };
+    const position = Reflect.apply(Reflect.get(multiplayer, "buildPosition"), multiplayer, [client.physics.player, 7, 1]) as Uint8Array;
+    Reflect.apply(Reflect.get(multiplayer, "parsePositions"), multiplayer, [new PacketReader(position)]);
+    expect(player.state).toBe(ClientState.Alive);
+    expect(player.positionReady).toBe(true);
+    expect(player.position).toEqual({ x: 64, y: 96, z: 28 });
+  });
+
   it.each([
     { team: false, type: NetworkMessage.Text },
     { team: true, type: NetworkMessage.SayTeam },

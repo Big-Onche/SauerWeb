@@ -14,6 +14,7 @@ export interface NetworkInterpolation {
   pitchDelta: number;
   rollDelta: number;
   startedAt: number;
+  predictedAt: number;
 }
 
 export interface InterpolatedNetworkEntity {
@@ -21,6 +22,8 @@ export interface InterpolatedNetworkEntity {
   yaw: number;
   pitch: number;
   roll: number;
+  velocity?: Vec3;
+  falling?: Vec3;
   interpolation: NetworkInterpolation;
 }
 
@@ -36,6 +39,7 @@ export function createNetworkInterpolation(position: Vec3): NetworkInterpolation
     pitchDelta: 0,
     rollDelta: 0,
     startedAt: 0,
+    predictedAt: 0,
   };
 }
 
@@ -58,6 +62,7 @@ export function applyNetworkPosition(entity: InterpolatedNetworkEntity, position
     interpolation.pitchDelta = entity.pitch - pitch;
     interpolation.rollDelta = entity.roll - roll;
     interpolation.startedAt = nowMilliseconds;
+    interpolation.predictedAt = nowMilliseconds;
   } else {
     entity.position = { ...position };
     entity.yaw = yaw;
@@ -70,6 +75,7 @@ export function applyNetworkPosition(entity: InterpolatedNetworkEntity, position
     interpolation.targetRoll = roll;
     interpolation.yawDelta = interpolation.pitchDelta = interpolation.rollDelta = 0;
     interpolation.startedAt = 0;
+    interpolation.predictedAt = nowMilliseconds;
   }
   interpolation.initialized = true;
 }
@@ -78,6 +84,14 @@ export function applyNetworkPosition(entity: InterpolatedNetworkEntity, position
 export function interpolateNetworkEntity(entity: InterpolatedNetworkEntity, nowMilliseconds: number): void {
   const interpolation = entity.interpolation;
   if (!interpolation.initialized) return;
+  const predictedMilliseconds = Math.max(0, nowMilliseconds - interpolation.predictedAt);
+  if (predictedMilliseconds > 0) {
+    const seconds = predictedMilliseconds / 1000;
+    interpolation.targetPosition.x += ((entity.velocity?.x ?? 0) + (entity.falling?.x ?? 0)) * seconds;
+    interpolation.targetPosition.y += ((entity.velocity?.y ?? 0) + (entity.falling?.y ?? 0)) * seconds;
+    interpolation.targetPosition.z += ((entity.velocity?.z ?? 0) + (entity.falling?.z ?? 0)) * seconds;
+    interpolation.predictedAt = nowMilliseconds;
+  }
   const amount = Math.max(0, 1 - (nowMilliseconds - interpolation.startedAt) / NETWORK_SMOOTH_MILLISECONDS);
   entity.position = {
     x: interpolation.targetPosition.x + interpolation.positionDelta.x * amount,
@@ -92,6 +106,7 @@ export function interpolateNetworkEntity(entity: InterpolatedNetworkEntity, nowM
 export function resetNetworkInterpolation(entity: InterpolatedNetworkEntity): void {
   entity.interpolation.initialized = false;
   entity.interpolation.startedAt = 0;
+  entity.interpolation.predictedAt = 0;
 }
 
 function shortestAngleDelta(delta: number): number {

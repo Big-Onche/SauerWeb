@@ -40,6 +40,7 @@ export interface NetworkPlayer extends Damageable {
   yaw: number;
   pitch: number;
   roll: number;
+  falling: Vec3;
   move: -1 | 0 | 1;
   strafe: -1 | 0 | 1;
   physicsState: PhysicsState;
@@ -50,6 +51,7 @@ export interface NetworkPlayer extends Damageable {
   lastAttackGun: number;
   lastPain: number;
   deadAt: number;
+  positionReady: boolean;
   interpolation: NetworkInterpolation;
   aiType: number;
   ownerNumber: number;
@@ -511,17 +513,24 @@ export class MultiplayerClient extends EventTarget {
       if (flags & (1 << 3)) speed |= packet.getByte() << 8;
       direction = packet.getByte() | (packet.getByte() << 8);
       const velocity = directionVector(direction % 360, Math.min(180, Math.max(0, Math.trunc(direction / 360))) - 90, speed / DVELF);
+      let falling = { x: 0, y: 0, z: 0 };
       if (flags & (1 << 4)) {
-        packet.getByte();
-        if (flags & (1 << 5)) packet.getByte();
-        if (flags & (1 << 6)) { packet.getByte(); packet.getByte(); }
+        let fallingSpeed = packet.getByte();
+        if (flags & (1 << 5)) fallingSpeed |= packet.getByte() << 8;
+        if (flags & (1 << 6)) {
+          const fallingDirection = packet.getByte() | (packet.getByte() << 8);
+          falling = directionVector(fallingDirection % 360,
+            Math.min(180, Math.max(0, Math.trunc(fallingDirection / 360))) - 90, fallingSpeed / DVELF);
+        } else falling.z = -fallingSpeed / DVELF;
       }
       const player = this.players.get(clientNumber);
       const wrongLifeSequence = ((physicalState >> 3) & 1) !== ((player?.lifeSequence ?? 0) & 1);
       if (!player || player.lifeSequence < 0 || wrongLifeSequence || player.state === ClientState.Dead) continue;
       applyNetworkPosition(player, { ...position, z: position.z + player.eyeHeight }, yaw, pitch, roll, performance.now(),
         player.state !== ClientState.Spawning);
+      player.positionReady = true;
       player.velocity = velocity;
+      player.falling = falling;
       player.move = (physicalState >> 4) & 2 ? -1 : (physicalState >> 4) & 1 ? 1 : 0;
       player.strafe = (physicalState >> 6) & 2 ? -1 : (physicalState >> 6) & 1 ? 1 : 0;
       player.physicsState = physicalState & 7;
@@ -584,6 +593,7 @@ export class MultiplayerClient extends EventTarget {
           if (player) {
             player.state = ClientState.Spawning;
             player.alive = false;
+            player.positionReady = false;
             resetNetworkInterpolation(player);
           }
           break;
@@ -729,6 +739,7 @@ export class MultiplayerClient extends EventTarget {
     this.parseState(player, packet);
     player.state = ClientState.Alive;
     player.alive = true;
+    player.positionReady = clientNumber === this.clientNumber;
     player.deadAt = 0;
     if (clientNumber === this.clientNumber) {
       this.respawnRequested = false;
@@ -1103,9 +1114,11 @@ export class MultiplayerClient extends EventTarget {
     if (player) return player;
     player = Object.assign(createDamageable(`client:${clientNumber}`, copyVec3(this.physics.player.position)), {
       clientNumber, name: clientNumber === this.clientNumber ? this.endpoint?.playerName ?? "unnamed" : "unnamed", team: "", model: 0,
-      lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, ping: 0, yaw: 0, pitch: 0, roll: 0, move: 0 as const,
+      lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, ping: 0, yaw: 0, pitch: 0, roll: 0,
+      falling: { x: 0, y: 0, z: 0 }, move: 0 as const,
       strafe: 0 as const, physicsState: PhysicsState.Fall, selectedGun: Gun.Pistol, ammo: new Int32Array(12),
       lastAction: 0, gunWait: 0, lastAttackGun: -1, lastPain: 0, deadAt: 0,
+      positionReady: false,
       interpolation: createNetworkInterpolation(this.physics.player.position),
       aiType: 0, ownerNumber: -1, skill: 0,
     });
@@ -1230,6 +1243,7 @@ export class MultiplayerClient extends EventTarget {
     this.weapons.controller.spawnForGameMode(this.gameMode, performance.now());
     player.state = ClientState.Alive;
     player.alive = true;
+    player.positionReady = true;
     player.lifeSequence++;
     this.physics.player.clientState = ClientState.Alive;
     this.physics.player.alive = true;
