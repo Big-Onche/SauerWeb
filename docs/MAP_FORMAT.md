@@ -4,13 +4,13 @@ The implementation is based on the bundled reference at `.Sauerbraten/`; that tr
 
 ## Bundled versions
 
-The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27, 28, 29, 31, 32, and 33. Version 33 accounts for 259 maps and is the version currently accepted by `SauerMapParser`. Older maps stay visible but disabled in the browser so unsupported layouts can never be mistaken for current data.
+The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27, 28, 29, 31, 32, and 33. `SauerMapParser` accepts versions 32 and 33. Older maps stay visible but disabled in the browser so unsupported layouts can never be mistaken for current data.
 
 ## Authoritative source mapping
 
 | C++ reference | Relevant behavior | TypeScript equivalent |
 | --- | --- | --- |
-| `src/engine/world.h` — `octaheader` | 40-byte v33 header and `MAPVERSION` | `src/engine/worldio.ts` — `SauerMapParser.readHeader` |
+| `src/engine/world.h` — `octaheader` | 40-byte v32–33 header and `MAPVERSION` | `src/engine/worldio.ts` — `SauerMapParser.readHeader` |
 | `src/engine/worldio.cpp` — `load_world` | Section order: variables, game data, MRU, entities, VSlots, octree, lightmaps/PVS/blendmap | `src/engine/worldio.ts` — `SauerMapParser.parse` |
 | `src/engine/worldio.cpp` — `loadvslots` / `loadvslot` | Negative blank runs and bit-mask-controlled VSlot fields | `src/engine/worldio.ts` — `SauerMapParser.loadvslots` |
 | `src/engine/worldio.cpp` — `loadchildren` / `loadc` | Eight-child recursion, leaf tags, edges, textures, material, merge and surface payloads | `src/engine/worldio.ts` — `loadchildren` / `loadc` |
@@ -20,7 +20,7 @@ The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27
 | `src/engine/worldio.cpp` / `lightmap.h` | 512×512 RGB/RGBA atlas records and reserved lightmap IDs | `SauerMapParser.readLightmaps` / `MaterialCache` |
 | `src/shared/ents.h` — `entity` | 24-byte entity record | `src/engine/worldio.ts` — `SauerMapParser.readEntities` |
 
-## Version 33 serialized order
+## Versions 32–33 serialized order
 
 All multi-byte fields are little-endian.
 
@@ -35,7 +35,7 @@ All multi-byte fields are little-endian.
 
 ## Octree and geometry
 
-Node tags are `children`, `empty`, `solid`, `normal`, and `lodcube`. A non-branch node stores six texture IDs. Normal and LOD cubes store twelve edge bytes, each containing two four-bit edge endpoints. Version 33 optionally stores a 16-bit material, merge mask, and compact surface block.
+Node tags are `children`, `empty`, `solid`, `normal`, and `lodcube`. A non-branch node stores six texture IDs. Normal and LOD cubes store twelve edge bytes, each containing two four-bit edge endpoints. Version 33 optionally stores a 16-bit material, merge mask, and compact surface block. Version 32 stores the same material information in the legacy one-byte bitfield; `convertoldmaterial` expands its volume, clip, and flag fields to the current layout exactly as `worldio.cpp` does.
 
 The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leaves but never replaces the tree. Output is batched by root octant and VSlot. Until the complete engine `visibleface` behavior is ported, face suppression is deliberately conservative: only a solid neighbor at least as large as the current solid cube can hide a face. This retains some harmless internal faces but cannot turn partial neighbor coverage or deformed cubes into visible holes.
 
@@ -57,7 +57,7 @@ The restricted configuration reader resolves `skybox`, legacy `loadsky`, `yawsky
 
 ## Deliberate next steps
 
-- Port historical layout branches from `loadc` for formats 6–32.
+- Port historical layout branches from `loadc` for formats 6–31.
 - Replace conservative solid-neighbor face suppression with the complete `visibleface` / merged-face behavior from `octarender.cpp`.
 - Execute the safe texture subset of default and map `.cfg` files, resolve Slots/VSlots to package images, and generate texture UVs.
 - Decode PVS and blendmap payloads rather than stopping at the octree boundary.

@@ -1,16 +1,21 @@
 import type { MaterialClipType, MaterialVolume, MaterialVolumeType, OctreeCube } from "./octa";
 
-export const MATF_INDEX = 3;
-export const MATF_VOLUME = 7 << 2;
-export const MATF_CLIP = 7 << 5;
-export const MAT_WATER = 1 << 2;
-export const MAT_LAVA = 2 << 2;
-export const MAT_GLASS = 3 << 2;
-export const MAT_NOCLIP = 1 << 5;
-export const MAT_CLIP = 2 << 5;
-export const MAT_GAMECLIP = 3 << 5;
-export const MAT_DEATH = 1 << 8;
-export const MAT_ALPHA = 4 << 8;
+export const MATF_INDEX_SHIFT = 0;
+export const MATF_VOLUME_SHIFT = 2;
+export const MATF_CLIP_SHIFT = 5;
+export const MATF_FLAG_SHIFT = 8;
+
+export const MATF_INDEX = 3 << MATF_INDEX_SHIFT;
+export const MATF_VOLUME = 7 << MATF_VOLUME_SHIFT;
+export const MATF_CLIP = 7 << MATF_CLIP_SHIFT;
+export const MAT_WATER = 1 << MATF_VOLUME_SHIFT;
+export const MAT_LAVA = 2 << MATF_VOLUME_SHIFT;
+export const MAT_GLASS = 3 << MATF_VOLUME_SHIFT;
+export const MAT_NOCLIP = 1 << MATF_CLIP_SHIFT;
+export const MAT_CLIP = 2 << MATF_CLIP_SHIFT;
+export const MAT_GAMECLIP = 3 << MATF_CLIP_SHIFT;
+export const MAT_DEATH = 1 << MATF_FLAG_SHIFT;
+export const MAT_ALPHA = 4 << MATF_FLAG_SHIFT;
 
 export function collectMaterialVolumes(world: OctreeCube[]): MaterialVolume[] {
   const volumes: MaterialVolume[] = [];

@@ -11,6 +11,20 @@ import { SauerMapParser } from "./worldio";
 const sauerbratenDirectory = loadSauerbratenDirectory("test");
 
 describe("SauerMapParser", () => {
+  it("decodes a bundled v32 map and converts its legacy materials", () => {
+    const filePath = path.join(sauerbratenDirectory, "packages", "base", "asteroids.ogz");
+    const bytes = zlib.gunzipSync(fs.readFileSync(filePath));
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const map = new SauerMapParser().parse(buffer, "asteroids");
+
+    expect(map.header.version).toBe(32);
+    expect(map.world).toHaveLength(8);
+    expect(map.bytesConsumedThroughOctree).toBeLessThanOrEqual(bytes.length);
+    expect(map.lightmaps).toHaveLength(map.header.lightmapCount);
+    expect(map.materialVolumes.length).toBeGreaterThan(0);
+    expect(map.materialVolumes.every((volume) => (volume.rawMaterial & ~0x77c) === 0)).toBe(true);
+  }, 15_000);
+
   it.each(["aard3c", "triforts"])("decodes bundled v33 map %s through its octree", (mapName) => {
     const filePath = path.join(sauerbratenDirectory, "packages", "base", `${mapName}.ogz`);
     const bytes = zlib.gunzipSync(fs.readFileSync(filePath));

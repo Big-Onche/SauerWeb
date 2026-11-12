@@ -813,7 +813,7 @@ function sauerMapsPlugin(): Plugin {
             .map((entry) => {
               const filePath = path.join(mapsDirectory, entry.name);
               const version = readMapVersion(filePath);
-              return { name: path.basename(entry.name, ".ogz"), size: fs.statSync(filePath).size, version, supported: version === 33 };
+              return { name: path.basename(entry.name, ".ogz"), size: fs.statSync(filePath).size, version, supported: version === 32 || version === 33 };
             })
             .sort((left, right) => left.name.localeCompare(right.name));
           response.setHeader("Content-Type", "application/json");

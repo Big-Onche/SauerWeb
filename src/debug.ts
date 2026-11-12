@@ -28,7 +28,7 @@ app.innerHTML = `
         <label class="upload" for="map-file">Open .ogz</label>
         <input id="map-file" type="file" accept=".ogz,application/gzip" hidden />
       </div>
-      <div class="map-summary"><span id="map-count">Loading maps…</span><span class="legend"><i></i> v33</span></div>
+      <div class="map-summary"><span id="map-count">Loading maps…</span><span class="legend"><i></i> v32–33</span></div>
       <div id="map-list" class="map-list" role="listbox" aria-label="Bundled maps"></div>
     </aside>
     <section class="viewport-panel">

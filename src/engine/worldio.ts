@@ -1,9 +1,10 @@
 import { BinaryReader } from "./binaryreader";
-import { collectMaterialVolumes } from "./material";
+import { collectMaterialVolumes, MATF_CLIP_SHIFT, MATF_FLAG_SHIFT, MATF_VOLUME_SHIFT } from "./material";
 import { createFpsEntityRegistry } from "../fpsgame/entities";
 import type { Lightmap, MapEntity, MapHeader, MapVariable, OctreeCube, SauerMap, Surface, SurfaceVertex, Vec3, VSlot } from "./octa";
 
 const CURRENT_MAP_VERSION = 33;
+const MINIMUM_MAP_VERSION = 32;
 const OCTSAV_CHILDREN = 0;
 const OCTSAV_EMPTY = 1;
 const OCTSAV_SOLID = 2;
@@ -18,6 +19,8 @@ const LIGHTMAP_ALPHA = 1 << 4;
 const LIGHTMAP_BUMPMAP_DIRECTION = 2;
 
 export class SauerMapParser {
+  private mapversion = CURRENT_MAP_VERSION;
+
   parse(buffer: ArrayBuffer, name = "map"): SauerMap {
     return this.load_world(buffer, name);
   }
@@ -28,6 +31,7 @@ export class SauerMapParser {
   load_world(buffer: ArrayBuffer, name = "map"): SauerMap {
     const reader = new BinaryReader(buffer);
     const header = this.readHeader(reader);
+    this.mapversion = header.version;
     const variables = this.readVariables(reader, header.variableCount);
     const gameType = this.readGameData(reader);
     const textureMru = this.readTextureMru(reader);
@@ -69,10 +73,10 @@ export class SauerMapParser {
     const lightmapCount = reader.int32("lightmap count");
 
     if (magic !== "OCTA") throw new Error(`Not a Sauerbraten map: expected OCTA header, found ${JSON.stringify(magic)}.`);
-    if (version !== CURRENT_MAP_VERSION) {
-      throw new Error(`Map format ${version} is not supported yet. This viewer currently supports format ${CURRENT_MAP_VERSION}.`);
+    if (version < MINIMUM_MAP_VERSION || version > CURRENT_MAP_VERSION) {
+      throw new Error(`Map format ${version} is not supported yet. This viewer currently supports formats ${MINIMUM_MAP_VERSION}–${CURRENT_MAP_VERSION}.`);
     }
-    if (headerSize !== 40) throw new Error(`Invalid v33 header size ${headerSize}; expected 40 bytes.`);
+    if (headerSize !== 40) throw new Error(`Invalid v${version} header size ${headerSize}; expected 40 bytes.`);
     if (worldSize <= 0 || (worldSize & (worldSize - 1)) !== 0) throw new Error(`Invalid world size ${worldSize}; expected a positive power of two.`);
     if (entityCount < 0 || entityCount > 1_000_000) throw new Error(`Invalid entity count ${entityCount}.`);
 
@@ -232,7 +236,9 @@ export class SauerMapParser {
       ? EMPTY_EDGES.slice()
       : nodeType === OCTSAV_SOLID ? SOLID_EDGES.slice() : reader.byteArray(12, "cube edges");
     const textures = Array.from({ length: 6 }, (_, index) => reader.uint16(`face ${index} texture`)) as OctreeCube["textures"];
-    const material = octsav & 0x40 ? reader.uint16("cube material") : 0;
+    const material = octsav & 0x40
+      ? this.mapversion <= 32 ? convertoldmaterial(reader.uint8("cube material")) : reader.uint16("cube material")
+      : 0;
     const merged = octsav & 0x80 ? reader.uint8("merged-face mask") : 0;
     const surfaces: Array<Surface | undefined> = new Array(6);
     if (octsav & 0x20) this.readSurfaces(reader, { origin, size, kind, edges, textures, material, merged, surfaces }, surfaces);
@@ -407,6 +413,12 @@ export class SauerMapParser {
     [v1.u, v1.v] = [v0.u, v2.v];
     [v3.u, v3.v] = [v2.u, v0.v];
   }
+}
+
+// Original: src/engine/worldio.cpp
+// Function: convertoldmaterial()
+function convertoldmaterial(mat: number): number {
+  return ((mat & 7) << MATF_VOLUME_SHIFT) | (((mat >> 3) & 3) << MATF_CLIP_SHIFT) | (((mat >> 5) & 7) << MATF_FLAG_SHIFT);
 }
 
 function faceCorners(orientation: number): Array<[number, number, number]> {
