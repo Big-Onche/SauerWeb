@@ -1,3 +1,4 @@
+import dgram from "node:dgram";
 import http from "node:http";
 import { WebSocket } from "ws";
 import { describe, expect, it } from "vitest";
@@ -84,5 +85,31 @@ describe("relay connection limits", () => {
     })));
     relay.close();
     await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("preserves complete binary datagrams in both directions", async () => {
+    const udp = dgram.createSocket("udp4");
+    await new Promise((resolve) => udp.bind(0, "127.0.0.1", resolve));
+    const target = { host: "127.0.0.1", port: udp.address().port, label: "echo" };
+    udp.on("message", (datagram, remote) => udp.send(datagram, remote.port, remote.address));
+    const server = http.createServer();
+    const relay = attachSauerRelay(server, { servers: [target], updateServers: async () => [target] });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const client = new WebSocket(`ws://127.0.0.1:${server.address().port}/relay?server=${target.host}&port=${target.port}`);
+    await new Promise((resolve, reject) => {
+      client.once("open", resolve);
+      client.once("error", reject);
+    });
+    const sent = Buffer.from([0xFF, 0x00, 0x80, 0x01, 0x7F]);
+    const received = new Promise((resolve, reject) => {
+      client.once("message", (datagram, isBinary) => isBinary ? resolve(Buffer.from(datagram)) : reject(new Error("Text relay frame")));
+      client.once("error", reject);
+    });
+    client.send(sent, { binary: true });
+    await expect(received).resolves.toEqual(sent);
+    await new Promise((resolve) => { client.once("close", resolve); client.close(); });
+    relay.close();
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => udp.close(resolve));
   });
 });
