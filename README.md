@@ -40,7 +40,10 @@ For production, run `npm run build` and `npm run relay`. The standalone process 
 and can be changed with `SAUER_RELAY_PORT`. Put it behind the same HTTPS reverse proxy as the static site, or configure native TLS with
 `SAUER_RELAY_TLS_KEY` and `SAUER_RELAY_TLS_CERT`. `SAUER_RELAY_ORIGINS` accepts a comma-separated browser-origin allowlist. Connection, message-size,
 packet-rate, and byte-rate limits are enforced in the relay. The master defaults to `master.sauerbraten.org:28787`; override it with
-`SAUER_MASTER_SERVER`, `SAUER_MASTER_PORT`, or `SAUER_MASTER_TIMEOUT` (milliseconds).
+`SAUER_MASTER_SERVER`, `SAUER_MASTER_PORT`, or `SAUER_MASTER_TIMEOUT` (milliseconds). The current frontend also uses runtime-generated asset and metadata
+routes from the Vite plugin, so a static build and the standalone relay are not sufficient by themselves.
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for a complete Ubuntu/Debian production deployment with systemd, Nginx, HTTPS, and UFW.
 
 Precompiled ENet JavaScript and WebAssembly artifacts are committed, so Emscripten is not needed for ordinary development or deployment. To reproduce
 them with an activated emsdk:
