@@ -135,7 +135,7 @@ async function loadMap(name: string): Promise<void> {
     const map = parser.parse(mapData, name);
     const manifest = await loadTextureManifest(name);
     await scene.loadMap(map, resolveMapTextures(map, manifest), manifest.skybox, manifest.lighting, manifest.fog, manifest.mapModels ?? [],
-      manifest.entityModels?.teleporter);
+      manifest.entityModels?.teleporter, manifest.mapSounds ?? []);
     scene.setMultiplayerMapInfo(name, crc32(new Uint8Array(mapData)));
     if (!server) scene.configureBotMatch(botCount, botMinimumSkill, botMaximumSkill);
     activeMap = name;

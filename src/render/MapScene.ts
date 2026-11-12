@@ -19,7 +19,7 @@ import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import "@babylonjs/core/Shaders/postprocess.vertex";
 import type { RegisteredMapEntity, SauerMap } from "../engine/octa";
-import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverrides, ResolvedTexture } from "../assets/types";
+import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverrides, MapSoundAsset, ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "../engine/renderva";
 import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
@@ -118,6 +118,7 @@ export class MapScene {
   private readonly spectatorHUD: SpectatorHUD;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
+  private readonly gameAudio: WeaponAudio;
   private cameraMode: CameraMode = "free";
   private thirdperson = false;
   private teamskins = false;
@@ -222,7 +223,8 @@ export class MapScene {
       if (this.frameProfiler.enabled) this.frameProfiler.record("particleUpdates", performance.now() - this.particleUpdateStartedAt);
     });
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
-    new WeaponAudio(this.weapons.events);
+    this.gameAudio = new WeaponAudio(this.weapons.events, this.fpsClient.multiplayer, this.physics.player);
+    this.physics.soundEvent = (event, player) => this.gameAudio.physicsSound(event, player);
     this.fpsClient.multiplayer.addEventListener("multiplayer", (event) =>
       this.handleMultiplayerEvent((event as CustomEvent<MultiplayerEvent>).detail));
     this.weapons.events.on((event) => {
@@ -244,6 +246,7 @@ export class MapScene {
     this.engine.runRenderLoop(() => {
       const frameStartedAt = performance.now();
       this.updatePhysics(frameStartedAt);
+      this.gameAudio.update(this.physics.player.position, this.physics.player.yaw);
       const gameLogicFinishedAt = performance.now();
       this.scene.render();
       const frameFinishedAt = performance.now();
@@ -257,7 +260,7 @@ export class MapScene {
 
   async loadMap(map: SauerMap, textures: ResolvedTexture[], skyOverrides?: MapSkyOverrides,
                 lightingOverrides?: MapLightingOverrides, fogOverrides?: MapFogOverrides,
-                mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset): Promise<SceneStats> {
+                mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset, mapSounds: MapSoundAsset[] = []): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
     this.currentMap = map;
     const lighting = resolveMapLighting(map, lightingOverrides);
@@ -291,6 +294,7 @@ export class MapScene {
     this.weapons.projectiles.clear();
     this.physics.setMap(map);
     this.fpsClient.multiplayer.setMapEntities(map.entityRegistry);
+    this.gameAudio.setMap(map.entityRegistry, mapSounds);
     await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
     const batches = generateGeometry(map, textures);
     const materialBatches = generateMaterialGeometry(map);
@@ -551,6 +555,7 @@ export class MapScene {
     this.ctfRenderer.clear();
     this.particleRenderer.clear();
     this.weaponRenderer.clear();
+    this.gameAudio.dispose();
     this.mapModelResources?.dispose();
     this.mapModelResources = undefined;
     this.engine.dispose();

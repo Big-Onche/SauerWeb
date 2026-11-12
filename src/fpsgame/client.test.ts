@@ -7,6 +7,7 @@ import { Gun } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent } from "./weapon/WeaponEvents";
 import { createFpsEntityRegistry } from "./entities";
 import { ClientState } from "../engine/physics/types";
+import { GameSound } from "./sound";
 
 describe("Sauerbraten rifle protocol", () => {
   it("serializes the exact native N_SHOOT fields and hit record", () => {
@@ -244,6 +245,25 @@ describe("native server message framing", () => {
 
     expect(() => Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(packet.finish())])).not.toThrow();
     expect(consoleLines).toEqual(["aligned"]);
+  });
+
+  it("emits playsound events for native sound and explosion messages without losing packet alignment", () => {
+    const client = createClient().multiplayer, sounds: number[] = [], lines: string[] = [];
+    client.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "playsound") sounds.push(detail.sound);
+      if (detail.type === "console") lines.push(detail.text);
+    });
+    const packet = new PacketWriter()
+      .putInt(NetworkMessage.Sound).putInt(GameSound.Jump)
+      .putInt(NetworkMessage.ExplodeEffects).putInt(7).putInt(Gun.Rocket).putInt(42)
+      .putInt(NetworkMessage.ServerMessage).putString("aligned")
+      .finish();
+
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [7, new PacketReader(packet)]);
+
+    expect(sounds).toEqual([GameSound.Jump, GameSound.RocketHit]);
+    expect(lines).toEqual(["aligned"]);
   });
 });
 

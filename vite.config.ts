@@ -54,6 +54,7 @@ interface ConfigState {
   shaderName: string;
   shaderParameters: Record<string, number[]>;
   mapModels: string[];
+  mapSounds: Array<{ path: string; volume: number; maxUses: number }>;
 }
 
 interface ServerSkybox {
@@ -94,6 +95,7 @@ function readTextureManifest(mapName: string): {
   fog: ConfigState["fog"];
   mapModels: ReturnType<typeof resolveMapModels>;
   entityModels: { teleporter: ReturnType<typeof resolveMapModels>[number] };
+  mapSounds: ConfigState["mapSounds"];
 } {
   const state: ConfigState = {
     slots: [],
@@ -107,6 +109,7 @@ function readTextureManifest(mapName: string): {
     shaderName: "stdworld",
     shaderParameters: {},
     mapModels: [],
+    mapSounds: [],
   };
   executeConfig("data/default_map_settings.cfg", state, 0);
   executeConfig(`packages/base/${mapName}.cfg`, state, 0);
@@ -119,6 +122,7 @@ function readTextureManifest(mapName: string): {
     fog: state.fog,
     mapModels: resolveMapModels(state.mapModels),
     entityModels: { teleporter: resolveMapModels(["teleporter"])[0] },
+    mapSounds: state.mapSounds,
   };
 }
 
@@ -169,6 +173,11 @@ function executeStatement(text: string, source: string, line: number, state: Con
   }
   if (command === "mmodel") {
     if (args[0]) state.mapModels.push(args[0].replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""));
+    return;
+  }
+  if (command === "mapsound") {
+    if (args[0]) state.mapSounds.push({ path: resolveSoundPath(args[0]), volume: clampInteger(numberArg(args[1], 100), 0, 255),
+      maxUses: Math.max(0, Math.trunc(numberArg(args[2], 0))) });
     return;
   }
   if (command === "setshader") {
@@ -339,6 +348,14 @@ function normalizeConfigPath(value: string): string | undefined {
 
 function normalizeTexturePath(value: string): string {
   return path.posix.normalize(value.replace(/^<[^>]*>/, "").replaceAll("\\", "/").replace(/^packages\//, "").replace(/^\/+/, ""));
+}
+
+function resolveSoundPath(value: string): string {
+  const normalized = normalizeTexturePath(value).replace(/^sounds\//, "");
+  const base = `sounds/${normalized}`;
+  if (path.posix.extname(base)) return base;
+  for (const extension of [".wav", ".ogg"]) if (fs.existsSync(path.resolve(packagesDirectory, `${base}${extension}`))) return `${base}${extension}`;
+  return base;
 }
 
 function resolveSkyOverrides(state: ConfigState): ServerSkybox | undefined {

@@ -318,7 +318,7 @@ async function loadMap(name: string, readCompressed: () => Promise<ArrayBuffer>)
     const manifest = await loadTextureManifest(name);
     const textures = resolveMapTextures(map, manifest);
     const sceneStats = await mapScene.loadMap(map, textures, manifest.skybox, manifest.lighting, manifest.fog, manifest.mapModels ?? [],
-      manifest.entityModels?.teleporter);
+      manifest.entityModels?.teleporter, manifest.mapSounds ?? []);
     if (manifest.unsupported.length) console.warn("Unsupported Sauerbraten configuration commands", manifest.unsupported);
     showLoadedMap(map, sceneStats);
     activeMapName = name;

@@ -38,7 +38,10 @@ export interface TextureManifest {
   fog?: MapFogOverrides;
   mapModels: MapModelAsset[];
   entityModels?: { teleporter?: MapModelAsset };
+  mapSounds?: MapSoundAsset[];
 }
+
+export interface MapSoundAsset { path: string; volume: number; maxUses: number }
 
 export interface HudGunAsset {
   gun: number;

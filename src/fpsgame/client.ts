@@ -13,6 +13,7 @@ import type { WeaponEvent, WeaponHit } from "./weapon/WeaponEvents";
 import type { ConsoleLineType } from "../platform/browser/GameConsole";
 import { applyNetworkPosition, createNetworkInterpolation, resetNetworkInterpolation, type NetworkInterpolation } from "./networkInterpolation";
 import { FpsEntities, type EntityEffect } from "./entities";
+import { GameSound } from "./sound";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -72,6 +73,7 @@ export type MultiplayerEvent =
   | { type: "console"; text: string; consoleType: ConsoleLineType }
   | { type: "remote-shot"; clientNumber: number; gun: Gun; from: Vec3; to: Vec3 }
   | { type: "entity-effect"; effect: EntityEffect; local: boolean }
+  | { type: "playsound"; sound: GameSound; position?: Vec3 }
   | { type: "disconnect"; reason: number }
   | { type: "bot-init"; player: NetworkPlayer };
 
@@ -317,6 +319,8 @@ export class MultiplayerClient extends EventTarget {
     victim.alive = false;
     victim.deadAt = performance.now();
     this.dropLocalFlags(victim);
+    this.emit({ type: "playsound", sound: GameSound.Die1 + Math.floor(Math.random() * 2),
+      position: victimNumber === this.clientNumber ? undefined : victim.position });
     const victimName = this.displayName(victim, "you"), actorName = this.displayName(actor, "you");
     this.console(actor === victim ? `${victimName} suicided!` : `${actorName} fragged ${victimName}`,
       victimNumber === this.clientNumber || actorNumber === this.clientNumber ? "frag-self" : "frag-other");
@@ -581,6 +585,14 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.ForceDeath: this.setDead(packet.getInt(), false); break;
         case NetworkMessage.Shoot: this.parseShoot(sender, packet); break;
         case NetworkMessage.ShotEffects: this.parseShotEffects(packet); break;
+        case NetworkMessage.ExplodeEffects: {
+          const clientNumber = packet.getInt(), gun = packet.getInt() as Gun;
+          packet.getInt();
+          const player = this.players.get(clientNumber);
+          this.emit({ type: "playsound", sound: gun === Gun.Grenade ? GameSound.FireballExplode : GameSound.RocketHit,
+            position: clientNumber === this.clientNumber ? undefined : player?.position });
+          break;
+        }
         case NetworkMessage.Damage: this.parseDamage(packet); break;
         case NetworkMessage.HitPush: this.parseHitPush(packet); break;
         case NetworkMessage.Died: this.parseDied(packet); break;
@@ -589,7 +601,11 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Resume: this.parseResume(packet); break;
         case NetworkMessage.TeamInfo: this.parseTeamInfo(packet); break;
         case NetworkMessage.ItemList: while (packet.getInt() >= 0) packet.getInt(); break;
-        case NetworkMessage.ItemSpawn: packet.getInt(); break;
+        case NetworkMessage.ItemSpawn: {
+          const entity = this.mapEntities[packet.getInt()];
+          if (entity) this.emit({ type: "playsound", sound: GameSound.ItemSpawn, position: entity.position });
+          break;
+        }
         case NetworkMessage.ItemAccept: this.parseItemAccept(packet); break;
         case NetworkMessage.CurrentMaster:
           packet.getInt();
@@ -602,10 +618,17 @@ export class MultiplayerClient extends EventTarget {
           break;
         }
         case NetworkMessage.ServerMessage: this.console(packet.getString()); break;
-        case NetworkMessage.Sound: packet.getInt(); break;
+        case NetworkMessage.Sound: {
+          const sound = packet.getInt() as GameSound, player = this.players.get(sender);
+          this.emit({ type: "playsound", sound, position: sender === this.clientNumber ? undefined : player?.position });
+          break;
+        }
         case NetworkMessage.GunSelect: {
           const player = this.players.get(sender), gun = packet.getInt();
-          if (player) player.selectedGun = gun;
+          if (player) {
+            player.selectedGun = gun;
+            this.emit({ type: "playsound", sound: GameSound.WeaponLoad, position: sender === this.clientNumber ? undefined : player.position });
+          }
           break;
         }
         case NetworkMessage.ReplenishAmmo: this.parseReplenishAmmo(packet); break;
@@ -615,8 +638,13 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.BaseScore: this.parseBaseScore(packet); break;
         case NetworkMessage.Announce: {
           const item = packet.getInt();
-          if (item === 18) this.console("quad damage will spawn in 10 seconds!", "game-info");
-          else if (item === 15) this.console("health boost will spawn in 10 seconds!", "game-info");
+          if (item === 18) {
+            this.console("quad damage will spawn in 10 seconds!", "game-info");
+            this.emit({ type: "playsound", sound: GameSound.VoiceQuad10 });
+          } else if (item === 15) {
+            this.console("health boost will spawn in 10 seconds!", "game-info");
+            this.emit({ type: "playsound", sound: GameSound.VoiceBoost10 });
+          }
           break;
         }
         case NetworkMessage.InitFlags: this.ctfMode.parseInitFlags(packet, this.gameMode); this.emit({ type: "players" }); break;
@@ -801,6 +829,8 @@ export class MultiplayerClient extends EventTarget {
       this.physics.player.armour = armour;
       this.physics.player.health = health;
     }
+    if (health > 0) this.emit({ type: "playsound", sound: targetNumber === this.clientNumber ? GameSound.Pain6
+      : GameSound.Pain1 + Math.floor(Math.random() * 5), position: targetNumber === this.clientNumber ? undefined : target.position });
     this.emit({ type: "players" });
   }
 
@@ -836,9 +866,15 @@ export class MultiplayerClient extends EventTarget {
     const entityIndex = packet.getInt(), clientNumber = packet.getInt();
     if (clientNumber < 0) return;
     const entityType = this.mapEntities[entityIndex]?.type;
-    if (!Number.isInteger(entityType) || entityType < 8 || entityType > 13) return;
-    const gun = entityType - 8 + Gun.Shotgun;
+    if (!Number.isInteger(entityType) || entityType < 8 || entityType > 18) return;
     const player = this.players.get(clientNumber);
+    const itemSound = entityType <= 13 ? GameSound.ItemAmmo : entityType <= 15 ? GameSound.ItemHealth
+      : entityType <= 17 ? GameSound.ItemArmour : GameSound.ItemPowerup;
+    this.emit({ type: "playsound", sound: itemSound, position: clientNumber === this.clientNumber ? undefined : player?.position });
+    if (clientNumber === this.clientNumber && entityType === 15) this.emit({ type: "playsound", sound: GameSound.VoiceBoost });
+    if (clientNumber === this.clientNumber && entityType === 18) this.emit({ type: "playsound", sound: GameSound.VoiceQuad });
+    if (entityType > 13) return;
+    const gun = entityType - 8 + Gun.Shotgun;
     if (!player || gun < Gun.Shotgun || gun > Gun.Pistol) return;
     const pickup = this.weapons.controller.inventory.pickup(gun);
     player.ammo[gun] = Math.min(pickup.max, player.ammo[gun] + pickup.add);
@@ -879,8 +915,13 @@ export class MultiplayerClient extends EventTarget {
     const index = packet.getInt(), owner = packet.getString(), enemy = packet.getString(), converted = packet.getInt(), ammo = packet.getInt();
     const base = this.captureBases[index];
     if (!base) return;
-    if (owner && owner !== base.owner) this.console(`${this.teamDisplay(owner)} captured base ${base.tag}`, "game-info");
-    else if (!owner && base.owner) this.console(`${this.teamDisplay(base.owner)} lost base ${base.tag}`, "game-info");
+    if (owner && owner !== base.owner) {
+      this.console(`${this.teamDisplay(owner)} captured base ${base.tag}`, "game-info");
+      if (owner === this.players.get(this.clientNumber)?.team) this.emit({ type: "playsound", sound: GameSound.VoiceBaseCaptured });
+    } else if (!owner && base.owner) {
+      this.console(`${this.teamDisplay(base.owner)} lost base ${base.tag}`, "game-info");
+      if (base.owner === this.players.get(this.clientNumber)?.team) this.emit({ type: "playsound", sound: GameSound.VoiceBaseLost });
+    }
     Object.assign(base, { owner, enemy, converted, ammo });
     this.emit({ type: "players" });
   }
@@ -933,6 +974,8 @@ export class MultiplayerClient extends EventTarget {
       this.physics.player.clientState = ClientState.Dead;
       this.weapons.controller.setAttacking(false);
     }
+    if (!wasDead) this.emit({ type: "playsound", sound: GameSound.Die1 + Math.floor(Math.random() * 2),
+      position: clientNumber === this.clientNumber ? undefined : player.position });
     this.emit({ type: "players" });
   }
 
@@ -958,6 +1001,7 @@ export class MultiplayerClient extends EventTarget {
     const flagName = this.flagName(flag);
     this.ctfMode.dropFlag(flag, version, location, player.yaw);
     this.console(`${this.displayName(player)} dropped ${flagName}`, "game-info");
+    this.emit({ type: "playsound", sound: GameSound.FlagDrop, position: clientNumber === this.clientNumber ? undefined : player.position });
   }
 
   private parseTakeFlag(packet: PacketReader): void {
@@ -968,6 +1012,7 @@ export class MultiplayerClient extends EventTarget {
     const suffix = gameModeHas(this.gameMode, GameModeFlag.Hold) ? ` ${this.teamName(player.team)}` : ` ${this.flagName(flag)}`;
     this.ctfMode.takeFlag(clientNumber, flag, version);
     this.console(`${this.displayName(player)} ${action}${suffix}`, "game-info");
+    this.emit({ type: "playsound", sound: GameSound.FlagPickup, position: clientNumber === this.clientNumber ? undefined : player.position });
   }
 
   private parseReturnFlag(packet: PacketReader): void {
@@ -975,6 +1020,8 @@ export class MultiplayerClient extends EventTarget {
     const name = this.flagName(flag);
     this.ctfMode.returnFlag(flag, version);
     this.console(`${this.displayName(this.playerFor(clientNumber))} returned ${name}`, "game-info");
+    const player = this.players.get(clientNumber);
+    this.emit({ type: "playsound", sound: GameSound.FlagReturn, position: clientNumber === this.clientNumber ? undefined : player?.position });
   }
 
   private parseResetFlag(packet: PacketReader): void {
@@ -983,6 +1030,7 @@ export class MultiplayerClient extends EventTarget {
     const name = this.flagName(flag);
     this.ctfMode.resetFlag(flag, version, spawnIndex, team, score, this.gameMode);
     if (shouldLog) this.console(`${name} reset`, "game-info");
+    if (shouldLog) this.emit({ type: "playsound", sound: GameSound.FlagReset });
     this.emit({ type: "players" });
   }
 
@@ -993,6 +1041,7 @@ export class MultiplayerClient extends EventTarget {
     this.ctfMode.scoreFlag(player, relay, relayVersion, goal, goalVersion, goalSpawn, team, score, flags, this.gameMode);
     const localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? "");
     this.console(`${this.displayName(player)} scored for ${team === localTeam ? "your team" : "the enemy team"}`, "game-info");
+    this.emit({ type: "playsound", sound: team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
     if (score >= 10) this.console(`${team === localTeam ? "your team" : "the enemy team"} captured ${score} flags`, "game-info");
     this.emit({ type: "players" });
   }
@@ -1101,18 +1150,26 @@ export class MultiplayerClient extends EventTarget {
   // Original: src/fpsgame/ctf.h, ctfclientmode flag event console output.
   private announceLocalFlag(player: NetworkPlayer, event: LocalCtfEvent): void {
     const name = this.displayName(player);
-    if (event.type === "drop") this.console(`${name} dropped ${this.flagName(event.flag.id)}`, "game-info");
-    else if (event.type === "return") this.console(`${name} returned ${this.flagName(event.flag.id)}`, "game-info");
+    const position = player.clientNumber === this.clientNumber ? undefined : player.position;
+    if (event.type === "drop") {
+      this.console(`${name} dropped ${this.flagName(event.flag.id)}`, "game-info");
+      this.emit({ type: "playsound", sound: GameSound.FlagDrop, position });
+    } else if (event.type === "return") {
+      this.console(`${name} returned ${this.flagName(event.flag.id)}`, "game-info");
+      this.emit({ type: "playsound", sound: GameSound.FlagReturn, position });
+    }
     else if (event.type === "take") {
       const action = gameModeHas(this.gameMode, GameModeFlag.Hold) ? "picked up the flag for"
         : gameModeHas(this.gameMode, GameModeFlag.Protect) || event.wasDropped ? "picked up" : "stole";
       const suffix = gameModeHas(this.gameMode, GameModeFlag.Hold) ? ` ${this.teamName(player.team)}`
         : ` ${this.flagName(event.flag.id)}`;
       this.console(`${name} ${action}${suffix}`, "game-info");
+      this.emit({ type: "playsound", sound: GameSound.FlagPickup, position });
     } else {
       const localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? ""), team = ctfTeamFlag(player.team);
       const teamName = team === localTeam ? "your team" : "the enemy team", score = this.ctfMode.scores[team - 1] ?? 0;
       this.console(`${name} scored for ${teamName}`, "game-info");
+      this.emit({ type: "playsound", sound: team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
       if (score >= 10) this.console(`${teamName} captured ${score} flags`, "game-info");
     }
   }

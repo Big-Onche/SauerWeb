@@ -19,6 +19,8 @@ export interface PhysicsDebugSnapshot {
   renderPosition: Vec3;
 }
 
+export type PhysicsSoundEvent = "jump" | "land" | "splash-in" | "splash-out" | "burn";
+
 /** Milestone-00 simulation shell. Collision resolution is intentionally delegated to the next milestone. */
 export class PhysicsSimulation {
   readonly player = createPlayer();
@@ -33,6 +35,7 @@ export class PhysicsSimulation {
   private collisionWorld?: OctreeCollisionWorld;
   raycastPerformanceRecorder?: (milliseconds: number) => void;
   raycastPerformanceEnabled?: () => boolean;
+  soundEvent?: (event: PhysicsSoundEvent, player: PhysicsEntity) => void;
 
   setMap(map: SauerMap): void {
     this.collisionWorld = new OctreeCollisionWorld(map);
@@ -128,6 +131,7 @@ export class PhysicsSimulation {
 
   private moveplayer(player: PhysicsEntity, milliseconds: number): void {
     player.previousPosition = copyVec3(player.position);
+    const previousPhysicsState = player.physicsState, previousTimeInAir = player.timeInAir, previousWater = player.inWater;
     const seconds = milliseconds / 1000;
     const floating = player.clientState === ClientState.Editing || player.clientState === ClientState.Spectator;
     const materialPosition = {
@@ -159,6 +163,7 @@ export class PhysicsSimulation {
       player.jumping = false;
       player.velocity.z = Math.max(player.velocity.z, JUMP_VELOCITY);
       if (!floating && water) { player.velocity.x /= 8; player.velocity.y /= 8; }
+      if (!floating) this.soundEvent?.("jump", player);
     }
     const yaw = player.yaw * Math.PI / 180;
     const pitch = floating || water ? player.pitch * Math.PI / 180 : 0;
@@ -203,6 +208,11 @@ export class PhysicsSimulation {
       addScaled(player.position, player.falling, seconds);
     }
     player.inWater = !floating && water ? volume : 0;
+    if (enteredWater) this.soundEvent?.("splash-in", player);
+    else if (previousWater && !player.inWater) this.soundEvent?.(previousWater === MAT_LAVA ? "burn" : "splash-out", player);
+    if (previousPhysicsState === PhysicsState.Fall && player.physicsState >= PhysicsState.Slope && previousTimeInAir > 50) {
+      this.soundEvent?.("land", player);
+    }
     if (player.clientState === ClientState.Alive && (player.position.z < 0 || (material & MAT_DEATH) !== 0)) {
       player.clientState = ClientState.Dead;
       player.move = player.strafe = 0;
