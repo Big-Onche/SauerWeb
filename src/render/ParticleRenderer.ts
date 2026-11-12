@@ -1,3 +1,4 @@
+import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import type { Camera } from "@babylonjs/core/Cameras/camera";
 import "@babylonjs/core/Culling/ray";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
@@ -26,13 +27,19 @@ type ParticleTexture = "ball1.png" | "ball2.png" | "ball3.png" | "base.png" | "e
 
 interface SpriteEffect {
   mesh: Mesh;
-  material: StandardMaterial;
   started: number;
   duration: number;
   startScale: number;
   endScale: number;
+  reusableMesh?: "sprite" | "beam";
   light?: PointLight;
   track?: () => Vec3 | undefined;
+}
+
+interface PooledParticleSystem {
+  system: ParticleSystem;
+  capacity: number;
+  tiled: boolean;
 }
 
 interface ProjectileEffect {
@@ -70,10 +77,18 @@ interface SauerParticleState {
 }
 
 const SAUER_EMIT_MILLIS = 17;
+const MAX_POOLED_PARTICLE_SYSTEMS = 16;
+const MAX_POOLED_SPRITES = 64;
+const MAX_POOLED_BEAMS = 128;
 
 /** Babylon presentation of Sauerbraten's renderparticles.cpp particle recipes. */
 export class ParticleRenderer {
   private readonly systems = new Set<ParticleSystem>();
+  private readonly systemPool: PooledParticleSystem[] = [];
+  private readonly spritePool: Mesh[] = [];
+  private readonly beamPool: Mesh[] = [];
+  private readonly textures = new Map<ParticleTexture, Texture>();
+  private readonly materials = new Map<string, StandardMaterial>();
   private readonly persistentMeshes = new Set<Mesh>();
   private readonly effects: SpriteEffect[] = [];
   private readonly projectiles = new Map<number, ProjectileEffect>();
@@ -90,14 +105,24 @@ export class ParticleRenderer {
   }
 
   clear(): void {
-    this.systems.forEach((system) => system.dispose());
+    this.systems.forEach((system) => system.dispose(false));
     this.systems.clear();
-    this.effects.forEach((effect) => this.disposeEffect(effect));
+    this.effects.forEach((effect) => this.disposeEffect(effect, false));
     this.effects.length = 0;
     this.persistentMeshes.forEach((mesh) => this.disposeMesh(mesh));
     this.persistentMeshes.clear();
     this.projectiles.forEach((projectile) => projectile.mesh && this.disposeMesh(projectile.mesh));
     this.projectiles.clear();
+    this.systemPool.forEach(({ system }) => system.dispose(false));
+    this.systemPool.length = 0;
+    this.spritePool.forEach((mesh) => mesh.dispose());
+    this.spritePool.length = 0;
+    this.beamPool.forEach((mesh) => mesh.dispose());
+    this.beamPool.length = 0;
+    this.materials.forEach((material) => material.dispose(false, false));
+    this.materials.clear();
+    this.textures.forEach((texture) => texture.dispose());
+    this.textures.clear();
   }
 
   private createMapEmitter(entity: RegisteredMapEntity): void {
@@ -310,10 +335,14 @@ export class ParticleRenderer {
   private particleSystem(name: string, position: Vec3, options: ParticleOptions): ParticleSystem {
     const capacity = Math.max(8, options.count ?? Math.ceil((options.rate ?? 10) * options.fadeMaxMs / 1000 * 1.1));
     const tiled = options.texture === "flames.png" || options.texture === "snow.png";
-    const system = new ParticleSystem(name, capacity, this.scene, undefined, tiled);
+    const pooledIndex = this.systemPool.findIndex((entry) => entry.tiled === tiled && entry.capacity >= capacity &&
+      entry.capacity <= capacity * 2);
+    const pooled = pooledIndex >= 0 ? this.systemPool.splice(pooledIndex, 1)[0] : undefined;
+    const system = pooled?.system ?? new ParticleSystem(name, capacity, this.scene, undefined, tiled);
+    system.reset();
     const states = new WeakMap<Particle, SauerParticleState>();
     let particleIndex = 0;
-    system.particleTexture = new Texture(particleUrl(options.texture), this.scene, false, false);
+    system.particleTexture = this.particleTexture(options.texture);
     system.emitter = toBabylonPosition(position);
     system.color1 = particleColor4(options.color, 1);
     system.color2 = particleColor4(options.color, 1);
@@ -376,7 +405,10 @@ export class ParticleRenderer {
     if (options.count !== undefined) {
       system.manualEmitCount = options.count;
       system.disposeOnStop = false;
-    } else system.emitRate = options.rate ?? 10;
+    } else {
+      system.manualEmitCount = -1;
+      system.emitRate = options.rate ?? 10;
+    }
     system.start();
     this.systems.add(system);
     return system;
@@ -418,15 +450,17 @@ export class ParticleRenderer {
   private sprite(position: Vec3, texture: ParticleTexture, color: number, size: number, duration: number, additive: boolean,
                  endScale = size): SpriteEffect {
     const material = this.spriteMaterial(`particle-${texture}`, texture, color, additive);
-    const mesh = MeshBuilder.CreatePlane(`particle-${texture}`, { size: 1 }, this.scene);
+    const mesh = this.spritePool.pop() ?? MeshBuilder.CreatePlane("particle-sprite", { size: 1 }, this.scene);
+    mesh.setEnabled(true);
+    mesh.visibility = 1;
     mesh.position.copyFrom(toBabylonPosition(position));
     mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
     mesh.scaling.setAll(sauerParticleDiameter(size));
     mesh.isPickable = false;
     mesh.material = material;
     const effect = {
-      mesh, material, started: performance.now(), duration, startScale: sauerParticleDiameter(size),
-      endScale: sauerParticleDiameter(endScale),
+      mesh, started: performance.now(), duration, startScale: sauerParticleDiameter(size), endScale: sauerParticleDiameter(endScale),
+      reusableMesh: "sprite" as const,
     };
     this.effects.push(effect);
     return effect;
@@ -448,17 +482,26 @@ export class ParticleRenderer {
     const view = (this.scene.activeCamera?.globalPosition ?? midpoint.add(new Vector3(0, 0, 1))).subtract(midpoint);
     const side = Vector3.Cross(end.subtract(start), view).normalize().scale(width);
     const positions = [...start.subtract(side).asArray(), ...start.add(side).asArray(), ...end.add(side).asArray(), ...end.subtract(side).asArray()];
-    const mesh = new Mesh(`particle-beam-${texture}`, this.scene);
-    const data = new VertexData();
-    data.positions = positions;
-    data.indices = [0, 1, 2, 0, 2, 3];
-    data.uvs = [0, 0, 0, 1, 1, 1, 1, 0];
-    data.normals = new Array<number>(12).fill(0);
-    data.applyToMesh(mesh, true);
+    let mesh = this.beamPool.pop();
+    if (mesh) {
+      mesh.setEnabled(true);
+      mesh.visibility = 1;
+      mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+    } else {
+      mesh = new Mesh(`particle-beam-${texture}`, this.scene);
+      const data = new VertexData();
+      data.positions = positions;
+      data.indices = [0, 1, 2, 0, 2, 3];
+      data.uvs = [0, 0, 0, 1, 1, 1, 1, 0];
+      data.normals = new Array<number>(12).fill(0);
+      data.applyToMesh(mesh, true);
+    }
     const material = this.spriteMaterial(`beam-${texture}`, texture, color, true);
     mesh.material = material;
     mesh.isPickable = false;
-    if (Number.isFinite(duration)) this.effects.push({ mesh, material, started: performance.now(), duration, startScale: 1, endScale: 1 });
+    if (Number.isFinite(duration)) {
+      this.effects.push({ mesh, started: performance.now(), duration, startScale: 1, endScale: 1, reusableMesh: "beam" });
+    }
     else this.persistentMeshes.add(mesh);
   }
 
@@ -471,10 +514,15 @@ export class ParticleRenderer {
       mesh.position.x += x;
       mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
       mesh.isPickable = false;
-      const material = new StandardMaterial(`${name}-material`, this.scene);
-      material.disableLighting = true;
-      material.emissiveColor = particleColor3(partColor);
-      material.backFaceCulling = false;
+      const key = `meter:${partColor}`;
+      let material = this.materials.get(key);
+      if (!material) {
+        material = new StandardMaterial(`${name}-material`, this.scene);
+        material.disableLighting = true;
+        material.emissiveColor = particleColor3(partColor);
+        material.backFaceCulling = false;
+        this.materials.set(key, material);
+      }
       mesh.material = material;
       this.persistentMeshes.add(mesh);
     };
@@ -483,9 +531,11 @@ export class ParticleRenderer {
   }
 
   private spriteMaterial(name: string, textureName: ParticleTexture, color: number, additive: boolean): StandardMaterial {
+    const key = `sprite:${textureName}:${color}:${additive ? 1 : 0}`;
+    const cached = this.materials.get(key);
+    if (cached) return cached;
     const material = new StandardMaterial(`${name}-material`, this.scene);
-    const texture = new Texture(particleUrl(textureName), this.scene, false, false);
-    texture.hasAlpha = true;
+    const texture = this.particleTexture(textureName);
     material.diffuseTexture = texture;
     material.opacityTexture = texture;
     material.emissiveTexture = texture;
@@ -498,7 +548,17 @@ export class ParticleRenderer {
     material.useAlphaFromDiffuseTexture = true;
     material.transparencyMode = Material.MATERIAL_ALPHABLEND;
     if (additive) material.alphaMode = 1;
+    this.materials.set(key, material);
     return material;
+  }
+
+  private particleTexture(name: ParticleTexture): Texture {
+    let texture = this.textures.get(name);
+    if (texture) return texture;
+    texture = new Texture(particleUrl(name), this.scene, false, false);
+    texture.hasAlpha = true;
+    this.textures.set(name, texture);
+    return texture;
   }
 
   private update(): void {
@@ -511,7 +571,7 @@ export class ParticleRenderer {
         effect.mesh.position.copyFrom(toBabylonPosition(trackedPosition));
         effect.light?.position.copyFrom(effect.mesh.position);
       }
-      effect.material.alpha = 1 - progress;
+      effect.mesh.visibility = 1 - progress;
       effect.mesh.scaling.setAll(effect.startScale + (effect.endScale - effect.startScale) * progress);
       if (effect.light) effect.light.intensity = (1 - progress) * 2;
       if (progress >= 1) {
@@ -521,18 +581,27 @@ export class ParticleRenderer {
     }
     this.systems.forEach((system) => {
       if (!system.isStarted() || system.manualEmitCount !== 0 || system.getActiveCount() > 0) return;
-      system.dispose();
       this.systems.delete(system);
+      system.stop();
+      system.reset();
+      if (this.systemPool.length < MAX_POOLED_PARTICLE_SYSTEMS) {
+        this.systemPool.push({ system, capacity: system.getCapacity(), tiled: system.isAnimationSheetEnabled });
+      } else system.dispose(false);
     });
   }
 
-  private disposeEffect(effect: SpriteEffect): void {
+  private disposeEffect(effect: SpriteEffect, reuseMesh = true): void {
     effect.light?.dispose();
-    this.disposeMesh(effect.mesh);
+    const pool = effect.reusableMesh === "sprite" ? this.spritePool : effect.reusableMesh === "beam" ? this.beamPool : undefined;
+    const limit = effect.reusableMesh === "beam" ? MAX_POOLED_BEAMS : MAX_POOLED_SPRITES;
+    if (reuseMesh && pool && pool.length < limit) {
+      effect.mesh.setEnabled(false);
+      effect.mesh.visibility = 1;
+      pool.push(effect.mesh);
+    } else this.disposeMesh(effect.mesh);
   }
 
   private disposeMesh(mesh: Mesh): void {
-    mesh.material?.dispose(true, true);
     mesh.dispose();
   }
 }

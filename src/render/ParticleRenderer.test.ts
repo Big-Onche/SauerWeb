@@ -1,6 +1,12 @@
+import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
+import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
+import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
-import { sauerParticleColor, sauerParticleDiameter, sauerParticleOffset, sauerParticlePosition } from "./ParticleRenderer";
+import { WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
+import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
+import { ParticleRenderer, sauerParticleColor, sauerParticleDiameter, sauerParticleOffset, sauerParticlePosition } from "./ParticleRenderer";
 
 describe("Sauerbraten particle entity helpers", () => {
   it("bundles Babylon's particle shaders instead of requesting them as runtime URLs", () => {
@@ -36,5 +42,34 @@ describe("Sauerbraten particle entity helpers", () => {
     expect(sauerParticlePosition(origin, { x: 50, y: -25, z: 100 }, -20, 500)).toEqual({ x: 15, y: 17.5, z: 41.25 });
     expect(sauerParticlePosition(origin, { x: 50, y: -25, z: 100 }, 20, 500)).toEqual({ x: 15, y: 17.5, z: 38.75 });
     expect(sauerParticlePosition(origin, { x: 50, y: -25, z: 100 }, 0, 500)).toEqual(origin);
+  });
+
+  it("shares textures and material configurations across repeated weapon effects", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+    const shot = {
+      type: "shot-effect" as const,
+      gun: Gun.Pistol,
+      from: { x: 0, y: 0, z: 0 },
+      to: { x: 10, y: 0, z: 0 },
+      rays: [],
+    };
+
+    events.emit(shot);
+    const textureCount = scene.textures.length;
+    const materialCount = scene.materials.length;
+    events.emit(shot);
+
+    expect(textureCount).toBeGreaterThan(0);
+    expect(scene.textures).toHaveLength(textureCount);
+    expect(scene.materials).toHaveLength(materialCount);
+
+    renderer.clear();
+    expect(scene.textures).toHaveLength(0);
+    expect(scene.materials.every((material) => material.name === "default material")).toBe(true);
+    engine.dispose();
   });
 });
