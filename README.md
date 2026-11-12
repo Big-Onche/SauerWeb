@@ -1,137 +1,242 @@
 # SauerWeb
 
-A browser-based Cube 2: Sauerbraten client built with Babylon.js and TypeScript. It loads native maps and connects to original
-Sauerbraten protocol-260 servers through the bundled ENet WebAssembly transport.
+### Cube 2: Sauerbraten. In your browser.
+
+**The classic open-source FPS, brought to the modern web.**
+
+Play Sauerbraten directly in your browser, with native maps, real multiplayer servers, and no game installation required.
+
+Powered by **TypeScript (game code), Babylon.js (renderer), WebAssembly (enet).**
+
+**[▶ TRY SAUERWEB](https://sauerweb.org)** | [Source Code](https://github.com/Big-Onche/sauerweb) | [Report an Issue](https://github.com/Big-Onche/sauerweb/issues)
+
+> **⚠️ Experimental Alpha**
+>
+> SauerWeb is under active development. Expect bugs, missing features, performance issues, and occasional incompatibilities with certain multiplayer servers. It is not yet a complete replacement for the native Sauerbraten client.
+
+---
+
+## What is SauerWeb?
+
+The legendary open-source FPS where you can shoot your friends and edit maps in real time. Well, the map editing part isn't on the web yet.
+
+SauerWeb aims to faithfully port the original Sauerbraten experience to the browser, from its octree engine and physics to its gameplay and multiplayer networking.
+
+The engine is being ported from it's oldschool C++ to TypeScript, with Babylon.js handling rendering and the original ENet networking library compiled to WebAssembly.
+
+**The goal is simple: if it has a modern browser, it should have a shot at running Sauerbraten.**
+
+## Features
+
+| | |
+|---|---|
+| 🎮 **Real Sauerbraten gameplay** | Native-inspired movement, physics, weapons, combat, and game modes |
+| 🌍 **Original maps** | Native `.ogz` decoding, octree geometry, textures, lightmaps, and map entities |
+| 🌐 **Real multiplayer** | Connect to existing Sauerbraten protocol-260 servers through an ENet WebAssembly transport |
+| 🖥️ **Browser-native rendering** | Babylon.js renders the actual Sauerbraten world without converting maps into external 3D formats |
+| 🔫 **Original assets** | Native mapmodels, player models, animations, weapon assets, materials, and skyboxes, when the license allows it |
+| 📡 **Live server browser** | Discover servers from Sauerbraten's original master server |
+| 🛠️ **Open source** | Inspect the code, contribute improvements, and help bring Sauerbraten to more devices |
+
+### One game. An unreasonable number of devices.
+
+SauerWeb is designed around standard web technologies, making it potentially playable on much more than traditional computers.
+
+- **Desktop and laptops:** Windows, Linux, macOS, and other systems with compatible browsers.
+- **Smartphones and tablets:** Browser support, with touch controls still a work in progress.
+- **VR headsets:** Potentially playable through their built-in browsers, without native VR support.
+- **Smart TVs and unusual hardware:** If the browser supports the required features and the hardware is powerful enough, it's worth a try.
+- **Smart cookers and fridges:** No promises. But somebody has to attempt it.
+
+Actual compatibility depends on WebGL support, browser capabilities, available memory, performance, and input methods.
+
+---
+
+## Play online
+
+**[Launch SauerWeb →](https://sauerweb.org)**
+
+No downloads. No installation. No account required.
+
+Open the website, select a map or multiplayer server, and play.
+
+The public version may not support every feature or server yet. Some servers can also reject connections originating from the multiplayer relay.
 
 ## Run locally
 
-On Windows, double-click `run-server.bat`. It installs dependencies when needed, starts the server, and opens the viewer automatically.
+Want to experiment with the engine, develop features, or run your own instance?
 
-Or run it manually:
+You'll need Node.js and npm, plus access to the Sauerbraten source/assets tree.
 
-```powershell
+### Windows
+
+Simply double-click:
+
+`run-server.bat`
+
+The script installs dependencies when needed, launches the development server, and opens the viewer automatically.
+
+### Manual setup
+
+```bash
 npm install
 npm run dev
 ```
 
-The Vite development server indexes maps from the Sauerbraten source/assets root; the reference tree is never modified. The root defaults to
-`.Sauerbraten` in the project directory. To keep a machine-specific location across runs, create an ignored `.env.local` file in the project root:
+Open the local URL printed by Vite.
+
+The development server also starts the WebSocket-to-UDP multiplayer relay and server browser API.
+
+### Configure Sauerbraten assets
+
+By default, SauerWeb expects the reference Sauerbraten tree in:
+
+`.Sauerbraten/`
+
+You can point it to another location using an ignored `.env.local` file in the project root.
+
+**Windows:**
 
 ```dotenv
-# Windows (forward slashes avoid escaping backslashes)
 SAUERBRATEN_DIR="D:/Games/Sauerbraten"
 ```
 
+**Linux:**
+
 ```dotenv
-# Linux
 SAUERBRATEN_DIR="/srv/sauerbraten"
 ```
 
-Project-relative paths are also supported, for example `SAUERBRATEN_DIR="../sauerbraten"`. The configured directory must contain `data`,
-`packages/base`, and `packages/models`. A shell environment variable can be used for a single run instead:
+Relative paths such as `../sauerbraten` are supported too.
 
-```powershell
-$env:SAUERBRATEN_DIR = "D:\Games\Sauerbraten"
-npm run dev
-```
+The selected directory must contain `data`, `packages/base`, and `packages/models`.
+
+You can also override the directory for a single run:
 
 ```bash
 SAUERBRATEN_DIR=/srv/sauerbraten npm run dev
 ```
 
-Open the printed local URL, filter the archive, and select any enabled v33 map. You can also open a v33 `.ogz` from disk. The development server also
-starts the WebSocket-to-UDP relay and server browser API.
-
-Controls: **WASD / arrows** move, the **mouse** aims, **left click** fires, **T** chats, **Y** team-chats, **G** drops a carried flag, **Tab** opens the
-multiplayer scoreboard, **F11** toggles the full console, and the diamond button toggles wireframe. Page Up/Down or keypad +/- scrolls the full console.
-
-## Multiplayer and relay
-
-The multiplayer implementation is pinned to Sauerbraten SVN r6488 (`c63c9f327e278c6b49b39a8163a2717206d4f46a` in the official Git mirror):
-protocol 260, map format 33, and ENet 1.3.17. The original ENet C implementation is compiled to WebAssembly; TypeScript only supplies complete UDP datagrams
-to it and forwards its output as binary WebSocket frames. The relay never parses or modifies ENet traffic and creates a separate UDP socket for every
-browser connection.
-
-The relay retrieves the public server list from Sauerbraten's master server and adds those destinations to the server browser and relay allowlist.
-`SAUER_RELAY_SERVERS` adds kept servers (for example a local or unlisted server) alongside the master list:
-
-```powershell
-$env:SAUER_RELAY_SERVERS = "127.0.0.1:28785=Local server,play.example.net:28785=Public server"
-npm run dev
-```
-
-For production, run `npm run build` and `npm run relay`. The standalone process serves `/api/servers`, `/health`, `/relay`, and `/presence`; its port defaults to 8080
-and can be changed with `SAUER_RELAY_PORT`. Put it behind the same HTTPS reverse proxy as the static site, or configure native TLS with
-`SAUER_RELAY_TLS_KEY` and `SAUER_RELAY_TLS_CERT`. `SAUER_RELAY_ORIGINS` accepts a comma-separated browser-origin allowlist. Connection, message-size,
-packet-rate, and byte-rate limits are enforced in the relay. The relay trusts `X-Forwarded-For` only from loopback proxies by default; set
-`SAUER_RELAY_TRUSTED_PROXIES` to a comma-separated list of proxy IP addresses or CIDR networks when using a different trusted proxy topology. The master
-defaults to `master.sauerbraten.org:28787`; override it with
-`SAUER_MASTER_SERVER`, `SAUER_MASTER_PORT`, or `SAUER_MASTER_TIMEOUT` (milliseconds). The current frontend also uses runtime-generated asset and metadata
-routes from the Vite plugin, so a static build and the standalone relay are not sufficient by themselves.
-
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for a complete Ubuntu/Debian production deployment with systemd, Nginx, HTTPS, and UFW.
-
-Precompiled ENet JavaScript and WebAssembly artifacts are committed, so Emscripten is not needed for ordinary development or deployment. To reproduce
-them with an activated emsdk, set `SAUERBRATEN_DIR` in the shell when the source tree is not at the default `.Sauerbraten` location:
+On PowerShell:
 
 ```powershell
 $env:SAUERBRATEN_DIR = "D:\Games\Sauerbraten"
-npm run build:enet
+npm run dev
 ```
 
-## Source layout
+The original asset tree is never modified.
 
-The TypeScript core follows the native Sauerbraten tree. Engine code is renderer-independent and keeps Sauerbraten's Z-up coordinates; Babylon conversion and browser APIs stay at the boundary.
+---
+
+## How does it work?
+
+SauerWeb is not a conventional JavaScript FPS built to resemble Sauerbraten.
+
+Its architecture follows the original **Cube 2 engine**, with the goal of preserving native game behavior and data formats.
+
+### Rendering
+
+The original Sauerbraten world uses a recursive octree, rather than conventional pre-exported 3D scenes.
+
+SauerWeb decodes `.ogz` maps directly, reconstructs native octree geometry, and renders the result through Babylon.js.
+
+This includes map surfaces, deformed geometry, lightmaps, materials, water, lava, glass, native models, and original texture configurations.
+
+No intermediate OBJ, GLB, or glTF map conversion is necessary.
+
+### Physics and gameplay
+
+Core systems are being ported from the original C++ implementation to TypeScript, keeping the original architecture, naming conventions, and internal coordinate system wherever practical.
+
+Sauerbraten uses Z-up coordinates. Babylon.js uses Y-up coordinates: SauerWeb keeps native coordinates inside the game and engine logic, handling conversion at the rendering boundary.
+
+This separation makes it easier to compare and validate behavior against the original engine.
+
+### Networking
+
+Browsers cannot open ordinary UDP sockets, so SauerWeb uses a lightweight WebSocket-to-UDP relay.
 
 ```text
-src/
-├── engine/
-│   ├── serverbrowser.ts
-│   ├── physics.ts
-│   ├── sound.ts
-│   ├── renderva.ts
-│   ├── worldio.ts
-│   ├── octa.ts
-│   └── rendermodel.ts
-├── fpsgame/
-│   ├── client.ts
-│   ├── game.ts
-│   ├── weapon.ts
-│   └── entities.ts
-├── network/
-│   ├── enet.ts
-│   ├── protocol.ts
-│   └── enet/
-├── platform/browser/
-└── render/
+ Browser
+    |
+    | Binary WebSocket
+    |
+ SauerWeb Relay
+    |
+    | UDP / ENet
+    |
+ Original Sauerbraten Server
 ```
 
-Large systems retain focused implementation modules beneath their native entry point, such as `engine/physics/` and `fpsgame/weapon/`. Correspondence comments identify the original C++ file, function, and verified reference revision.
+The original ENet 1.3.17 C library is compiled into WebAssembly, retaining native reliability, sequencing, acknowledgment, and retransmission behavior.
 
-## Current milestone
+The relay forwards complete binary datagrams without parsing or modifying ENet game traffic.
 
-- Connects to unmodified protocol-260 Sauerbraten servers with native ENet channels, reliability, sequencing, retransmission, and disconnect behavior.
-- Implements the native client handshake, map changes, spawn/death lifecycle, position updates, rifle shots, hit reports, damage, score state, pings, and
-  instagib HUD/scoreboard flow.
-- Provides an HTML/CSS server browser backed by the original master-server list and native server-info queries. Only discovered or explicitly configured
-  relay destinations are exposed and connectable.
+Each browser connection receives its own UDP socket.
 
-- Discovers all 331 bundled maps and reports their real format versions.
-- Decompresses and validates native `.ogz` files in the browser.
-- Decodes v33 headers, variables, game metadata, entities, texture MRU, VSlots, octree nodes, deformed edges, materials, merged-face flags, and serialized surfaces.
-- Retains the recursive octree and generates spatially separated Babylon meshes for its eight root octants.
-- Extracts water, lava, glass, clip, no-clip, game-clip, death, and alpha leaves into physics-facing material-volume records. Water, lava, and glass use dedicated renderers; the remaining flags are available through the material debug view.
-- Decodes all native FPS entity IDs into a Babylon-independent registry with named attributes, positions, orientations, and mapmodel references. Optional debug markers expose the registry in the viewport.
-- Starts the camera at the first player-start entity and centralizes Sauerbraten Z-up → Babylon Y-up conversion.
-- Reads a restricted declarative subset of default, package, and map `.cfg` files; resolves original image materials, VSlot UV transforms, and six-face map skyboxes from the Sauerbraten package tree.
-- Decodes the original 512×512 RGB/RGBA lightmap atlases, preserves reserved and serialized lightmap indexing, and binds the baked UV2 lighting and layer masks through Babylon materials.
-- Native MD2, MD3, MD5, IQM, and OBJ models are rendered with Sauerbraten configuration transforms, skins, alpha testing, and culling. First-person MD5 HUD guns use the original weapon and Mr. Fixit hand assets. Older map versions remain unsupported.
+**Compatibility target:**
 
-See [docs/MAP_FORMAT.md](docs/MAP_FORMAT.md) for the source mapping and format notes.
+- Sauerbraten protocol **260**
+- Native map format **33**
+- ENet **1.3.17**
+- Reference: Sauerbraten SVN **r6488**
+- Official Git mirror commit: `c63c9f327e278c6b49b39a8163a2717206d4f46a`
 
-## Verify
+---
 
-```powershell
-npm test
-npm run build
-```
+## Current development status
+
+**Status: Experimental Alpha**
+
+SauerWeb is playable, but still evolving.
+
+### Implemented foundations
+
+- Native `.ogz` decompression, validation, and map-format decoding.
+- Discovery of all 331 bundled maps, including their format versions.
+- Native v30 to v33 octree geometry, deformed surfaces, merged faces, and material-volume extraction.
+- Original map textures, VSlots, lightmap atlases, UV transforms, skyboxes, and supported configuration directives.
+- MD2, MD3, MD5, IQM, and OBJ model loading, with native model configuration support.
+- Game entities, mapmodels, player starts, and debugging tools.
+- Multiplayer client handshake, synchronization, position updates, shooting, damage, spawning, scoring, and disconnect behavior.
+- Original ENet transport compiled to WebAssembly.
+- Multiplayer server discovery through the original master server.
+
+### Still in development
+
+- Greater parity with native physics and gameplay behavior.
+- Additional game modes and complete feature coverage.
+- Rendering and CPU performance improvements.
+- Broader multiplayer server compatibility.
+- Mobile-friendly touch controls.
+- UI and HUD fidelity improvements.
+- Browser and device compatibility testing.
+
+Older map formats remain unsupported.
+
+The project moves quickly. This section is a milestone overview, not an exhaustive live feature tracker.
+
+---
+
+
+## Credits
+
+**Cube 2: Sauerbraten** and its original engine, gameplay, assets, and community are the foundation of this project.
+
+SauerWeb is an independent browser-porting effort built around that work.
+
+Special thanks to the Sauerbraten developers and contributors, and to the open-source projects making this possible, including Babylon.js, ENet, Emscripten, and the TypeScript ecosystem.
+
+SauerWeb is not an official Sauerbraten release.
+
+Original Sauerbraten assets and third-party components remain subject to their respective licenses.
+
+---
+
+### Frag your friends. From literally anywhere.
+
+**[Play SauerWeb](https://sauerweb.org)**
+
+*Desktop, laptop, phone, smart TV... or whatever appliance has a browser.*
+
+*The fridge benchmark is still pending.*

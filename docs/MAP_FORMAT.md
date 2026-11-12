@@ -4,13 +4,13 @@ The implementation is based on the bundled reference at `.Sauerbraten/`; that tr
 
 ## Bundled versions
 
-The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27, 28, 29, 31, 32, and 33. `SauerMapParser` accepts versions 32 and 33. Older maps stay visible but disabled in the browser so unsupported layouts can never be mistaken for current data.
+The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27, 28, 29, 31, 32, and 33. `SauerMapParser` accepts versions 31–33. Older maps stay visible but disabled in the browser so unsupported layouts can never be mistaken for current data.
 
 ## Authoritative source mapping
 
 | C++ reference | Relevant behavior | TypeScript equivalent |
 | --- | --- | --- |
-| `src/engine/world.h` — `octaheader` | 40-byte v32–33 header and `MAPVERSION` | `src/engine/worldio.ts` — `SauerMapParser.readHeader` |
+| `src/engine/world.h` — `octaheader` | 40-byte v31–33 header and `MAPVERSION` | `src/engine/worldio.ts` — `SauerMapParser.readHeader` |
 | `src/engine/worldio.cpp` — `load_world` | Section order: variables, game data, MRU, entities, VSlots, octree, lightmaps/PVS/blendmap | `src/engine/worldio.ts` — `SauerMapParser.parse` |
 | `src/engine/worldio.cpp` — `loadvslots` / `loadvslot` | Negative blank runs and bit-mask-controlled VSlot fields | `src/engine/worldio.ts` — `SauerMapParser.loadvslots` |
 | `src/engine/worldio.cpp` — `loadchildren` / `loadc` | Eight-child recursion, leaf tags, edges, textures, material, merge and surface payloads | `src/engine/worldio.ts` — `loadchildren` / `loadc` |
@@ -20,7 +20,7 @@ The 331 maps in `.Sauerbraten/packages/base` use formats 6, 7, 8, 21, 24, 26, 27
 | `src/engine/worldio.cpp` / `lightmap.h` | 512×512 RGB/RGBA atlas records and reserved lightmap IDs | `SauerMapParser.readLightmaps` / `MaterialCache` |
 | `src/shared/ents.h` — `entity` | 24-byte entity record | `src/engine/worldio.ts` — `SauerMapParser.readEntities` |
 
-## Versions 32–33 serialized order
+## Versions 31–33 serialized order
 
 All multi-byte fields are little-endian.
 
@@ -35,13 +35,13 @@ All multi-byte fields are little-endian.
 
 ## Octree and geometry
 
-Node tags are `children`, `empty`, `solid`, `normal`, and `lodcube`. A non-branch node stores six texture IDs. Normal and LOD cubes store twelve edge bytes, each containing two four-bit edge endpoints. Version 33 optionally stores a 16-bit material, merge mask, and compact surface block. Version 32 stores the same material information in the legacy one-byte bitfield; `convertoldmaterial` expands its volume, clip, and flag fields to the current layout exactly as `worldio.cpp` does.
+Node tags are `children`, `empty`, `solid`, `normal`, and `lodcube`. A non-branch node stores six texture IDs. Normal and LOD cubes store twelve edge bytes, each containing two four-bit edge endpoints. Version 33 optionally stores a 16-bit material, merge mask, and compact surface block. Version 32 stores the same material information in the legacy one-byte bitfield; `convertoldmaterial` expands its volume, clip, and flag fields to the current layout exactly as `worldio.cpp` does. Version 31 uses the earlier cube mask plus `surfacecompat`, `normalscompat`, and `mergecompat` records; these are converted into current surface vertices and layer flags by the original `convertoldsurfaces` rules.
 
 The decoded `OctreeCube` hierarchy is retained. Geometry generation visits leaves but never replaces the tree. Output is batched by root octant and VSlot. Until the complete engine `visibleface` behavior is ported, face suppression is deliberately conservative: only a solid neighbor at least as large as the current solid cube can hide a face. This retains some harmless internal faces but cannot turn partial neighbor coverage or deformed cubes into visible holes.
 
 Material-bearing leaves are additionally exposed as `SauerMap.materialVolumes`. Each record retains its raw 16-bit value, bounds, source cube kind, volume/index, clip mode, death flag, and alpha flag independently of ordinary world meshes. Water, lava, and glass are rendered as dedicated volume meshes. Clip, no-clip, game-clip, death, and alpha volumes remain hidden until the material debug toggle is enabled.
 
-FPS entities are decoded into `SauerMap.entityRegistry` while the serialized records remain available in `SauerMap.entities`. The registry covers the engine entity types and all FPS game types through flags, retains all five raw attributes, names type-specific attributes, and exposes yaw or jumppad direction where applicable. Mapmodel indices are matched against the `mapmodelreset`/`mmodel` configuration stream. The asset pipeline renders MD2, MD3, MD5, IQM, and OBJ models and reports missing or unsupported assets explicitly; entity debug markers remain available even when the model itself cannot be loaded.
+FPS entities are decoded into `SauerMap.entityRegistry` while the serialized records remain available in `SauerMap.entities`. The registry covers the engine entity types and all FPS game types through flags, retains all five raw attributes, names type-specific attributes, and exposes yaw or jumppad direction where applicable. For maps authored by another Sauerbraten game, the loader follows `worldio.cpp`: it skips the declared per-entity payload and retains engine entities while ignoring game-specific ones. Mapmodel indices are matched against the `mapmodelreset`/`mmodel` configuration stream. The asset pipeline renders MD2, MD3, MD5, IQM, and OBJ models and reports missing or unsupported assets explicitly; entity debug markers remain available even when the model itself cannot be loaded.
 
 Surface vertices use Sauerbraten's low-12-bit coordinate encoding. The renderer restores the high origin bits and divides by eight, matching `addcubeverts`. Explicit surface polygons are fan-triangulated with reversed winding after the centralized `(x, y, z) → (x, z, y)` conversion.
 
@@ -57,7 +57,7 @@ The restricted configuration reader resolves `skybox`, legacy `loadsky`, `yawsky
 
 ## Deliberate next steps
 
-- Port historical layout branches from `loadc` for formats 6–31.
+- Port historical layout branches from `loadc` for formats 6–30.
 - Replace conservative solid-neighbor face suppression with the complete `visibleface` / merged-face behavior from `octarender.cpp`.
 - Execute the safe texture subset of default and map `.cfg` files, resolve Slots/VSlots to package images, and generate texture UVs.
 - Decode PVS and blendmap payloads rather than stopping at the octree boundary.
