@@ -5,11 +5,15 @@ import { MAP_MENU_PAGES } from "./menuData";
 import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
 import { guiSkinMarkup } from "./guiSkin";
 import { bindCrosshairSettings, CROSSHAIRS, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
+import { loadHudSettings, saveHudSettings } from "./platform/browser/HudSettings";
 
 interface MapListItem {
   name: string;
   supported: boolean;
 }
+
+const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "keys", "console"] as const;
+type OptionTab = typeof OPTION_TABS[number];
 
 const app = required<HTMLDivElement>("#app");
 
@@ -29,7 +33,7 @@ const backgroundDecals = createBackgroundDecals();
 route();
 window.addEventListener("popstate", route);
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && normalizePath(location.pathname) === "/maps") navigate("/");
+  if (event.key === "Escape" && ["/maps", "/options"].includes(normalizePath(location.pathname))) navigate("/");
 });
 
 function route(): void {
@@ -42,8 +46,10 @@ function route(): void {
     void import("./gameRuntime");
     return;
   }
-  document.title = path === "/maps" ? "SauerWeb — Maps" : path === "/servers" ? "SauerWeb — Servers" : "SauerWeb";
-  if (path === "/bots") renderBotMatchMenu();
+  document.title = path === "/maps" ? "SauerWeb — Maps" : path === "/servers" ? "SauerWeb — Servers"
+    : path === "/options" ? "SauerWeb — Options" : "SauerWeb";
+  if (path === "/options") renderOptionsMenu();
+  else if (path === "/bots") renderBotMatchMenu();
   else if (path === "/modes") renderGameModeMenu();
   else if (path === "/maps") renderMapsMenu();
   else if (path === "/servers") renderServersMenu();
@@ -77,7 +83,7 @@ function renderMainMenu(): void {
           ${menuButton("bot match..", "bot", true)}
           ${menuButton("campaign..", "campaign", false)}
           <div class="menu-rule compact"></div>
-          ${menuButton("options..", "crosshair", true)}
+          ${menuButton("options..", "options", true)}
           ${menuButton("about..", "about", true)}
           ${menuButton("quit", "quit", false, "exit")}
         </nav>
@@ -165,13 +171,103 @@ function renderMainMenu(): void {
     const preview = document.querySelector<HTMLImageElement>(".crosshair-shortcut img");
     if (preview) preview.src = currentCrosshair(settings.selected).normal;
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-action='crosshair']").forEach((button) => {
-    button.addEventListener("click", () => crosshairDialog.showModal());
-  });
+  document.querySelectorAll<HTMLButtonElement>("[data-action='crosshair']").forEach((button) => button.addEventListener("click", () => crosshairDialog.showModal()));
+  required<HTMLButtonElement>("[data-action='options']").addEventListener("click", () => navigate("/options"));
   required<HTMLButtonElement>("[data-action='close-crosshair']").addEventListener("click", () => crosshairDialog.close());
   const about = required<HTMLDialogElement>("#about-dialog");
   required<HTMLButtonElement>("[data-action='about']").addEventListener("click", () => about.showModal());
   about.querySelector("button")?.addEventListener("click", () => about.close());
+}
+
+function renderOptionsMenu(activeTab: OptionTab = "game"): void {
+  const hud = loadHudSettings();
+  app.innerHTML = `
+    <main class="sauer-screen options-screen">
+      ${backgroundMarkup(false)}
+      <section class="sauer-dialog options-dialog" aria-labelledby="options-title">
+        ${guiSkinMarkup()}
+        <header class="maps-heading"><div><p>configuration</p><h1 id="options-title">options</h1></div>
+          <button id="options-back" class="back-button" type="button">‹ main menu</button></header>
+        <nav class="option-tabs" aria-label="Option categories">
+          ${OPTION_TABS.map((tab) => `<button type="button" role="tab" data-option-tab="${tab}" aria-selected="${tab === activeTab}"
+            class="${tab === activeTab ? "active" : ""}">${tab}</button>`).join("")}
+        </nav>
+        <section class="option-content" aria-live="polite">${optionTabMarkup(activeTab, hud.showFps)}</section>
+        <footer><span>Settings are saved on this device</span><span>Cube 2: Sauerbraten</span></footer>
+      </section>
+    </main>`;
+  required<HTMLButtonElement>("#options-back").addEventListener("click", () => navigate("/"));
+  document.querySelectorAll<HTMLButtonElement>("[data-option-tab]").forEach((button) => button.addEventListener("click", () => {
+    renderOptionsMenu(button.dataset.optionTab as OptionTab);
+  }));
+  const showFps = document.querySelector<HTMLInputElement>("#show-fps");
+  showFps?.addEventListener("change", () => saveHudSettings({ showFps: showFps.checked }));
+  document.querySelector<HTMLButtonElement>("[data-action='open-crosshair']")?.addEventListener("click", () => {
+    navigate("/");
+    document.querySelector<HTMLButtonElement>("[data-action='crosshair']")?.click();
+  });
+  document.querySelector<HTMLButtonElement>("[data-action='fullscreen']")?.addEventListener("click", () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.documentElement.requestFullscreen();
+  });
+}
+
+function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
+  if (tab === "game") return optionGroup("game", [
+    optionInfo("player model", PLAYER_MODEL_INFO[savedPlayerModel()].name),
+    optionInfo("player name", escapeHtml(savedPlayerName())),
+    optionNote("Player identity can be changed from the main menu."),
+  ]);
+  if (tab === "hud") return optionGroup("heads-up display", [
+    optionCheck("show FPS", "show-fps", showFps, "Display the current frame rate in the lower-right corner."),
+    `<button class="option-action" type="button" data-action="open-crosshair"><span><strong>crosshair</strong><small>Style, size and hit effects</small></span><b>adjust..</b></button>`,
+  ]);
+  if (tab === "gfx") return optionGroup("graphics", [
+    optionInfo("renderer", "WebGL"), optionInfo("shaders", "high detail"), optionInfo("dynamic lights", "enabled"),
+    optionNote("Graphics quality is selected automatically for this browser port."),
+  ]);
+  if (tab === "display") return optionGroup("display", [
+    `<button class="option-action" type="button" data-action="fullscreen"><span><strong>fullscreen</strong><small>Toggle browser fullscreen mode</small></span><b>toggle</b></button>`,
+    optionInfo("v-sync", "browser controlled"), optionInfo("field of view", "100"),
+  ]);
+  if (tab === "res") return optionGroup("resolution", [
+    optionInfo("current", `${window.innerWidth} × ${window.innerHeight}`),
+    optionInfo("device pixel ratio", window.devicePixelRatio.toFixed(2)),
+    optionNote("The viewport follows the browser window and scales automatically."),
+  ]);
+  if (tab === "sound") return optionGroup("sound", [
+    optionInfo("sound effects", "enabled"), optionInfo("music", "map controlled"),
+    optionNote("SauerWeb uses the browser audio mixer. Site volume can be adjusted from the browser tab."),
+  ]);
+  if (tab === "mouse") return optionGroup("mouse", [
+    optionInfo("mouse capture", "pointer lock"), optionInfo("weapon selection", "mouse wheel"),
+    optionNote("Click the game viewport to capture the mouse; press Escape to release it."),
+  ]);
+  if (tab === "keys") return optionGroup("keys", [
+    optionInfo("W A S D", "move"), optionInfo("space", "jump"), optionInfo("1–7 / wheel", "select weapon"),
+    optionInfo("T / Y", "chat / team chat"), optionInfo("F11", "console"), optionInfo("Escape", "pause"),
+  ]);
+  return optionGroup("console", [
+    optionInfo("F11", "open full console"), optionInfo("Page Up / Page Down", "scroll console"),
+    optionInfo("/", "enter command"), optionNote("The in-game console reports map, network and gameplay messages."),
+  ]);
+}
+
+function optionGroup(title: string, rows: string[]): string {
+  return `<div class="option-group"><h2>${title}</h2>${rows.join("")}</div>`;
+}
+
+function optionCheck(label: string, id: string, checked: boolean, description: string): string {
+  return `<label class="option-check" for="${id}"><span><strong>${label}</strong><small>${description}</small></span>
+    <input id="${id}" type="checkbox" ${checked ? "checked" : ""} /></label>`;
+}
+
+function optionInfo(label: string, value: string): string {
+  return `<div class="option-info"><span>${label}</span><strong>${value}</strong></div>`;
+}
+
+function optionNote(text: string): string {
+  return `<p class="option-note">${text}</p>`;
 }
 
 // Original: data/menus.cfg, newgui botmatch / startbotmatch.

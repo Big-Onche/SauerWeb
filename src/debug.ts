@@ -4,6 +4,7 @@ import type { SauerMap } from "./engine/octa";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
 import { MapScene, type SceneStats, type ViewportTuning } from "./render/MapScene";
 import { PhysicsState } from "./engine/physics/types";
+import { FpsHud } from "./platform/browser/FpsHud";
 
 interface MapListItem {
   name: string;
@@ -126,6 +127,7 @@ const gammaValue = required<HTMLOutputElement>("#gamma-value");
 const vibranceValue = required<HTMLOutputElement>("#vibrance-value");
 const parser = new SauerMapParser();
 const mapScene = new MapScene(canvas, "debug");
+const fpsHud = new FpsHud(required<HTMLElement>(".viewport-panel"));
 const launchParameters = new URLSearchParams(location.search);
 const multiplayerHost = launchParameters.get("server");
 const multiplayerPort = Number(launchParameters.get("port") || 28785);
@@ -190,7 +192,7 @@ window.addEventListener("keydown", (event) => {
   else if (mapScene.currentCameraMode() === "player" && event.code === "KeyR") mapScene.resetPlayer();
 });
 window.setInterval(() => updatePhysicsDebug(), 100);
-window.addEventListener("pagehide", () => mapScene.dispose(), { once: true });
+window.addEventListener("pagehide", () => { mapScene.dispose(); fpsHud.dispose(); }, { once: true });
 
 function setSettingsOpen(open: boolean): void {
   settingsPanel.hidden = !open;

@@ -6,6 +6,7 @@ import { SauerMapParser } from "./engine/worldio";
 import { GameModeFlag, gameModeHas, gameModeName } from "./fpsgame/game";
 import { guiSkinMarkup } from "./guiSkin";
 import { GameConsole } from "./platform/browser/GameConsole";
+import { FpsHud } from "./platform/browser/FpsHud";
 import { MapScene } from "./render/MapScene";
 import { bindCrosshairSettings, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 
@@ -72,6 +73,7 @@ const chat = required<HTMLFormElement>("#chat");
 const chatInput = required<HTMLInputElement>("#chat-input");
 const chatPrompt = required<HTMLLabelElement>("#chat-prompt");
 const gameConsole = new GameConsole(required<HTMLElement>(".viewport-panel"));
+const fpsHud = new FpsHud(required<HTMLElement>(".viewport-panel"));
 const scene = new MapScene(canvas, "game");
 const parser = new SauerMapParser();
 let activeMap = "";
@@ -231,6 +233,7 @@ function dispose(): void {
   window.removeEventListener("keydown", onKeyDown, { capture: true });
   scene.dispose();
   gameConsole.dispose();
+  fpsHud.dispose();
 }
 
 function fail(message: string): void {
