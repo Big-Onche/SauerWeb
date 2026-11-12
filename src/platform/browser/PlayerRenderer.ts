@@ -1,3 +1,4 @@
+import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
@@ -44,11 +45,35 @@ interface PlayerModelInstance {
   animation: string;
   frame: number;
   updateToken: number;
+  updating: boolean;
+  pendingUpdate?: ModelUpdateRequest;
   ragdoll?: PlayerRagdollState;
+}
+
+interface ModelUpdateRequest {
+  token: number;
+  modelIndex: number;
+  skin: "ffa" | "blueTeam" | "redTeam";
+  visualKey: string;
+  animation: string;
+  animationMilliseconds: number;
+  loop: boolean;
+  yaw: number;
+  selectedGun: number;
+  deadAt?: number;
+  nowMilliseconds: number;
+  velocity: Vec3;
+}
+
+interface MeshVertexBuffers {
+  positions: Float32Array;
+  normals: Float32Array;
+  indices: number[];
 }
 
 interface RagdollMeshBinding {
   positions: number[];
+  animatedPositions: Float32Array;
   joints: number[];
   jointPositions: number[];
 }
@@ -79,6 +104,7 @@ export class PlayerRenderer {
   private readonly binarySources = new Map<string, Promise<ArrayBuffer>>();
   private readonly geometryFrames = new Map<string, ModelGeometry>();
   private readonly ragdollSkeletons = new Map<string, Promise<RagdollSkeleton>>();
+  private readonly meshVertexBuffers = new WeakMap<Mesh, MeshVertexBuffers>();
   private assets?: Promise<PlayerModelAsset[]>;
   private viewWeapons?: Promise<ViewWeaponAsset[]>;
 
@@ -151,7 +177,7 @@ export class PlayerRenderer {
     let instance = this.instances.get(player.id);
     if (!instance) {
       instance = { root: new TransformNode(`player-${player.id}`, this.scene), meshes: [], weaponMeshes: [], weaponKey: "", visualKey: "",
-        animation: "", frame: -1, updateToken: 0 };
+        animation: "", frame: -1, updateToken: 0, updating: false };
       this.instances.set(player.id, instance);
     }
     instance.root.setEnabled(player.visible);
@@ -171,18 +197,51 @@ export class PlayerRenderer {
         : animation === "jump" ? player.timeInAir ?? 0 : attacking ? Math.max(0, nowMilliseconds - player.lastAction) : nowMilliseconds;
     const loop = !attacking && animation !== "dying" && animation !== "pain" && animation !== "jump";
     if (player.state !== ClientState.Dead) instance.ragdoll = undefined;
-    void this.updateModel(instance, model.index, skin, visualKey, animation, animationMilliseconds, loop, player.yaw, player.selectedGun,
-      player.state === ClientState.Dead ? player.deadAt ?? 0 : undefined, nowMilliseconds,
-      player.velocity ?? { x: 0, y: 0, z: player.velocityZ ?? 0 });
+    this.requestModelUpdate(instance, {
+      modelIndex: model.index,
+      skin,
+      visualKey,
+      animation,
+      animationMilliseconds,
+      loop,
+      yaw: player.yaw,
+      selectedGun: player.selectedGun,
+      deadAt: player.state === ClientState.Dead ? player.deadAt ?? 0 : undefined,
+      nowMilliseconds,
+      velocity: player.velocity ?? { x: 0, y: 0, z: player.velocityZ ?? 0 },
+    });
+  }
+
+  private requestModelUpdate(instance: PlayerModelInstance, request: Omit<ModelUpdateRequest, "token">): void {
+    instance.pendingUpdate = { ...request, token: ++instance.updateToken };
+    if (instance.updating) return;
+    instance.updating = true;
+    void this.processModelUpdates(instance);
+  }
+
+  private async processModelUpdates(instance: PlayerModelInstance): Promise<void> {
+    try {
+      while (instance.pendingUpdate) {
+        const request = instance.pendingUpdate;
+        instance.pendingUpdate = undefined;
+        await this.updateModel(instance, request.modelIndex, request.skin, request.visualKey, request.animation,
+          request.animationMilliseconds, request.loop, request.yaw, request.selectedGun, request.deadAt, request.nowMilliseconds,
+          request.velocity, request.token);
+      }
+    } finally {
+      instance.updating = false;
+      if (instance.pendingUpdate) this.requestModelUpdate(instance, instance.pendingUpdate);
+    }
   }
 
   private async updateModel(instance: PlayerModelInstance, modelIndex: number, skin: "ffa" | "blueTeam" | "redTeam", visualKey: string,
                             animation: string, animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number,
-                            deadAt: number | undefined, nowMilliseconds: number, velocity: Vec3): Promise<void> {
+                            deadAt: number | undefined, nowMilliseconds: number, velocity: Vec3, token: number): Promise<void> {
     const assets = await (this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
       return response.json() as Promise<PlayerModelAsset[]>;
     }));
+    if (token !== instance.updateToken) return;
     const definition = assets[modelIndex] ?? assets[0];
     const asset = definition?.[skin] ?? definition?.ffa;
     if (!definition || !asset || asset.status !== "ready" || !asset.geometryPath) return;
@@ -211,7 +270,6 @@ export class PlayerRenderer {
       -(asset.pitch ?? 0) * Math.PI / 180, 0);
     const frame = position.frame + (position.nextFrame !== position.frame ? position.interpolation : 0);
     if (instance.visualKey === visualKey && instance.animation === animation && instance.frame === frame) return;
-    const token = ++instance.updateToken;
     const geometry = await this.geometry(asset, animationPath, animationSource, animationBuffer, position);
     if (token !== instance.updateToken) return;
     if (instance.visualKey !== visualKey || instance.meshes.length !== geometry.meshes.length) {
@@ -278,7 +336,7 @@ export class PlayerRenderer {
       jointPositions.push(Vector3.Dot(relative, transform.axes[0]), Vector3.Dot(relative, transform.axes[1]),
         Vector3.Dot(relative, transform.axes[2]));
     }
-    return { positions, joints, jointPositions };
+    return { positions, animatedPositions: new Float32Array(positions.length), joints, jointPositions };
   }
 
   private applyRagdoll(instance: PlayerModelInstance): void {
@@ -290,7 +348,8 @@ export class PlayerRenderer {
     instance.meshes.forEach((mesh, meshIndex) => {
       const binding = ragdoll.bindings[meshIndex];
       if (!binding) return;
-      const positions = binding.positions.slice();
+      const positions = binding.animatedPositions;
+      positions.set(binding.positions);
       for (let vertexIndex = 0; vertexIndex < binding.joints.length; vertexIndex++) {
         const transform = currentJoints[binding.joints[vertexIndex]];
         const localOffset = vertexIndex * 3;
@@ -302,9 +361,7 @@ export class PlayerRenderer {
         positions[offset + 1] = point.y;
         positions[offset + 2] = point.z;
       }
-      const source = { name: mesh.name, positions, indices: Array.from(mesh.getIndices() ?? []),
-        uvs: Array.from(mesh.getVerticesData("uv") ?? []) };
-      this.applyMesh(mesh, source, positions);
+      this.updateMeshVertices(mesh, positions);
     });
   }
 
@@ -415,14 +472,29 @@ export class PlayerRenderer {
   }
 
   private applyMesh(mesh: Mesh, source: ModelGeometryMesh, positions: number[]): void {
-    const normals: number[] = [];
-    VertexData.ComputeNormals(positions, source.indices, normals);
+    let buffers = this.meshVertexBuffers.get(mesh);
+    if (buffers && buffers.positions.length === positions.length) {
+      this.updateMeshVertices(mesh, positions);
+      return;
+    }
+    buffers = { positions: Float32Array.from(positions), normals: new Float32Array(positions.length), indices: source.indices };
+    VertexData.ComputeNormals(buffers.positions, source.indices, buffers.normals);
     const data = new VertexData();
-    data.positions = positions;
+    data.positions = buffers.positions;
     data.indices = source.indices;
     data.uvs = source.uvs;
-    data.normals = normals;
+    data.normals = buffers.normals;
     data.applyToMesh(mesh, true);
+    this.meshVertexBuffers.set(mesh, buffers);
+  }
+
+  private updateMeshVertices(mesh: Mesh, positions: ArrayLike<number>): void {
+    const buffers = this.meshVertexBuffers.get(mesh);
+    if (!buffers || buffers.positions.length !== positions.length) return;
+    buffers.positions.set(positions);
+    VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
+    mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, true);
+    mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
   }
 
   private assetMaterial(prefix: string, asset: MapModelAsset, meshName: string): StandardMaterial {
