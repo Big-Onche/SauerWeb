@@ -27,6 +27,20 @@ interface Plane extends Vec3 {
   offset: number;
 }
 
+interface ClipGeometry {
+  minimum: Vec3;
+  maximum: Vec3;
+  center: Vec3;
+  radius: Vec3;
+  axisPlanes: Plane[];
+  planes: Plane[];
+}
+
+interface AxisCollisionResult {
+  collision?: CollisionResult;
+  separated: boolean;
+}
+
 const FACE_VERTICES = [
   [0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6],
 ];
@@ -35,6 +49,7 @@ const FACE_VERTICES = [
 export class OctreeCollisionWorld {
   private readonly planeCache = new WeakMap<OctreeCube, Plane[]>();
   private readonly rayPlaneCache = new WeakMap<OctreeCube, Plane[]>();
+  private readonly clipGeometryCache = new WeakMap<OctreeCube, ClipGeometry>();
   private readonly hiddenFaces: WeakMap<OctreeCube, number>;
 
   constructor(private readonly map: SauerMap) {
@@ -103,55 +118,44 @@ export class OctreeCollisionWorld {
       y: Math.floor(entity.position.y + entity.radius) + 1,
       z: Math.floor(entity.position.z + entity.aboveEye) + 1,
     };
-    let best: CollisionResult | undefined;
-    this.map.world.forEach((cube) => {
-      const result = this.visit(cube, entity, direction, cutoff, minimum, maximum);
-      if (result && (!best || result.distance > best.distance)) best = result;
-    });
     for (const model of this.mapModels) {
       const result = collideMapModel(entity, direction, model);
-      if (result && (!best || result.distance > best.distance)) best = result;
+      if (result) return result;
     }
-    return best;
+    for (const cube of this.map.world) {
+      const result = this.visit(cube, entity, direction, cutoff, minimum, maximum);
+      if (result) return result;
+    }
+    return undefined;
   }
 
   private visit(cube: OctreeCube, entity: PhysicsEntity, direction: Vec3, cutoff: number, minimum: Vec3,
                 maximum: Vec3): CollisionResult | undefined {
     if (!overlapsCube(cube, minimum, maximum)) return undefined;
     if (cube.children) {
-      let best: CollisionResult | undefined;
-      cube.children.forEach((child) => {
+      for (const child of cube.children) {
         const result = this.visit(child, entity, direction, cutoff, minimum, maximum);
-        if (result && (!best || result.distance > best.distance)) best = result;
-      });
-      return best;
+        if (result) return result;
+      }
+      return undefined;
     }
     const clip = cube.material & MATF_CLIP;
     if (clip === MAT_NOCLIP) return undefined;
     const forcedSolid = clip === MAT_CLIP && ((cube.material & MATF_VOLUME) === MAT_GLASS || entity.entityType < PhysicsEntityType.Camera) ||
       clip === MAT_GAMECLIP && entity.entityType === PhysicsEntityType.Ai;
     if (cube.kind === "empty" && !forcedSolid) return undefined;
-    return this.collidePlanes(entity, direction, cutoff, forcedSolid ? axisPlanes(cube) : this.planes(cube));
+    if (forcedSolid || cube.kind === "solid") {
+      return collideSolid(entity, direction, cutoff, cube, this.hiddenFaces.get(cube) ?? 0);
+    }
+    return collideDeformed(entity, direction, cutoff, this.clipGeometry(cube));
   }
 
-  private collidePlanes(entity: PhysicsEntity, direction: Vec3, cutoff: number, planes: Plane[]): CollisionResult | undefined {
-    let best: CollisionResult | undefined;
-    let bestDistance = -Infinity;
-    const directionLength = magnitude(direction);
-    for (const plane of planes) {
-      const support = capsuleSupport(entity, { x: -plane.x, y: -plane.y, z: -plane.z });
-      const distance = dot(plane, support) + plane.offset;
-      if (distance >= 0) return undefined;
-      if (distance <= bestDistance) continue;
-      bestDistance = distance;
-      best = undefined;
-      if (directionLength > 0) {
-        if (dot(plane, direction) >= -cutoff * directionLength) continue;
-        if (entity.entityType < PhysicsEntityType.Camera && distance < collisionMargin(entity, direction, plane)) continue;
-      }
-      best = { normal: { x: plane.x, y: plane.y, z: plane.z }, distance };
-    }
-    return best;
+  private clipGeometry(cube: OctreeCube): ClipGeometry {
+    const cached = this.clipGeometryCache.get(cube);
+    if (cached) return cached;
+    const geometry = buildClipGeometry(cube, this.hiddenFaces.get(cube) ?? 0);
+    this.clipGeometryCache.set(cube, geometry);
+    return geometry;
   }
 
   private planes(cube: OctreeCube, hideCoincidentFaces = true): Plane[] {
@@ -164,8 +168,6 @@ export class OctreeCollisionWorld {
       return planes;
     }
     const vertices = cubeVertices(cube);
-    const center = vertices.reduce((sum, vertex) => ({ x: sum.x + vertex.x / 8, y: sum.y + vertex.y / 8, z: sum.z + vertex.z / 8 }),
-      { x: 0, y: 0, z: 0 });
     const planes: Plane[] = [];
     const hidden = hideCoincidentFaces ? this.hiddenFaces.get(cube) ?? 0 : 0;
     FACE_VERTICES.forEach((face, orientation) => {
@@ -177,14 +179,172 @@ export class OctreeCollisionWorld {
       const second = corners[order + 1];
       const third = corners[order + 2];
       const fourth = corners[(order + 3) & 3];
-      const firstAdded = addTrianglePlane(planes, first, second, third, center);
+      const firstAdded = addTrianglePlane(planes, first, second, third);
       if ((!firstAdded || convexity !== 0) && !samePosition(first, fourth) && !samePosition(third, fourth)) {
-        addTrianglePlane(planes, first, third, fourth, center);
+        addTrianglePlane(planes, first, third, fourth);
       }
     });
     cache.set(cube, planes);
     return planes;
   }
+}
+
+function collideSolid(entity: PhysicsEntity, direction: Vec3, cutoff: number, cube: OctreeCube,
+                      hidden: number): CollisionResult | undefined {
+  if (Math.abs(entity.position.x - cube.origin.x - cube.size / 2) > entity.radius + cube.size / 2 ||
+      Math.abs(entity.position.y - cube.origin.y - cube.size / 2) > entity.radius + cube.size / 2 ||
+      entity.position.z + entity.aboveEye < cube.origin.z || entity.position.z - entity.eyeHeight > cube.origin.z + cube.size) {
+    return undefined;
+  }
+  return collideAxisPlanes(entity, direction, cutoff, axisPlanes(cube, hidden)).collision;
+}
+
+function collideDeformed(entity: PhysicsEntity, direction: Vec3, cutoff: number,
+                         geometry: ClipGeometry): CollisionResult | undefined {
+  if (Math.abs(entity.position.x - geometry.center.x) > geometry.radius.x + entity.radius ||
+      Math.abs(entity.position.y - geometry.center.y) > geometry.radius.y + entity.radius ||
+      entity.position.z + entity.aboveEye < geometry.minimum.z || entity.position.z - entity.eyeHeight > geometry.maximum.z) {
+    return undefined;
+  }
+
+  const axisResult = collideAxisPlanes(entity, direction, cutoff, geometry.axisPlanes);
+  if (axisResult.separated) return undefined;
+  let best = axisResult.collision;
+  let bestDistance = best?.distance ?? -Infinity;
+  const directionLength = magnitude(direction);
+  for (const candidate of geometry.planes) {
+    const support = capsuleSupport(entity, { x: -candidate.x, y: -candidate.y, z: -candidate.z });
+    const distance = dot(candidate, support) + candidate.offset;
+    if (distance >= 0) return undefined;
+    if (distance <= bestDistance) continue;
+
+    // This ordering is deliberate: cubecollideplanes()/fuzzycollideplanes() invalidate the previous candidate before
+    // testing the newly closest plane. A rejected closest plane therefore also rejects an older collision normal.
+    best = undefined;
+    bestDistance = distance;
+    if (directionLength > 0) {
+      if (dot(candidate, direction) >= -cutoff * directionLength) continue;
+      if (entity.entityType < PhysicsEntityType.Camera && distance < collisionMargin(entity, direction, candidate)) continue;
+    }
+    if (clampCollide(geometry, entity, candidate, support)) continue;
+    best = { normal: { x: candidate.x, y: candidate.y, z: candidate.z }, distance };
+  }
+  return best;
+}
+
+function collideAxisPlanes(entity: PhysicsEntity, direction: Vec3, cutoff: number, planes: Plane[]): AxisCollisionResult {
+  let best: CollisionResult | undefined;
+  let bestDistance = -Infinity;
+  const directionLength = magnitude(direction);
+  for (const candidate of planes) {
+    const support = capsuleSupport(entity, { x: -candidate.x, y: -candidate.y, z: -candidate.z });
+    const distance = dot(candidate, support) + candidate.offset;
+    if (distance > 0) return { separated: true };
+    if (distance <= bestDistance) continue;
+    if (directionLength > 0) {
+      if (dot(candidate, direction) >= -cutoff * directionLength) continue;
+      if (entity.entityType < PhysicsEntityType.Camera && distance < collisionMargin(entity, direction, candidate)) continue;
+    }
+    bestDistance = distance;
+    best = { normal: { x: candidate.x, y: candidate.y, z: candidate.z }, distance };
+  }
+  return { collision: best, separated: false };
+}
+
+function clampCollide(geometry: ClipGeometry, entity: PhysicsEntity, candidate: Plane, support: Vec3): boolean {
+  const center = {
+    x: entity.position.x,
+    y: entity.position.y,
+    z: entity.position.z + (entity.aboveEye - entity.eyeHeight) / 2,
+  };
+  const axes = ["x", "y", "z"] as const;
+  for (const axis of axes) {
+    const other = axes.filter((value) => value !== axis);
+    if (candidate[axis] === 0 || candidate[other[0]] === 0 && candidate[other[1]] === 0 ||
+        Math.abs(support[axis] - geometry.center[axis]) <= geometry.radius[axis]) continue;
+    const fixed = support[axis] < geometry.center[axis]
+      ? geometry.center[axis] - geometry.radius[axis]
+      : geometry.center[axis] + geometry.radius[axis];
+    const denominator = candidate[other[0]] ** 2 + candidate[other[1]] ** 2;
+    const planeDistance = (candidate[axis] * fixed + candidate[other[0]] * center[other[0]] +
+      candidate[other[1]] * center[other[1]] + candidate.offset) / denominator;
+    const projected = { ...center, [axis]: fixed };
+    projected[other[0]] -= candidate[other[0]] * planeDistance;
+    projected[other[1]] -= candidate[other[1]] * planeDistance;
+    const projectionDirection = subtract(projected, center);
+    if ((support[other[0]] - projected[other[0]]) * candidate[other[0]] +
+        (support[other[1]] - projected[other[1]]) * candidate[other[1]] >= 0) {
+      const entitySupport = capsuleSupport(entity, projectionDirection);
+      if (squaredDistance(entitySupport, center) < dot(projectionDirection, projectionDirection)) return true;
+    }
+  }
+  return false;
+}
+
+function buildClipGeometry(cube: OctreeCube, hidden: number): ClipGeometry {
+  const vertices = cubeVertices(cube);
+  const minimum = vertices.reduce((result, vertex) => ({
+    x: Math.min(result.x, vertex.x), y: Math.min(result.y, vertex.y), z: Math.min(result.z, vertex.z),
+  }), { x: Infinity, y: Infinity, z: Infinity });
+  const maximum = vertices.reduce((result, vertex) => ({
+    x: Math.max(result.x, vertex.x), y: Math.max(result.y, vertex.y), z: Math.max(result.z, vertex.z),
+  }), { x: -Infinity, y: -Infinity, z: -Infinity });
+  const center = {
+    x: (minimum.x + maximum.x) / 2, y: (minimum.y + maximum.y) / 2, z: (minimum.z + maximum.z) / 2,
+  };
+  const radius = {
+    x: (maximum.x - minimum.x) / 2, y: (maximum.y - minimum.y) / 2, z: (maximum.z - minimum.z) / 2,
+  };
+  const planes: Plane[] = [];
+  const axisVisible: number[] = [];
+  FACE_VERTICES.forEach((face, orientation) => {
+    if (hidden & (1 << orientation)) return;
+    const corners = face.map((index) => vertices[index]);
+    if (isFlatAxisFace(corners, orientation)) {
+      if (faceAreaSquared(corners) > 1e-12) axisVisible.push(orientation);
+      return;
+    }
+    appendFacePlanes(planes, corners);
+  });
+  const boundsPlanes = [plane(-1, 0, 0, minimum.x), plane(1, 0, 0, -maximum.x),
+    plane(0, -1, 0, minimum.y), plane(0, 1, 0, -maximum.y),
+    plane(0, 0, -1, minimum.z), plane(0, 0, 1, -maximum.z)];
+  return { minimum, maximum, center, radius, axisPlanes: axisVisible.map((orientation) => boundsPlanes[orientation]), planes };
+}
+
+function appendFacePlanes(planes: Plane[], corners: Vec3[]): void {
+  const convexity = faceConvexity(corners);
+  const order = convexity < 0 ? 1 : 0;
+  const first = corners[order];
+  const second = corners[order + 1];
+  const third = corners[order + 2];
+  const fourth = corners[(order + 3) & 3];
+  const firstAdded = addTrianglePlane(planes, first, second, third);
+  if ((!firstAdded || convexity !== 0) && !samePosition(first, fourth) && !samePosition(third, fourth)) {
+    addTrianglePlane(planes, first, third, fourth);
+  }
+}
+
+function isFlatAxisFace(corners: Vec3[], orientation: number): boolean {
+  const axis = ["x", "x", "y", "y", "z", "z"][orientation] as keyof Vec3;
+  return corners.every((corner) => Math.abs(corner[axis] - corners[0][axis]) < 1e-9);
+}
+
+function faceAreaSquared(corners: Vec3[]): number {
+  const first = subtract(corners[1], corners[0]), second = subtract(corners[2], corners[0]);
+  const third = subtract(corners[3], corners[0]);
+  return crossSquared(first, second) + crossSquared(second, third);
+}
+
+function crossSquared(first: Vec3, second: Vec3): number {
+  const cross = { x: first.y * second.z - first.z * second.y, y: first.z * second.x - first.x * second.z,
+    z: first.x * second.y - first.y * second.x };
+  return dot(cross, cross);
+}
+
+function squaredDistance(first: Vec3, second: Vec3): number {
+  const difference = subtract(first, second);
+  return dot(difference, difference);
 }
 
 function rayIntersectsPlanes(origin: Vec3, direction: Vec3, planes: Plane[], maximumDistance: number,
@@ -272,9 +432,12 @@ function collideMapModel(entity: PhysicsEntity, direction: Vec3, model: MapModel
   let normal: Vec3 | undefined;
   let penetration = 0;
   if (model.ellipse) {
-    const angle = Math.atan2(-localY, -localX);
-    const modelRadius = Math.hypot(model.radius.x * Math.cos(angle), model.radius.y * Math.sin(angle));
-    const distance = Math.hypot(dx, dy) - entity.radius - modelRadius;
+    const angle = Math.atan2(-dy, -dx);
+    const entityAngle = angle - (entity.yaw + 90) * Math.PI / 180;
+    const modelAngle = angle - (model.yaw + 90) * Math.PI / 180;
+    const entityRadius = Math.hypot(entity.xRadius * Math.cos(entityAngle), entity.yRadius * Math.sin(entityAngle));
+    const modelRadius = Math.hypot(model.radius.x * Math.cos(modelAngle), model.radius.y * Math.sin(modelAngle));
+    const distance = Math.hypot(dx, dy) - entityRadius - modelRadius;
     if (distance >= 0) return undefined;
     penetration = distance;
     if (distance > (entity.position.z < rotatedCenter.z ? below : above) &&
@@ -357,15 +520,12 @@ function cubeVertices(cube: OctreeCube): Vec3[] {
   return result;
 }
 
-function addTrianglePlane(planes: Plane[], first: Vec3, second: Vec3, third: Vec3, center: Vec3): boolean {
+function addTrianglePlane(planes: Plane[], first: Vec3, second: Vec3, third: Vec3): boolean {
   const ab = subtract(second, first), ac = subtract(third, first);
   const normal = { x: ab.y * ac.z - ab.z * ac.y, y: ab.z * ac.x - ab.x * ac.z, z: ab.x * ac.y - ab.y * ac.x };
   if (magnitude(normal) < 1e-8) return false;
   normalize(normal);
-  let offset = -dot(normal, first);
-  if (dot(normal, center) + offset > 0) {
-    normal.x *= -1; normal.y *= -1; normal.z *= -1; offset *= -1;
-  }
+  const offset = -dot(normal, first);
   if (!planes.some((candidate) => Math.abs(dot(candidate, normal) - 1) < 1e-5 && Math.abs(candidate.offset - offset) < 1e-4)) {
     planes.push({ ...normal, offset });
   }
@@ -396,7 +556,8 @@ function findCoincidentFaces(cubes: OctreeCube[]): WeakMap<OctreeCube, number> {
   });
   const hidden = new WeakMap<OctreeCube, number>();
   faces.forEach((entries) => entries.forEach((entry) => {
-    if (!entries.some((candidate) => candidate !== entry && candidate.orientation === (entry.orientation ^ 1))) return;
+    if (!entries.some((candidate) => candidate !== entry && candidate.orientation === (entry.orientation ^ 1) &&
+        (candidate.cube.material & MATF_CLIP) !== MAT_NOCLIP)) return;
     hidden.set(entry.cube, (hidden.get(entry.cube) ?? 0) | (1 << entry.orientation));
   }));
   return hidden;

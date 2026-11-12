@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createInputState } from "./input";
 import { runReplay, type PhysicsReplay } from "./replay";
 import { PhysicsSimulation } from "../physics";
@@ -49,5 +49,16 @@ describe("PhysicsSimulation", () => {
     expect(simulation.player.physicsState).toBe(PhysicsState.Float);
     expect(simulation.player.position.z).toBeGreaterThan(start);
     expect(simulation.player.falling).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it("shares the native collision retry budget across all movement substeps", () => {
+    const simulation = new PhysicsSimulation();
+    const move = vi.fn(() => false);
+    (simulation as unknown as { groundMover: { move: typeof move } }).groundMover = { move };
+
+    simulation.simulateEntity(simulation.player, 5);
+
+    // Native retries the first substep four times, then consumes the remaining nine substeps without further retries.
+    expect(move).toHaveBeenCalledTimes(14);
   });
 });

@@ -184,9 +184,9 @@ export class PhysicsSimulation {
       player.falling = vec3();
       addScaled(player.position, player.velocity, seconds);
     } else if (this.groundMover) {
+      let collisions = 0;
       for (let index = 0; index < 10; index++) {
-        let retries = 0;
-        while (!this.groundMover.move(player, displacement) && ++retries < 5) {}
+        if (!this.groundMover.move(player, displacement) && ++collisions < 5) index--;
       }
     } else {
       addScaled(player.position, player.velocity, seconds);

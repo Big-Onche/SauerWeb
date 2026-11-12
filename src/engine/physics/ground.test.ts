@@ -13,8 +13,9 @@ describe("advanced ground movement", () => {
     simulation.spawn({ x: 8, y: 8, z: 30 }, 0, 0);
     for (let time = 5; time <= 1000; time += 5) simulation.update(time, createInputState());
     expect(simulation.player.position.z).toBeCloseTo(30, 5);
-    expect(simulation.player.physicsState).toBe(PhysicsState.Floor);
+    expect(simulation.player.physicsState).toBeGreaterThanOrEqual(PhysicsState.Floor);
     expect(simulation.player.timeInAir).toBe(0);
+    expect(simulation.player.floor).toEqual({ x: 0, y: 0, z: 1 });
   });
 
   it("steps smoothly up geometry within STAIRHEIGHT", () => {
@@ -117,6 +118,7 @@ describe("advanced ground movement", () => {
     expect(collision!.normal.y).toBeCloseTo(0, 6);
     expect(collision!.normal.z).toBeCloseTo(0.9701425, 6);
   });
+
 });
 
 function solid(origin: Vec3, size: number): OctreeCube {

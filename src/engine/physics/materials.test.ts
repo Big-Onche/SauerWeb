@@ -54,6 +54,18 @@ describe("materials and mapmodel physics", () => {
     expect(collision?.normal).toEqual({ x: -1, y: 0, z: 0 });
   });
 
+  it("uses entity and model ellipse radii in their native yaw frames", () => {
+    const world = new OctreeCollisionWorld(mapWith());
+    world.setMapModels([{ entityIndex: 0, origin: { x: 10, y: 10, z: 0 }, yaw: 0, center: { x: 0, y: 0, z: 4 },
+      radius: { x: 2, y: 5, z: 4 }, ellipse: true }]);
+    const player = createPlayer({ x: 1.5, y: 10, z: 14 });
+    player.radius = 1;
+    player.xRadius = 1;
+    player.yRadius = 4;
+
+    expect(world.collide(player, { x: 1, y: 0, z: 0 })?.normal).toEqual({ x: -1, y: 0, z: 0 });
+  });
+
   it("marks negative-Z positions out of world like moveplayer", () => {
     const simulation = new PhysicsSimulation();
     simulation.setMap(mapWith());
