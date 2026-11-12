@@ -52,7 +52,9 @@ import { magnitude, normalize, subtract } from "../engine/physics/vector";
 import { AiStateType, AiTargetType, BotManager, type AiInterest, type BotActor } from "../fpsgame/ai";
 import { GameModeFlag, gameModeHas } from "../fpsgame/game";
 import { SIGHTMIN } from "../fpsgame/waypoint";
-import { RendererPerformanceOverlay } from "../platform/browser/RendererPerformanceOverlay";
+import { RendererPerformanceOverlay, type RendererDiagnosticState, type RendererResourceCounters,
+  type RendererResourceOwner } from "../platform/browser/RendererPerformanceOverlay";
+import { FrameProfiler } from "../platform/browser/FrameProfiler";
 
 export type CameraMode = "free" | "player";
 
@@ -147,6 +149,9 @@ export class MapScene {
   private lastBotNetworkUpdate = 0;
   private readonly resizeObserver: ResizeObserver;
   private readonly performanceOverlay: RendererPerformanceOverlay;
+  private readonly frameProfiler = new FrameProfiler();
+  private readonly renderDiagnostics: RendererDiagnosticState = { particles: true, bots: true, world: true };
+  private particleUpdateStartedAt = 0;
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
     this.canvas = canvas;
@@ -174,7 +179,14 @@ export class MapScene {
     this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
-    this.performanceOverlay = new RendererPerformanceOverlay(viewport, this.engine, this.scene);
+    this.performanceOverlay = new RendererPerformanceOverlay(viewport, this.engine, this.scene, this.frameProfiler,
+      () => this.resourceCounters(), () => ({ ...this.renderDiagnostics }), (diagnostic) => this.toggleRenderDiagnostic(diagnostic));
+    this.physics.raycastPerformanceRecorder = (milliseconds) => this.frameProfiler.recordRaycast(milliseconds);
+    this.physics.raycastPerformanceEnabled = () => this.frameProfiler.enabled;
+    this.bots.performanceRecorder = (phase, operation) => {
+      const key = phase === "ai" ? "botAi" : phase === "physics" ? "botPhysics" : "weaponSimulation";
+      this.frameProfiler.measure(key, operation);
+    };
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events);
     this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
@@ -188,7 +200,7 @@ export class MapScene {
       }, distance, radius, true);
       return hit ? { position: { x: hit.position.x, y: hit.position.z, z: hit.position.y },
         normal: { x: hit.normal.x, y: hit.normal.z, z: hit.normal.y } } : undefined;
-    });
+    }, (milliseconds) => this.frameProfiler.record("playerGeometry", milliseconds), () => this.frameProfiler.enabled);
     this.ctfRenderer = new CtfRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
     this.weaponInput.enabled = runtimeMode === "game";
@@ -200,6 +212,12 @@ export class MapScene {
       if (event.type !== "shot-effect") return undefined;
       if (event.clientNumber === this.fpsClient.multiplayer.clientNumber) return this.weaponRenderer.muzzlePosition();
       return event.clientNumber === undefined ? undefined : this.playerRenderer.muzzlePosition(event.clientNumber);
+    });
+    this.scene.onBeforeParticlesRenderingObservable.add(() => {
+      if (this.frameProfiler.enabled) this.particleUpdateStartedAt = performance.now();
+    });
+    this.scene.onAfterParticlesRenderingObservable.add(() => {
+      if (this.frameProfiler.enabled) this.frameProfiler.record("particleUpdates", performance.now() - this.particleUpdateStartedAt);
     });
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
     new WeaponAudio(this.weapons.events);
@@ -223,11 +241,12 @@ export class MapScene {
 
     this.engine.runRenderLoop(() => {
       const frameStartedAt = performance.now();
-      this.updatePhysics(performance.now());
+      this.updatePhysics(frameStartedAt);
       const gameLogicFinishedAt = performance.now();
       this.scene.render();
       const frameFinishedAt = performance.now();
-      this.performanceOverlay.recordFrame(gameLogicFinishedAt - frameStartedAt, frameFinishedAt - frameStartedAt, frameFinishedAt);
+      const profile = this.frameProfiler.finishFrame();
+      this.performanceOverlay.recordFrame(gameLogicFinishedAt - frameStartedAt, frameFinishedAt - frameStartedAt, frameFinishedAt, profile);
     });
     window.addEventListener("resize", this.resize);
     this.resizeObserver = new ResizeObserver(this.resize);
@@ -338,6 +357,7 @@ export class MapScene {
     this.placeCamera(map, batches);
     this.fpsClient.multiplayer.synchronizeLocalState();
     this.syncPlayerView();
+    this.applyRenderDiagnostics();
     return {
       meshes: batches.length + materialBatches.length + loadedMapModels.meshes.length,
       faces,
@@ -897,34 +917,76 @@ export class MapScene {
       player.move = player.strafe = 0;
       player.physicsState = PhysicsState.Float;
       renderPosition = player.position;
-    } else renderPosition = this.physics.update(nowMilliseconds, input);
+    } else renderPosition = this.frameProfiler.measure("playerPhysics", () => this.physics.update(nowMilliseconds, input));
     this.updatePlayerCamera(renderPosition);
-    const aimTarget = this.aimTarget();
-    this.crosshairHUD.update(this.aimingAtTeammate(aimTarget));
+    const aimTarget = this.frameProfiler.measure("weaponSimulation", () => this.aimTarget());
+    this.frameProfiler.measure("hud", () => this.crosshairHUD.update(this.aimingAtTeammate(aimTarget)));
     this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
-    if (followed) this.weaponHUD.render({ health: followed.health, selectedGun: followed.selectedGun, ammo: followed.ammo });
-    this.weapons.update(nowMilliseconds, aimTarget);
+    if (followed) this.frameProfiler.measure("hud", () =>
+      this.weaponHUD.render({ health: followed.health, selectedGun: followed.selectedGun, ammo: followed.ammo }));
+    this.frameProfiler.measure("weaponSimulation", () => this.weapons.update(nowMilliseconds, aimTarget));
     this.bots.update(nowMilliseconds, [...this.fpsClient.multiplayer.players.values()].filter((player) =>
       player.aiType === 0 || player.ownerNumber >= 0), !dead);
-    for (const bot of this.bots.bots.values()) if (bot.ownerNumber < 0) this.fpsClient.multiplayer.syncLocalBot(bot);
-    this.syncBotTargets();
-    if (nowMilliseconds - this.lastBotNetworkUpdate >= 33) {
-      this.lastBotNetworkUpdate = nowMilliseconds;
-      for (const bot of this.bots.bots.values()) {
-        if (bot.ownerNumber === this.fpsClient.multiplayer.clientNumber && bot.alive) {
-          this.fpsClient.multiplayer.sendOwnedBotPosition(bot, bot.clientNumber, bot.lifeSequence);
+    this.frameProfiler.measure("networking", () => {
+      for (const bot of this.bots.bots.values()) if (bot.ownerNumber < 0) this.fpsClient.multiplayer.syncLocalBot(bot);
+      this.syncBotTargets();
+      if (nowMilliseconds - this.lastBotNetworkUpdate >= 33) {
+        this.lastBotNetworkUpdate = nowMilliseconds;
+        for (const bot of this.bots.bots.values()) {
+          if (bot.ownerNumber === this.fpsClient.multiplayer.clientNumber && bot.alive) {
+            this.fpsClient.multiplayer.sendOwnedBotPosition(bot, bot.clientNumber, bot.lifeSequence);
+          }
         }
       }
-    }
-    this.fpsClient.multiplayer.update(nowMilliseconds);
-    if (this.fpsClient.multiplayer.isLocalGame) {
-      for (const bot of this.bots.bots.values()) {
-        const player = this.fpsClient.multiplayer.players.get(bot.clientNumber);
-        if (bot.ownerNumber < 0 && player) bot.flags = player.flags;
+      this.fpsClient.multiplayer.update(nowMilliseconds);
+      if (this.fpsClient.multiplayer.isLocalGame) {
+        for (const bot of this.bots.bots.values()) {
+          const player = this.fpsClient.multiplayer.players.get(bot.clientNumber);
+          if (bot.ownerNumber < 0 && player) bot.flags = player.flags;
+        }
       }
-    }
-    this.multiplayerHUD.render();
+    });
+    this.frameProfiler.measure("hud", () => this.multiplayerHUD.render());
     this.updateNetworkPlayers();
+  }
+
+  private toggleRenderDiagnostic(diagnostic: keyof RendererDiagnosticState): void {
+    this.renderDiagnostics[diagnostic] = !this.renderDiagnostics[diagnostic];
+    this.applyRenderDiagnostics();
+  }
+
+  private applyRenderDiagnostics(): void {
+    this.particleRenderer.setRenderingEnabled(this.renderDiagnostics.particles);
+    for (const mesh of this.scene.meshes) {
+      const owner = this.resourceOwner(mesh.name);
+      if (owner === "world" || owner === "mapmodels") mesh.isVisible = this.renderDiagnostics.world;
+    }
+  }
+
+  private resourceCounters(): RendererResourceCounters {
+    const counters: RendererResourceCounters = {
+      world: { meshes: 0, materials: 0 },
+      mapmodels: { meshes: 0, materials: 0 },
+      players: { meshes: 0, materials: 0 },
+      weapons: { meshes: 0, materials: 0 },
+      particles: { meshes: 0, materials: 0 },
+      debugging: { meshes: 0, materials: 0 },
+    };
+    for (const mesh of this.scene.meshes) counters[this.resourceOwner(mesh.name)].meshes++;
+    for (const material of this.scene.materials) counters[this.resourceOwner(material.name)].materials++;
+    return counters;
+  }
+
+  private resourceOwner(name: string): RendererResourceOwner {
+    if (name.startsWith("mapmodel-")) return "mapmodels";
+    if (name.startsWith("player-") || name.startsWith("ragdoll-")) return "players";
+    if (name.startsWith("hudgun-") || name.startsWith("weapon-projectile-")) return "weapons";
+    if (name.includes("particle") || name.startsWith("map-flame") || name.startsWith("map-smoke") || name.startsWith("beam-")) {
+      return "particles";
+    }
+    if (name.startsWith("entity-") || name.startsWith("waypoint-") || name.startsWith("material-volume-") ||
+        name.startsWith("volume-material-")) return "debugging";
+    return "world";
   }
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
@@ -1005,6 +1067,7 @@ export class MapScene {
     for (const [clientNumber, player] of multiplayer.players) {
       const ownedBot = this.bots.bots.get(clientNumber);
       if (ownedBot?.ownerNumber === multiplayer.clientNumber) continue;
+      if (!this.renderDiagnostics.bots && player.aiType !== 0) continue;
       const local = clientNumber === multiplayer.clientNumber;
       if (!local) interpolateNetworkEntity(player, nowMilliseconds);
       if (local && !thirdPersonView) continue;
@@ -1040,6 +1103,7 @@ export class MapScene {
       });
     }
     for (const bot of this.bots.bots.values()) {
+      if (!this.renderDiagnostics.bots) continue;
       if (multiplayer.players.has(bot.clientNumber) && bot.ownerNumber !== multiplayer.clientNumber) continue;
       players.push({
         id: bot.clientNumber, model: bot.model % 5, team: bot.team, local: false,

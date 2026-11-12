@@ -108,7 +108,8 @@ export class PlayerRenderer {
   private assets?: Promise<PlayerModelAsset[]>;
   private viewWeapons?: Promise<ViewWeaponAsset[]>;
 
-  constructor(private readonly scene: Scene, private readonly ragdollCollider?: RagdollCollider) {}
+  constructor(private readonly scene: Scene, private readonly ragdollCollider?: RagdollCollider,
+              private readonly performanceRecorder?: (milliseconds: number) => void, private readonly profilingEnabled?: () => boolean) {}
 
   rendergame(players: readonly RenderPlayer[], gameMode: number, teamskins: boolean, localTeam: string, nowMilliseconds: number): void {
     const active = new Set<number>();
@@ -340,6 +341,16 @@ export class PlayerRenderer {
   }
 
   private applyRagdoll(instance: PlayerModelInstance): void {
+    const profiling = this.performanceRecorder && this.profilingEnabled?.();
+    const startedAt = profiling ? performance.now() : 0;
+    try {
+      this.applyRagdollGeometry(instance);
+    } finally {
+      if (profiling) this.performanceRecorder!(performance.now() - startedAt);
+    }
+  }
+
+  private applyRagdollGeometry(instance: PlayerModelInstance): void {
     const ragdoll = instance.ragdoll;
     if (!ragdoll) return;
     const currentLocalVertices = ragdoll.simulation.vertices.map((vertex) => Vector3.TransformCoordinates(
@@ -436,7 +447,7 @@ export class PlayerRenderer {
     const current = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.frame);
     if (position.interpolation <= 0 || position.nextFrame === position.frame) return current;
     const next = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.nextFrame);
-    return interpolateModelGeometry(current, next, position.interpolation);
+    return this.profile(() => interpolateModelGeometry(current, next, position.interpolation));
   }
 
   private async geometryFrame(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
@@ -445,8 +456,13 @@ export class PlayerRenderer {
     const cached = this.geometryFrames.get(key);
     if (cached) return cached;
     let geometry: ModelGeometry;
-    if (asset.format === "MD5") geometry = parseMd5(await this.fetchText(asset.geometryPath!), animationSource, [], frame);
-    else if (asset.format === "IQM") geometry = parseIqm(await this.fetchBinary(asset.geometryPath!), animationBuffer, frame);
+    if (asset.format === "MD5") {
+      const source = await this.fetchText(asset.geometryPath!);
+      geometry = this.profile(() => parseMd5(source, animationSource, [], frame));
+    } else if (asset.format === "IQM") {
+      const source = await this.fetchBinary(asset.geometryPath!);
+      geometry = this.profile(() => parseIqm(source, animationBuffer, frame));
+    }
     else throw new Error(`Player model format ${asset.format ?? "unknown"} is not supported.`);
     this.geometryFrames.set(key, geometry);
     return geometry;
@@ -465,9 +481,11 @@ export class PlayerRenderer {
   }
 
   private updateMeshes(meshes: Mesh[], sources: ModelGeometryMesh[], asset: MapModelAsset): void {
-    sources.forEach((source, index) => {
-      const positions = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
-      this.applyMesh(meshes[index], source, positions);
+    this.profile(() => {
+      sources.forEach((source, index) => {
+        const positions = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
+        this.applyMesh(meshes[index], source, positions);
+      });
     });
   }
 
@@ -553,6 +571,16 @@ export class PlayerRenderer {
     instance.weaponMeshes = [];
     instance.weaponKey = "";
     instance.muzzle = undefined;
+  }
+
+  private profile<T>(operation: () => T): T {
+    if (!this.performanceRecorder || !this.profilingEnabled?.()) return operation();
+    const startedAt = performance.now();
+    try {
+      return operation();
+    } finally {
+      this.performanceRecorder(performance.now() - startedAt);
+    }
   }
 }
 

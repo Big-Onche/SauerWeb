@@ -31,6 +31,8 @@ export class PhysicsSimulation {
   private lastSchedule = { steps: 0, stepMilliseconds: 5, interpolation: 1 };
   private groundMover?: GroundMover;
   private collisionWorld?: OctreeCollisionWorld;
+  raycastPerformanceRecorder?: (milliseconds: number) => void;
+  raycastPerformanceEnabled?: () => boolean;
 
   setMap(map: SauerMap): void {
     this.collisionWorld = new OctreeCollisionWorld(map);
@@ -42,7 +44,15 @@ export class PhysicsSimulation {
   }
 
   raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0, skipFirst = false): RaycastResult | undefined {
-    return this.collisionWorld?.raycast(origin, direction, maximumDistance, radius, skipFirst);
+    if (!this.raycastPerformanceRecorder || !this.raycastPerformanceEnabled?.()) {
+      return this.collisionWorld?.raycast(origin, direction, maximumDistance, radius, skipFirst);
+    }
+    const startedAt = performance.now();
+    try {
+      return this.collisionWorld?.raycast(origin, direction, maximumDistance, radius, skipFirst);
+    } finally {
+      this.raycastPerformanceRecorder(performance.now() - startedAt);
+    }
   }
 
   spawn(position: Vec3, yaw: number, nowMilliseconds: number): void {

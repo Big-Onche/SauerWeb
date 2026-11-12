@@ -80,6 +80,7 @@ const SAUER_EMIT_MILLIS = 17;
 const MAX_POOLED_PARTICLE_SYSTEMS = 16;
 const MAX_POOLED_SPRITES = 64;
 const MAX_POOLED_BEAMS = 128;
+const PARTICLE_LAYER_MASK = 0x0fffffff;
 
 /** Babylon presentation of Sauerbraten's renderparticles.cpp particle recipes. */
 export class ParticleRenderer {
@@ -92,6 +93,7 @@ export class ParticleRenderer {
   private readonly persistentMeshes = new Set<Mesh>();
   private readonly effects: SpriteEffect[] = [];
   private readonly projectiles = new Map<number, ProjectileEffect>();
+  private renderingEnabled = true;
 
   constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera,
               private readonly taggedMuzzle: (event: WeaponEvent) => Vec3 | undefined) {
@@ -102,6 +104,15 @@ export class ParticleRenderer {
     this.clear();
     entities.filter((entity) => entity.typeName === "particles").forEach((entity) => this.createMapEmitter(entity));
     this.scene.onBeforeRenderObservable.add(() => this.update());
+  }
+
+  setRenderingEnabled(enabled: boolean): void {
+    this.renderingEnabled = enabled;
+    this.systems.forEach((system) => { system.layerMask = enabled ? PARTICLE_LAYER_MASK : 0; });
+    this.systemPool.forEach(({ system }) => { system.layerMask = enabled ? PARTICLE_LAYER_MASK : 0; });
+    this.persistentMeshes.forEach((mesh) => { mesh.isVisible = enabled; });
+    this.effects.forEach((effect) => { effect.mesh.isVisible = enabled; });
+    this.projectiles.forEach((projectile) => { if (projectile.mesh) projectile.mesh.isVisible = enabled; });
   }
 
   clear(): void {
@@ -264,6 +275,7 @@ export class ParticleRenderer {
     const material = this.spriteMaterial(`projectile-${id}`, texture, color, true);
     const nativeSize = gun === Gun.Rocket ? 2.5 : 4.8;
     const mesh = MeshBuilder.CreatePlane(`weapon-projectile-${id}`, { size: sauerParticleDiameter(nativeSize) }, this.scene);
+    mesh.isVisible = this.renderingEnabled;
     mesh.position.copyFrom(toBabylonPosition(position));
     mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
     mesh.isPickable = false;
@@ -340,6 +352,7 @@ export class ParticleRenderer {
     const pooled = pooledIndex >= 0 ? this.systemPool.splice(pooledIndex, 1)[0] : undefined;
     const system = pooled?.system ?? new ParticleSystem(name, capacity, this.scene, undefined, tiled);
     system.reset();
+    system.layerMask = this.renderingEnabled ? PARTICLE_LAYER_MASK : 0;
     const states = new WeakMap<Particle, SauerParticleState>();
     let particleIndex = 0;
     system.particleTexture = this.particleTexture(options.texture);
@@ -452,6 +465,7 @@ export class ParticleRenderer {
     const material = this.spriteMaterial(`particle-${texture}`, texture, color, additive);
     const mesh = this.spritePool.pop() ?? MeshBuilder.CreatePlane("particle-sprite", { size: 1 }, this.scene);
     mesh.setEnabled(true);
+    mesh.isVisible = this.renderingEnabled;
     mesh.visibility = 1;
     mesh.position.copyFrom(toBabylonPosition(position));
     mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
@@ -469,6 +483,7 @@ export class ParticleRenderer {
   private persistentSprite(position: Vec3, texture: ParticleTexture, color: number, size: number, additive: boolean): void {
     const material = this.spriteMaterial(`map-${texture}`, texture, color, additive);
     const mesh = MeshBuilder.CreatePlane(`map-particle-${texture}`, { size }, this.scene);
+    mesh.isVisible = this.renderingEnabled;
     mesh.position.copyFrom(toBabylonPosition(position));
     mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
     mesh.isPickable = false;
@@ -485,10 +500,12 @@ export class ParticleRenderer {
     let mesh = this.beamPool.pop();
     if (mesh) {
       mesh.setEnabled(true);
+      mesh.isVisible = this.renderingEnabled;
       mesh.visibility = 1;
       mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
     } else {
       mesh = new Mesh(`particle-beam-${texture}`, this.scene);
+      mesh.isVisible = this.renderingEnabled;
       const data = new VertexData();
       data.positions = positions;
       data.indices = [0, 1, 2, 0, 2, 3];
@@ -510,6 +527,7 @@ export class ParticleRenderer {
     const createPart = (name: string, x: number, partWidth: number, partColor: number) => {
       if (partWidth <= 0) return;
       const mesh = MeshBuilder.CreatePlane(name, { width: partWidth, height }, this.scene);
+      mesh.isVisible = this.renderingEnabled;
       mesh.position.copyFrom(toBabylonPosition(position));
       mesh.position.x += x;
       mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;

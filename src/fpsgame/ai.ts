@@ -106,6 +106,7 @@ export interface AiInterest {
 
 // Original: src/fpsgame/ai.cpp, ai.h and the aifind/aicheck/aidefend/aipursue hooks in capture.h, ctf.h and collect.h.
 export class BotManager {
+  performanceRecorder?: (phase: "ai" | "physics" | "weapons", operation: () => void) => void;
   readonly bots = new Map<number, BotActor>();
   readonly waypoints: WaypointSystem;
   aidebug = 0;
@@ -267,7 +268,7 @@ export class BotManager {
     this.iteration = (this.iteration + 1) % actors.length;
     for (let index = 0; index < actors.length; index++) {
       const bot = actors[index];
-      this.syncWeaponState(bot);
+      this.profile("weapons", () => this.syncWeaponState(bot));
       if (!bot.alive) {
         if (now - bot.deadAt >= 500 && bot.respawned !== bot.lifeSequence) {
           bot.respawned = bot.lifeSequence;
@@ -276,12 +277,17 @@ export class BotManager {
         }
         continue;
       }
-      this.navigate(bot);
-      this.think(bot, now, index === this.iteration, players, localAlive);
-      this.physics.simulateEntity(bot, Math.max(1, elapsed));
-      this.timeouts(bot, elapsed, now);
-      this.checkItems(bot, now);
-      const fired = bot.weaponSystem.update(now, bot.ai.target);
+      this.profile("ai", () => {
+        this.navigate(bot);
+        this.think(bot, now, index === this.iteration, players, localAlive);
+      });
+      this.profile("physics", () => this.physics.simulateEntity(bot, Math.max(1, elapsed)));
+      this.profile("ai", () => {
+        this.timeouts(bot, elapsed, now);
+        this.checkItems(bot, now);
+      });
+      let fired = false;
+      this.profile("weapons", () => { fired = bot.weaponSystem.update(now, bot.ai.target); });
       if (fired && bot.selectedGun === Gun.Pistol && bot.skill <= 100) {
         const controller = bot.weaponSystem.controller;
         controller.gunWait += Math.trunc(controller.gunWait * ((101 - bot.skill + this.rnd(111 - bot.skill)) / 100));
@@ -290,6 +296,11 @@ export class BotManager {
       bot.jumping = false;
       if (!bot.alive || bot.health <= 0 || bot.clientState === ClientState.Dead) this.killed(bot, undefined, now);
     }
+  }
+
+  private profile(phase: "ai" | "physics" | "weapons", operation: () => void): void {
+    if (this.performanceRecorder) this.performanceRecorder(phase, operation);
+    else operation();
   }
 
   private timeouts(bot: BotActor, elapsed: number, now: number): void {
