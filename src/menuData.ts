@@ -57,6 +57,15 @@ export const MAP_MENU_PAGES: readonly MapMenuPage[] = [
   page("concept", "concept", "concept", [concept, [], []]),
 ];
 
+const CAPTURE_MODES = new Set([9, 10, 15, 16, 19]);
+
+export function mapMenuPagesForMode(mode: number): readonly MapMenuPage[] {
+  if (mode >= 0 && mode <= 8) return MAP_MENU_PAGES;
+  if (CAPTURE_MODES.has(mode)) return MAP_MENU_PAGES.filter((page) => page.category === "capture");
+  if (mode >= 11) return MAP_MENU_PAGES.filter((page) => page.category === "ctf");
+  return MAP_MENU_PAGES.filter((page) => page.category === "ffa");
+}
+
 function words(value: string): string[] {
   return value.split(/\s+/);
 }

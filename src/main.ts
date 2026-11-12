@@ -1,13 +1,15 @@
 import "./menu.css";
 import "./guiSkin.css";
 import { refreshservers, servercompatible, servermodename, sortservers, type ServerListItem } from "./engine/serverbrowser";
-import { MAP_MENU_PAGES } from "./menuData";
+import { GAME_MODE_DESCRIPTIONS } from "./fpsgame/game";
+import { MAP_MENU_PAGES, mapMenuPagesForMode } from "./menuData";
 import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
 import { guiSkinMarkup } from "./guiSkin";
 import { bindCrosshairSettings, CROSSHAIRS, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 import { loadHudSettings, saveHudSettings } from "./platform/browser/HudSettings";
 import { loadMusicVolume, musicPlayer } from "./platform/browser/MusicPlayer";
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
+import { sauerFormattedMarkup } from "./sauerFormatting";
 
 interface MapListItem {
   name: string;
@@ -241,7 +243,7 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
         ${guiSkinMarkup()}
         <header class="maps-heading"><div><p>configuration</p><h1 id="options-title">options</h1></div>
           <button id="options-back" class="back-button" type="button">‹ main menu</button></header>
-        <nav class="option-tabs" aria-label="Option categories">
+        <nav class="option-tabs" role="tablist" aria-label="Option categories">
           ${OPTION_TABS.map((tab) => `<button type="button" role="tab" data-option-tab="${tab}" aria-selected="${tab === activeTab}"
             class="${tab === activeTab ? "active" : ""}">${tab}</button>`).join("")}
         </nav>
@@ -340,15 +342,15 @@ function renderBotMatchMenu(): void {
       ${backgroundMarkup(false)}
       <section class="sauer-dialog botmatch-dialog" aria-labelledby="botmatch-title">
         ${guiSkinMarkup()}
-        <header class="maps-heading"><div><p>bot match</p><h1 id="botmatch-title">bot match</h1></div>
+        <header class="maps-heading"><div><p>bot match</p><h1 id="botmatch-title">bot settings</h1></div>
           <button id="botmatch-back" class="back-button" type="button">‹ main menu</button></header>
         <div class="botmatch-controls">
           ${botSlider("bot amount", "botmatch-count", botMatchCount, 0, 32)}
           ${botSlider("bot minimum skill", "botmatch-min-skill", botMatchMinSkill, 50, 101)}
           ${botSlider("bot maximum skill", "botmatch-max-skill", botMatchMaxSkill, 50, 101)}
-          <button id="start-bot-match" class="primary-map-action" type="button">start match..</button>
+          <button id="start-bot-match" class="primary-map-action" type="button">choose game mode</button>
         </div>
-        <footer><span>Native Sauerbraten bot configuration</span><span>skill 50–101</span></footer>
+        <footer><span>Configure the number and skill level of your opponents</span></footer>
       </section>
     </main>`;
   required<HTMLButtonElement>("#botmatch-back").addEventListener("click", () => navigate("/"));
@@ -374,24 +376,51 @@ function renderGameModeMenu(): void {
     [[11, "ctf"], [12, "insta ctf"], [17, "efficiency ctf"], [13, "protect"], [14, "insta protect"], [18, "efficiency protect"],
       [15, "hold"], [16, "insta hold"], [19, "efficiency hold"], [20, "collect"], [21, "insta collect"], [22, "efficiency collect"]],
   ];
+  const choices = columns.flat();
+  const initialChoice = choices.find(([mode]) => mode === selectedBotMode) ?? choices[0];
   app.innerHTML = `
     <main class="sauer-screen">${backgroundMarkup(false)}
       <section class="sauer-dialog gamemode-dialog" aria-labelledby="gamemode-title">${guiSkinMarkup()}
         <header class="maps-heading"><div><p>bot match</p><h1 id="gamemode-title">game mode</h1></div>
           <button id="gamemode-back" class="back-button" type="button">‹ bot match</button></header>
-        <div class="gamemode-columns">${columns.map((column) => `<div>${column.map(([mode, label]) =>
-          `<button type="button" data-bot-mode="${mode}">${label}</button>`).join("")}</div>`).join("")}</div>
-        <footer><span>Choose game mode</span><span>Native mode order</span></footer>
+        <div class="gamemode-layout">
+          <div class="gamemode-columns" role="listbox" aria-label="Game modes">${columns.map((column) => `<div>${column.map(([mode, label]) =>
+            `<button type="button" role="option" data-bot-mode="${mode}" aria-selected="${mode === initialChoice[0]}">${label}</button>`)
+            .join("")}</div>`).join("")}</div>
+          <aside class="gamemode-details" aria-live="polite">
+            <p>mode briefing</p>
+            <h2 id="gamemode-name">${initialChoice[1]}</h2>
+            <div id="gamemode-description">${gameModeDescription(initialChoice[0])}</div>
+          </aside>
+        </div>
+        <footer><span>Hover over a mode to read its rules, click to select</span><span>Descriptions from Sauerbraten</span></footer>
       </section>
     </main>`;
   required<HTMLButtonElement>("#gamemode-back").addEventListener("click", () => navigate("/bots"));
-  document.querySelectorAll<HTMLButtonElement>("[data-bot-mode]").forEach((button) => button.addEventListener("click", () => {
-    selectedBotMode = Number(button.dataset.botMode);
-    selectedPage = [9, 10, 15, 16, 19].includes(selectedBotMode) ? "capture-1"
-      : selectedBotMode >= 11 ? "ctf-1" : "ffa-1";
-    previewMap = "";
-    navigate("/maps");
-  }));
+  const modeName = required<HTMLHeadingElement>("#gamemode-name");
+  const modeDescription = required<HTMLDivElement>("#gamemode-description");
+  const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-bot-mode]")];
+  const previewModeChoice = (button: HTMLButtonElement): void => {
+    const mode = Number(button.dataset.botMode);
+    const label = button.textContent?.trim() || "mode";
+    modeName.textContent = label;
+    modeDescription.innerHTML = gameModeDescription(mode);
+  };
+  modeButtons.forEach((button) => {
+    button.addEventListener("mouseenter", () => previewModeChoice(button));
+    button.addEventListener("focus", () => previewModeChoice(button));
+    button.addEventListener("click", () => {
+      selectedBotMode = Number(button.dataset.botMode);
+      selectedPage = [9, 10, 15, 16, 19].includes(selectedBotMode) ? "capture-1"
+        : selectedBotMode >= 11 ? "ctf-1" : "ffa-1";
+      previewMap = "";
+      navigate("/maps");
+    });
+  });
+}
+
+function gameModeDescription(mode: number): string {
+  return sauerFormattedMarkup(GAME_MODE_DESCRIPTIONS[mode + 3] ?? "No description is available for this mode.");
 }
 
 function botSlider(label: string, id: string, value: number, minimum: number, maximum: number): string {
@@ -505,10 +534,9 @@ function launchServer(server: ServerListItem): void {
 }
 
 function renderMapsMenu(): void {
-  const page = MAP_MENU_PAGES.find((candidate) => candidate.id === selectedPage) ?? MAP_MENU_PAGES[0];
-  const availablePages = page.category === "capture" ? MAP_MENU_PAGES.filter((candidate) => candidate.category === "capture")
-    : page.category === "ctf" ? MAP_MENU_PAGES.filter((candidate) => candidate.category === "ctf")
-      : MAP_MENU_PAGES.filter((candidate) => candidate.category === "ffa" || candidate.category === "concept");
+  const availablePages = mapMenuPagesForMode(selectedBotMode);
+  const page = availablePages.find((candidate) => candidate.id === selectedPage) ?? availablePages[0] ?? MAP_MENU_PAGES[0];
+  selectedPage = page.id;
   const initialPreview = page.columns.flat()[0] ?? previewMap;
   if (!page.columns.flat().includes(previewMap)) previewMap = initialPreview;
   const preview = availableMaps?.get(previewMap);
@@ -521,8 +549,9 @@ function renderMapsMenu(): void {
           <div><p>bot match</p><h1 id="maps-title">choose a map</h1></div>
           <button id="maps-back" class="back-button" type="button">‹ game mode</button>
         </header>
-        <nav class="map-tabs" aria-label="Map pages">
-          ${availablePages.map((item) => `<button type="button" data-page="${item.id}" class="${item.id === page.id ? "active" : ""}">${item.label}</button>`).join("")}
+        <nav class="map-tabs" role="tablist" aria-label="Map pages">
+          ${availablePages.map((item) => `<button type="button" role="tab" data-page="${item.id}" aria-selected="${item.id === page.id}"
+            class="${item.id === page.id ? "active" : ""}">${item.label}</button>`).join("")}
         </nav>
         <div class="map-browser">
           <div class="map-columns" role="listbox" aria-label="${page.label} maps">
@@ -530,12 +559,11 @@ function renderMapsMenu(): void {
           </div>
           <aside class="map-preview" aria-live="polite">
             <div class="preview-frame">
-              <img src="/api/packages/base/${encodeURIComponent(previewMap)}.jpg" alt="${escapeHtml(previewMap)} map preview" />
+              <img id="preview-map-image" src="/api/packages/base/${encodeURIComponent(previewMap)}.jpg" alt="${escapeHtml(previewMap)} map preview" />
               <img class="preview-overlay" src="/api/data/guioverlay.png" alt="" />
             </div>
-            <strong>${escapeHtml(previewMap)}</strong>
-            <span>${availableMaps === undefined ? "checking map…" : preview?.supported ? "ready to play" : "unavailable in this build"}</span>
-            <button id="play-map" type="button" ${availableMaps !== undefined && !preview?.supported ? "disabled" : ""}>play map</button>
+            <strong id="preview-map-name">${escapeHtml(previewMap)}</strong>
+            <span id="preview-map-status">${availableMaps === undefined ? "checking map…" : preview?.supported ? "ready to play" : "unavailable in this build"}</span>
           </aside>
         </div>
         <footer><span>${page.category.toUpperCase()} MAPS</span><span>Hover to preview · click to launch</span></footer>
@@ -548,16 +576,25 @@ function renderMapsMenu(): void {
     previewMap = "";
     renderMapsMenu();
   }));
-  document.querySelectorAll<HTMLButtonElement>("[data-map]").forEach((button) => {
-    const select = (): void => {
-      previewMap = button.dataset.map ?? previewMap;
-      renderMapsMenu();
-    };
-    button.addEventListener("mouseenter", select);
-    button.addEventListener("focus", select);
+  const previewImage = required<HTMLImageElement>("#preview-map-image");
+  const previewName = required<HTMLElement>("#preview-map-name");
+  const previewStatus = required<HTMLElement>("#preview-map-status");
+  const mapButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-map]")];
+  const previewMapChoice = (button: HTMLButtonElement): void => {
+    const name = button.dataset.map ?? previewMap;
+    const map = availableMaps?.get(name);
+    previewMap = name;
+    mapButtons.forEach((candidate) => candidate.classList.toggle("selected", candidate === button));
+    previewImage.src = `/api/packages/base/${encodeURIComponent(name)}.jpg`;
+    previewImage.alt = `${name} map preview`;
+    previewName.textContent = name;
+    previewStatus.textContent = availableMaps === undefined ? "checking map…" : map?.supported ? "ready to play" : "unavailable in this build";
+  };
+  mapButtons.forEach((button) => {
+    button.addEventListener("mouseenter", () => previewMapChoice(button));
+    button.addEventListener("focus", () => previewMapChoice(button));
     button.addEventListener("click", () => launchMap(button.dataset.map ?? ""));
   });
-  required<HTMLButtonElement>("#play-map").addEventListener("click", () => launchMap(previewMap));
   if (!availableMaps) void loadAvailableMaps();
 }
 
