@@ -838,11 +838,13 @@ function sauerMapsPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => {
   const projectRoot = process.cwd();
+  const applicationVersion = fs.readFileSync(path.join(projectRoot, "VERSION"), "utf8").trim();
   const directory = loadSauerbratenDirectory(mode, projectRoot);
   validateSauerbratenDirectory(directory);
   configureSauerbratenDirectory(directory);
 
   return {
+    define: { __SAUERWEB_VERSION__: JSON.stringify(applicationVersion) },
     plugins: [sauerMapsPlugin()],
     server: { host: "127.0.0.1" },
   };

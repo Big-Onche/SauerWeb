@@ -71,7 +71,10 @@ function renderMainMenu(): void {
   app.innerHTML = `
     <main class="sauer-screen">
       ${backgroundMarkup(true)}
-      <div class="online-players" hidden><i aria-hidden="true"></i><span></span></div>
+      <div class="main-menu-status">
+        <div class="online-players" hidden><i aria-hidden="true"></i><span></span></div>
+        <div class="application-version">${escapeHtml(__SAUERWEB_VERSION__)}</div>
+      </div>
       <section class="sauer-dialog main-dialog" aria-labelledby="main-menu-title">
         ${guiSkinMarkup()}
         <h1 id="main-menu-title" class="sr-only">Sauerbraten main menu</h1>
