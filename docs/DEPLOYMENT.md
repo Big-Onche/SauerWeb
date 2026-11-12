@@ -139,6 +139,8 @@ sudo install -d -m 0755 /etc/sauerweb
 sudo tee /etc/sauerweb/relay.env >/dev/null <<'EOF'
 SAUER_RELAY_PORT=8080
 SAUER_RELAY_ORIGINS=https://play.example.com
+# Only these direct peers may supply the client IP used by relay limits:
+SAUER_RELAY_TRUSTED_PROXIES=127.0.0.1/32,::1/128
 # Optional fixed/unlisted servers, separated by commas:
 # SAUER_RELAY_SERVERS=game.example.com:28785=Main server,127.0.0.1:28785=Local server
 # Optional master-server overrides:
@@ -152,6 +154,11 @@ sudo chmod 0640 /etc/sauerweb/relay.env
 
 Set `SAUER_RELAY_ORIGINS` to the exact public HTTPS origin. This causes the relay to reject WebSocket upgrades made by pages on other origins. Do not put
 TLS key paths in this file when Nginx terminates TLS.
+
+`SAUER_RELAY_TRUSTED_PROXIES` accepts comma-separated IP addresses and CIDR networks. Forwarded addresses are used only when the relay's direct peer is
+in this list, and proxy hops are evaluated from right to left. This prevents a public client from evading the four-connections-per-IP limit by supplying
+its own `X-Forwarded-For` value. Keep this list limited to the actual reverse proxies that connect directly to the relay; the loopback values above match
+this guide's single-host Nginx deployment.
 
 `SAUER_RELAY_SERVERS` is not a general destination proxy: it adds explicitly trusted servers to the destinations learned from the master server. Keep
 the list narrow, and do not include internal network addresses unless browsers are intentionally allowed to reach those servers through the relay.
@@ -282,7 +289,7 @@ server {
         proxy_pass http://127.0.0.1:8080/health;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
@@ -290,7 +297,7 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
     }
@@ -302,7 +309,7 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
         proxy_set_header Origin $http_origin;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
@@ -313,7 +320,7 @@ server {
         proxy_pass http://127.0.0.1:8081;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
     }
@@ -335,7 +342,9 @@ server {
 ```
 
 The exact-match `/api/servers` location must appear alongside `/api/`; it ensures the server browser is handled by the relay process. The WebSocket
-headers on `/relay` are also required. Do not cache `/api/servers` or generated metadata responses.
+headers on `/relay` are also required. This single-proxy setup overwrites, rather than appends, `X-Forwarded-For`, so a header supplied by the public
+client cannot become authoritative. If another load balancer sits in front of Nginx, configure Nginx's Real IP module with that load balancer's exact
+addresses before relying on `$remote_addr`. Do not cache `/api/servers` or generated metadata responses.
 
 Enable and validate the site:
 

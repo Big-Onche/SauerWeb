@@ -16,6 +16,7 @@ const MAX_BYTES_PER_SECOND = 1_048_576;
 const DEFAULT_MASTER_NAME = "master.sauerbraten.org";
 const DEFAULT_MASTER_PORT = 28787;
 const DEFAULT_LAN_INFO_PORT = 28786;
+const DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128";
 
 export function configuredServers(environment = process.env) {
   const value = environment.SAUER_RELAY_SERVERS || "127.0.0.1:28785";
@@ -32,12 +33,15 @@ export function configuredServers(environment = process.env) {
 export function attachSauerRelay(httpServer, options = {}) {
   const servers = options.servers || configuredServers();
   const keepservers = [...servers];
+  const updateServers = options.updateServers || updatefrommaster;
   let serverRefresh;
+  let connectionCount = 0;
   const allowedOrigins = new Set((process.env.SAUER_RELAY_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean));
+  const trustedProxies = parseTrustedProxies(options.trustedProxies ?? process.env.SAUER_RELAY_TRUSTED_PROXIES ?? DEFAULT_TRUSTED_PROXIES);
   const connectionsByAddress = new Map();
   const webSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_DATAGRAM_BYTES, perMessageDeflate: false });
   const refreshAllowedServers = () => {
-    serverRefresh ??= updatefrommaster(keepservers).then((updated) => {
+    serverRefresh ??= updateServers(keepservers).then((updated) => {
       servers.splice(0, servers.length, ...updated);
     }).finally(() => { serverRefresh = undefined; });
     return serverRefresh;
@@ -51,26 +55,39 @@ export function attachSauerRelay(httpServer, options = {}) {
     const url = new URL(request.url || "/", "http://relay.invalid");
     if (url.pathname !== "/relay") return;
     const origin = request.headers.origin || "";
-    const remoteAddress = request.socket.remoteAddress || "unknown";
-    const remoteConnections = connectionsByAddress.get(remoteAddress) || 0;
+    const remoteAddress = resolveClientAddress(request, trustedProxies);
     const key = `${url.searchParams.get("server") || ""}:${Number(url.searchParams.get("port"))}`;
     let target = servers.find((server) => `${server.host}:${server.port}` === key);
     if (!target) {
       try { await refreshAllowedServers(); } catch {}
       target = servers.find((server) => `${server.host}:${server.port}` === key);
     }
-    if (!target || webSockets.clients.size >= MAX_CONNECTIONS || remoteConnections >= MAX_CONNECTIONS_PER_ADDRESS ||
+    const remoteConnections = connectionsByAddress.get(remoteAddress) || 0;
+    if (!target || connectionCount >= MAX_CONNECTIONS || remoteConnections >= MAX_CONNECTIONS_PER_ADDRESS ||
         (allowedOrigins.size && !allowedOrigins.has(origin)) || socket.destroyed) {
       if (socket.destroyed) return;
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;
     }
-    webSockets.handleUpgrade(request, socket, head, (webSocket) => {
-      connectionsByAddress.set(remoteAddress, remoteConnections + 1);
-      webSockets.emit("connection", webSocket, request, target, remoteAddress);
-    });
+    connectionCount++;
+    connectionsByAddress.set(remoteAddress, remoteConnections + 1);
+    try {
+      webSockets.handleUpgrade(request, socket, head, (webSocket) => {
+        webSockets.emit("connection", webSocket, request, target, remoteAddress);
+      });
+    } catch (error) {
+      releaseConnection(remoteAddress);
+      throw error;
+    }
   });
+
+  const releaseConnection = (remoteAddress) => {
+    connectionCount = Math.max(0, connectionCount - 1);
+    const remaining = (connectionsByAddress.get(remoteAddress) || 1) - 1;
+    if (remaining > 0) connectionsByAddress.set(remoteAddress, remaining);
+    else connectionsByAddress.delete(remoteAddress);
+  };
 
   webSockets.on("connection", (webSocket, _request, target, remoteAddress) => {
     const udp = dgram.createSocket("udp4");
@@ -83,9 +100,7 @@ export function attachSauerRelay(httpServer, options = {}) {
       closed = true;
       try { udp.close(); } catch {}
       if (webSocket.readyState === WebSocket.OPEN) webSocket.close(1000);
-      const remaining = (connectionsByAddress.get(remoteAddress) || 1) - 1;
-      if (remaining > 0) connectionsByAddress.set(remoteAddress, remaining);
-      else connectionsByAddress.delete(remoteAddress);
+      releaseConnection(remoteAddress);
     };
     udp.on("message", (datagram) => {
       if (datagram.length <= MAX_DATAGRAM_BYTES && webSocket.readyState === WebSocket.OPEN) webSocket.send(datagram, { binary: true });
@@ -113,6 +128,26 @@ export function attachSauerRelay(httpServer, options = {}) {
   });
 
   return { servers, close: () => webSockets.close() };
+}
+
+export function resolveClientAddress(request, trustedProxies = parseTrustedProxies(DEFAULT_TRUSTED_PROXIES)) {
+  const peerAddress = normalizeIpAddress(request.socket.remoteAddress) || "unknown";
+  if (peerAddress === "unknown" || !isTrustedProxy(peerAddress, trustedProxies)) return peerAddress;
+  const forwarded = request.headers["x-forwarded-for"];
+  if (typeof forwarded !== "string" || !forwarded.trim()) return peerAddress;
+  let address = peerAddress;
+  for (const value of forwarded.split(",").map((entry) => entry.trim()).reverse()) {
+    const candidate = normalizeIpAddress(value);
+    if (!candidate) return peerAddress;
+    address = candidate;
+    if (!isTrustedProxy(address, trustedProxies)) return address;
+  }
+  return address;
+}
+
+export function parseTrustedProxies(value) {
+  const entries = Array.isArray(value) ? value : String(value || "").split(",");
+  return entries.map((entry) => parseNetwork(String(entry).trim())).filter(Boolean);
 }
 
 export async function queryConfiguredServers(servers = configuredServers()) {
@@ -253,6 +288,58 @@ export function serverListMiddleware(servers = configuredServers(), environment 
 function validMasterHost(host) {
   return host.length <= 253 && !/[\s/\\?#@\[\]]/.test(host) && (net.isIP(host) !== 0 ||
     host.split(".").every((label) => label.length > 0 && label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)));
+}
+
+function normalizeIpAddress(value) {
+  if (typeof value !== "string") return undefined;
+  let address = value.trim();
+  if (address.startsWith("[") && address.endsWith("]")) address = address.slice(1, -1);
+  const zone = address.indexOf("%");
+  if (zone !== -1) address = address.slice(0, zone);
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  if (mapped && net.isIP(mapped[1]) === 4) return mapped[1];
+  return net.isIP(address) ? address.toLowerCase() : undefined;
+}
+
+function parseNetwork(entry) {
+  if (!entry) return undefined;
+  const slash = entry.indexOf("/");
+  const address = normalizeIpAddress(slash === -1 ? entry : entry.slice(0, slash));
+  if (!address) throw new Error(`Invalid trusted proxy address: ${entry}`);
+  const parsed = ipToBigInt(address);
+  const prefix = slash === -1 ? parsed.bits : Number(entry.slice(slash + 1));
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > parsed.bits) throw new Error(`Invalid trusted proxy network: ${entry}`);
+  const shift = BigInt(parsed.bits - prefix);
+  return { family: parsed.family, prefix, network: (parsed.value >> shift) << shift };
+}
+
+function isTrustedProxy(address, networks) {
+  const parsed = ipToBigInt(address);
+  return networks.some((network) => {
+    if (network.family !== parsed.family) return false;
+    const shift = BigInt(parsed.bits - network.prefix);
+    return ((parsed.value >> shift) << shift) === network.network;
+  });
+}
+
+function ipToBigInt(address) {
+  if (net.isIP(address) === 4) {
+    return { family: 4, bits: 32, value: address.split(".").reduce((value, octet) => value << 8n | BigInt(octet), 0n) };
+  }
+  let source = address;
+  if (source.includes(".")) {
+    const lastColon = source.lastIndexOf(":");
+    const ipv4 = ipToBigInt(source.slice(lastColon + 1)).value;
+    source = `${source.slice(0, lastColon)}:${(ipv4 >> 16n).toString(16)}:${(ipv4 & 0xFFFFn).toString(16)}`;
+  }
+  const halves = source.split("::");
+  if (halves.length > 2) throw new Error(`Invalid IP address: ${address}`);
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const zeros = halves.length === 2 ? 8 - left.length - right.length : 0;
+  const groups = [...left, ...Array.from({ length: zeros }, () => "0"), ...right];
+  if (groups.length !== 8) throw new Error(`Invalid IP address: ${address}`);
+  return { family: 6, bits: 128, value: groups.reduce((value, group) => value << 16n | BigInt(`0x${group}`), 0n) };
 }
 
 function parsePort(value, fallback, name) {

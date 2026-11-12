@@ -63,7 +63,9 @@ npm run dev
 For production, run `npm run build` and `npm run relay`. The standalone process serves `/api/servers`, `/health`, and `/relay`; its port defaults to 8080
 and can be changed with `SAUER_RELAY_PORT`. Put it behind the same HTTPS reverse proxy as the static site, or configure native TLS with
 `SAUER_RELAY_TLS_KEY` and `SAUER_RELAY_TLS_CERT`. `SAUER_RELAY_ORIGINS` accepts a comma-separated browser-origin allowlist. Connection, message-size,
-packet-rate, and byte-rate limits are enforced in the relay. The master defaults to `master.sauerbraten.org:28787`; override it with
+packet-rate, and byte-rate limits are enforced in the relay. The relay trusts `X-Forwarded-For` only from loopback proxies by default; set
+`SAUER_RELAY_TRUSTED_PROXIES` to a comma-separated list of proxy IP addresses or CIDR networks when using a different trusted proxy topology. The master
+defaults to `master.sauerbraten.org:28787`; override it with
 `SAUER_MASTER_SERVER`, `SAUER_MASTER_PORT`, or `SAUER_MASTER_TIMEOUT` (milliseconds). The current frontend also uses runtime-generated asset and metadata
 routes from the Vite plugin, so a static build and the standalone relay are not sufficient by themselves.
 
