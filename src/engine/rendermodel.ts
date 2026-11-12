@@ -26,10 +26,59 @@ export interface ModelGeometryMesh {
   bones?: number[];
 }
 
+interface Md5Vertex {
+  index: number;
+  firstWeight: number;
+  weightCount: number;
+}
+
+interface Md5Weight {
+  joint: number;
+  bias: number;
+  position: [number, number, number];
+}
+
+interface PreparedMd5Mesh {
+  name: string;
+  vertices: Md5Vertex[];
+  weights: Md5Weight[];
+  uvs: number[];
+  indices: number[];
+  bones: number[];
+}
+
+interface Md5HierarchyEntry {
+  name: string;
+  parent: number;
+  flags: number;
+  start: number;
+}
+
+interface Md5BasePose {
+  position: [number, number, number];
+  orientation: [number, number, number];
+}
+
+export interface PreparedMd5Model {
+  bindJoints: ModelJointPose[];
+  meshes: PreparedMd5Mesh[];
+}
+
+export interface PreparedMd5Animation {
+  hierarchy: Md5HierarchyEntry[];
+  base: Md5BasePose[];
+  frames: Float32Array[];
+  adjustmentByBone: Map<string, ModelAdjustment>;
+}
+
 // Original: src/engine/md5.h
 // Function: md5meshgroup::loadmesh()
 // Sauerbraten reference: SVN r6488
 export function parseMd5(source: string, animationSource?: string, adjustments: ModelAdjustment[] = [], animationFrame = 0): ModelGeometry {
+  return skinMd5Model(prepareMd5Model(source), animationSource ? prepareMd5Animation(animationSource, adjustments) : undefined, animationFrame);
+}
+
+export function prepareMd5Model(source: string): PreparedMd5Model {
   const jointBlock = source.match(/joints\s*\{([\s\S]*?)\}/i)?.[1];
   if (!jointBlock) throw new Error("MD5 model has no joints block.");
   const bindJoints = [...jointBlock.matchAll(/^\s*"([^"]*)"\s+(-?\d+)\s+\(\s*([^)]*?)\s*\)\s+\(\s*([^)]*?)\s*\)/gm)].map((match) => {
@@ -41,9 +90,7 @@ export function parseMd5(source: string, animationSource?: string, adjustments: 
     return { name: match[1], parent: Number(match[2]), position, orientation: md5Quaternion(orientation) };
   });
   if (!bindJoints.length) throw new Error("MD5 model has no readable joints.");
-  const joints = animationSource ? parseMd5AnimationFrame(animationSource, adjustments, animationFrame) : bindJoints;
-  if (joints.length !== bindJoints.length) throw new Error("MD5 animation does not match its mesh skeleton.");
-  const meshes: ModelGeometryMesh[] = [];
+  const meshes: PreparedMd5Mesh[] = [];
   let meshIndex = 0;
   for (const match of source.matchAll(/mesh\s*\{([\s\S]*?)\}/gi)) {
     const block = match[1];
@@ -56,42 +103,58 @@ export function parseMd5(source: string, animationSource?: string, adjustments: 
     }));
     const triangles = [...block.matchAll(/^\s*tri\s+\d+\s+(\d+)\s+(\d+)\s+(\d+)/gm)];
     const weights = [...block.matchAll(/^\s*weight\s+(\d+)\s+(\d+)\s+([^\s]+)\s+\(\s*([^)]*?)\s*\)/gm)].map((weight) => ({
-      index: Number(weight[1]),
       joint: Number(weight[2]),
       bias: Number(weight[3]),
       position: flipMd5Weight(parseMd5Vector(weight[4])),
     }));
     if (!vertices.length || !triangles.length || !weights.length) continue;
-    const positions = new Array<number>(vertices.length * 3).fill(0);
     const uvs = new Array<number>(vertices.length * 2).fill(0);
     const bones = new Array<number>(vertices.length).fill(0);
     for (const vertex of vertices) {
-      let x = 0;
-      let y = 0;
-      let z = 0;
       let dominantBias = -1;
       for (let offset = 0; offset < vertex.weightCount; offset++) {
         const weight = weights[vertex.firstWeight + offset];
+        if (!weight || !bindJoints[weight.joint]) throw new Error("MD5 vertex references an invalid weight or joint.");
+        if (weight.bias > dominantBias) {
+          dominantBias = weight.bias;
+          bones[vertex.index] = weight.joint;
+        }
+      }
+      uvs.splice(vertex.index * 2, 2, vertex.uv[0] ?? 0, vertex.uv[1] ?? 0);
+    }
+    const indices: number[] = [];
+    for (const triangle of triangles) indices.push(Number(triangle[1]), Number(triangle[2]), Number(triangle[3]));
+    meshes.push({ name, vertices, weights, uvs, indices, bones });
+    meshIndex++;
+  }
+  if (!meshes.length) throw new Error("MD5 model contains no renderable geometry.");
+  return { bindJoints, meshes };
+}
+
+export function skinMd5Model(model: PreparedMd5Model, animation?: PreparedMd5Animation, animationFrame = 0): ModelGeometry {
+  const joints = animation ? sampleMd5AnimationFrame(animation, animationFrame) : model.bindJoints;
+  if (joints.length !== model.bindJoints.length) throw new Error("MD5 animation does not match its mesh skeleton.");
+  const meshes = model.meshes.map((mesh) => {
+    const positions = new Array<number>(mesh.vertices.length * 3).fill(0);
+    for (const vertex of mesh.vertices) {
+      let x = 0;
+      let y = 0;
+      let z = 0;
+      for (let offset = 0; offset < vertex.weightCount; offset++) {
+        const weight = mesh.weights[vertex.firstWeight + offset];
         const joint = weight && joints[weight.joint];
         if (!weight || !joint) throw new Error("MD5 vertex references an invalid weight or joint.");
         const rotated = rotateMd5Vector(weight.position, joint.orientation);
         x += (joint.position[0] + rotated[0]) * weight.bias;
         y += (joint.position[1] + rotated[1]) * weight.bias;
         z += (joint.position[2] + rotated[2]) * weight.bias;
-        if (weight.bias > dominantBias) {
-          dominantBias = weight.bias;
-          bones[vertex.index] = weight.joint;
-        }
       }
-      positions.splice(vertex.index * 3, 3, x, z, y);
-      uvs.splice(vertex.index * 2, 2, vertex.uv[0] ?? 0, vertex.uv[1] ?? 0);
+      positions[vertex.index * 3] = x;
+      positions[vertex.index * 3 + 1] = z;
+      positions[vertex.index * 3 + 2] = y;
     }
-    const indices: number[] = [];
-    for (const triangle of triangles) indices.push(Number(triangle[1]), Number(triangle[2]), Number(triangle[3]));
-    meshes.push({ name, positions, uvs, indices, bones });
-    meshIndex++;
-  }
-  if (!meshes.length) throw new Error("MD5 model contains no renderable geometry.");
+    return { name: mesh.name, positions, uvs: mesh.uvs, indices: mesh.indices, bones: mesh.bones };
+  });
   return { meshes, joints };
 }
 
@@ -168,25 +231,35 @@ export function md5AnimationInfo(source: string): Md5AnimationInfo {
   };
 }
 
-function parseMd5AnimationFrame(source: string, adjustments: ModelAdjustment[], animationFrame: number): ModelJointPose[] {
+export function prepareMd5Animation(source: string, adjustments: ModelAdjustment[] = []): PreparedMd5Animation {
   const hierarchyBlock = source.match(/hierarchy\s*\{([\s\S]*?)\}/i)?.[1];
   const baseBlock = source.match(/baseframe\s*\{([\s\S]*?)\}/i)?.[1];
   const frameCount = md5AnimationInfo(source).frameCount;
-  const frame = Math.min(frameCount - 1, Math.max(0, Math.trunc(animationFrame)));
-  const frameBlock = source.match(new RegExp(`frame\\s+${frame}\\s*\\{([\\s\\S]*?)\\}`, "i"))?.[1];
-  if (!hierarchyBlock || !baseBlock || !frameBlock) throw new Error(`MD5 animation has no readable frame ${frame}.`);
+  if (!hierarchyBlock || !baseBlock) throw new Error("MD5 animation has no readable skeleton.");
   const hierarchy = [...hierarchyBlock.matchAll(/^\s*"([^"]*)"\s+(-?\d+)\s+(\d+)\s+(\d+)/gm)].map((match) => ({
     name: match[1], parent: Number(match[2]), flags: Number(match[3]), start: Number(match[4]),
   }));
   const base = [...baseBlock.matchAll(/^\s*\(\s*([^)]*?)\s*\)\s+\(\s*([^)]*?)\s*\)/gm)].map((match) => ({
     position: flipMd5Weight(parseMd5Vector(match[1])), orientation: flipMd5Orientation(parseMd5Vector(match[2])),
   }));
-  const data = frameBlock.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi)?.map(Number) ?? [];
+  const frames = new Array<Float32Array>(frameCount);
+  for (const match of source.matchAll(/frame\s+(\d+)\s*\{([\s\S]*?)\}/gi)) {
+    const index = Number(match[1]);
+    if (index >= 0 && index < frameCount) {
+      frames[index] = Float32Array.from(match[2].match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi)?.map(Number) ?? []);
+    }
+  }
+  return { hierarchy, base, frames, adjustmentByBone: new Map(adjustments.map((adjustment) => [adjustment.bone, adjustment])) };
+}
+
+function sampleMd5AnimationFrame(animation: PreparedMd5Animation, animationFrame: number): ModelJointPose[] {
+  const frame = Math.min(animation.frames.length - 1, Math.max(0, Math.trunc(animationFrame)));
+  const data = animation.frames[frame];
+  if (!data) throw new Error(`MD5 animation has no readable frame ${frame}.`);
   const joints: ModelJointPose[] = [];
-  const adjustmentByBone = new Map(adjustments.map((adjustment) => [adjustment.bone, adjustment]));
-  hierarchy.forEach((entry, index) => {
-    const localPosition = [...base[index].position] as [number, number, number];
-    const localOrientation = [...base[index].orientation] as [number, number, number];
+  animation.hierarchy.forEach((entry, index) => {
+    const localPosition = [...animation.base[index].position] as [number, number, number];
+    const localOrientation = [...animation.base[index].orientation] as [number, number, number];
     let offset = entry.start;
     if (entry.flags & 1) localPosition[0] = data[offset++];
     if (entry.flags & 2) localPosition[1] = -data[offset++];
@@ -194,7 +267,7 @@ function parseMd5AnimationFrame(source: string, adjustments: ModelAdjustment[], 
     if (entry.flags & 8) localOrientation[0] = -data[offset++];
     if (entry.flags & 16) localOrientation[1] = data[offset++];
     if (entry.flags & 32) localOrientation[2] = -data[offset++];
-    const adjustment = adjustmentByBone.get(entry.name);
+    const adjustment = animation.adjustmentByBone.get(entry.name);
     let position = localPosition;
     let orientation = md5Quaternion(localOrientation);
     if (adjustment) {

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd2, parseMd5 } from "./rendermodel";
+import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd2, parseMd5, prepareMd5Animation,
+  prepareMd5Model, skinMd5Model } from "./rendermodel";
 
 describe("MD2 mapmodel loading", () => {
   it.each(["dcp/palmtree", "objects/well_roof", "objects/well_base"])('decodes the bundled model "%s"', (name) => {
@@ -61,6 +62,20 @@ describe("MD5 model loading", () => {
     const firstFrame = parseMd5(mesh, animation, [], 0).meshes[0];
     expect(parseMd5(mesh, animation, [], 1).meshes[0].positions).not.toEqual(firstFrame.positions);
     expect(firstFrame.bones).toHaveLength(firstFrame.positions.length / 3);
+  });
+
+  it("reuses prepared MD5 topology across skinned animation frames", () => {
+    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const model = prepareMd5Model(fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8"));
+    const animation = prepareMd5Animation(fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8"));
+    const first = skinMd5Model(model, animation, 0).meshes[0];
+    const second = skinMd5Model(model, animation, 1).meshes[0];
+
+    expect(second.positions).not.toEqual(first.positions);
+    expect(second.positions).not.toBe(first.positions);
+    expect(second.uvs).toBe(first.uvs);
+    expect(second.indices).toBe(first.indices);
+    expect(second.bones).toBe(first.bones);
   });
 
   it("interpolates skinned player geometry between animation frames", () => {

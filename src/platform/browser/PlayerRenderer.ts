@@ -12,8 +12,9 @@ import { packageAssetUrl } from "../../assets/TextureResolver";
 import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
 import { parseRagdoll, RAGDOLL_FADE, RAGDOLL_MILLIS, RagdollSimulation, type RagdollCollider,
   type RagdollSkeleton } from "../../engine/ragdoll";
-import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd5, type ModelGeometry,
-  type ModelGeometryMesh, type ModelJointPose } from "../../engine/rendermodel";
+import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, prepareMd5Animation, prepareMd5Model, skinMd5Model,
+  type ModelGeometry, type ModelGeometryMesh, type ModelJointPose, type PreparedMd5Animation,
+  type PreparedMd5Model } from "../../engine/rendermodel";
 import type { Vec3 } from "../../engine/octa";
 import { ClientState } from "../../engine/physics/types";
 import { getplayermodelinfo, playerSkin, renderclient, type RenderClientState } from "../../fpsgame/render";
@@ -96,9 +97,9 @@ interface SavedRagdoll {
   expiresAt: number;
 }
 
-// Local bots can use all five models concurrently. Their active locomotion/idle loops total roughly 360 distinct skinned frames;
-// a smaller cache continually reparses and reskins evicted MD5/IQM frames. Leave room for attack transitions while remaining bounded.
-const MAX_GEOMETRY_FRAME_CACHE = 512;
+// Keep only the current visual working set. MD5 source topology and compact animation channels are prepared separately, so an evicted
+// frame only needs inexpensive skinning rather than reparsing the mesh and animation files.
+const MAX_GEOMETRY_FRAME_CACHE = 64;
 
 // Browser counterpart of src/fpsgame/render.cpp's model batching and src/engine/ragdoll.h's death simulation.
 export class PlayerRenderer {
@@ -108,6 +109,8 @@ export class PlayerRenderer {
   private readonly textSources = new Map<string, Promise<string>>();
   private readonly binarySources = new Map<string, Promise<ArrayBuffer>>();
   private readonly geometryFrames = new Map<string, ModelGeometry>();
+  private readonly md5Models = new Map<string, PreparedMd5Model>();
+  private readonly md5Animations = new Map<string, PreparedMd5Animation>();
   private readonly ragdollSkeletons = new Map<string, Promise<RagdollSkeleton>>();
   private readonly meshVertexBuffers = new WeakMap<Mesh, MeshVertexBuffers>();
   private assets?: Promise<PlayerModelAsset[]>;
@@ -156,6 +159,8 @@ export class PlayerRenderer {
     this.materials.forEach((material) => material.dispose(true, true));
     this.materials.clear();
     this.geometryFrames.clear();
+    this.md5Models.clear();
+    this.md5Animations.clear();
   }
 
   private saveRagdoll(id: number, instance: PlayerModelInstance, nowMilliseconds: number): void {
@@ -472,7 +477,17 @@ export class PlayerRenderer {
       const source = await this.fetchText(asset.geometryPath!);
       const shared = this.cachedGeometryFrame(key);
       if (shared) return shared;
-      geometry = this.profile(() => parseMd5(source, animationSource, [], frame));
+      let model = this.md5Models.get(asset.geometryPath!);
+      if (!model) {
+        model = this.profile(() => prepareMd5Model(source));
+        if (generation === this.geometryGeneration) this.md5Models.set(asset.geometryPath!, model);
+      }
+      let animation = animationPath ? this.md5Animations.get(animationPath) : undefined;
+      if (animationPath && animationSource && !animation) {
+        animation = this.profile(() => prepareMd5Animation(animationSource));
+        if (generation === this.geometryGeneration) this.md5Animations.set(animationPath, animation);
+      }
+      geometry = this.profile(() => skinMd5Model(model!, animation, frame));
     } else if (asset.format === "IQM") {
       const source = await this.fetchBinary(asset.geometryPath!);
       const shared = this.cachedGeometryFrame(key);

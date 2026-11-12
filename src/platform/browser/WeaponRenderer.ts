@@ -12,8 +12,8 @@ import type { Scene } from "@babylonjs/core/scene";
 import { packageAssetUrl } from "../../assets/TextureResolver";
 import type { HudGunAsset, MapModelAsset, MapModelSkin } from "../../assets/types";
 import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
-import { interpolateModelGeometry, md5AnimationInfo, parseMd5, type ModelGeometry, type ModelGeometryMesh,
-  type ModelJointPose } from "../../engine/rendermodel";
+import { interpolateModelGeometry, prepareMd5Animation, prepareMd5Model, skinMd5Model, type ModelGeometry, type ModelGeometryMesh,
+  type ModelJointPose, type PreparedMd5Animation, type PreparedMd5Model } from "../../engine/rendermodel";
 import type { WeaponController } from "../../fpsgame/weapon/WeaponController";
 import { Gun, WEAPONS } from "../../fpsgame/weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponEvents } from "../../fpsgame/weapon/WeaponEvents";
@@ -27,9 +27,8 @@ interface HudMeshBuffers {
 interface HudComponent {
   key: string;
   asset: MapModelAsset;
-  adjustments: HudGunAsset["handsAdjustments"];
-  geometrySource: string;
-  shootAnimationSource: string;
+  model: PreparedMd5Model;
+  shootAnimation: PreparedMd5Animation;
   shootFrameCount: number;
   meshes: Mesh[];
   idleGeometry: ModelGeometry;
@@ -170,14 +169,15 @@ export class WeaponRenderer {
     const [geometrySource, idleAnimationSource, shootAnimationSource] = await Promise.all([
       response.text(), animationResponse.text(), shootAnimationResponse.text(),
     ]);
-    const idleGeometry = parseMd5(geometrySource, idleAnimationSource, adjustments);
+    const model = prepareMd5Model(geometrySource);
+    const idleGeometry = skinMd5Model(model, prepareMd5Animation(idleAnimationSource, adjustments));
+    const shootAnimation = prepareMd5Animation(shootAnimationSource, adjustments);
     return {
       key: `${gun}:${part}`,
       asset,
-      adjustments,
-      geometrySource,
-      shootAnimationSource,
-      shootFrameCount: md5AnimationInfo(shootAnimationSource).frameCount,
+      model,
+      shootAnimation,
+      shootFrameCount: shootAnimation.frames.length,
       idleGeometry,
       meshes: idleGeometry.meshes.map((source) => this.createHudMesh(source, asset, gun, attachment)),
     };
@@ -322,7 +322,7 @@ export class WeaponRenderer {
       this.geometryFrames.set(key, cached);
       return cached;
     }
-    const geometry = parseMd5(component.geometrySource, component.shootAnimationSource, component.adjustments, frame);
+    const geometry = skinMd5Model(component.model, component.shootAnimation, frame);
     this.geometryFrames.set(key, geometry);
     while (this.geometryFrames.size > MAX_HUD_GEOMETRY_FRAMES) {
       const oldest = this.geometryFrames.keys().next().value as string | undefined;
