@@ -41,6 +41,21 @@ interface AxisCollisionResult {
   separated: boolean;
 }
 
+interface Bounds {
+  minimum: Vec3;
+  maximum: Vec3;
+}
+
+interface MapModelBounds extends Bounds {
+  index: number;
+}
+
+interface MapModelBroadphaseNode extends Bounds {
+  left?: MapModelBroadphaseNode;
+  right?: MapModelBroadphaseNode;
+  models?: MapModelBounds[];
+}
+
 const FACE_VERTICES = [
   [0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6],
 ];
@@ -57,9 +72,12 @@ export class OctreeCollisionWorld {
   }
 
   private mapModels: MapModelCollision[] = [];
+  private mapModelBroadphase?: MapModelBroadphaseNode;
+  private readonly mapModelCandidates: number[] = [];
 
   setMapModels(mapModels: MapModelCollision[]): void {
     this.mapModels = mapModels;
+    this.mapModelBroadphase = buildMapModelBroadphase(mapModels);
   }
 
   lookupMaterial(position: Vec3): number {
@@ -100,7 +118,9 @@ export class OctreeCollisionWorld {
       if (result && (!skipFirst || result.distance > 0)) best = result;
     };
     this.map.world.forEach(visit);
-    for (const model of this.mapModels) {
+    const candidates = this.rayMapModelCandidates(origin, direction, maximumDistance, radius);
+    for (const index of candidates) {
+      const model = this.mapModels[index];
       const result = rayIntersectsMapModel(origin, direction, model, best?.distance ?? maximumDistance, radius);
       if (result && (!skipFirst || result.distance > 0)) best = result;
     }
@@ -118,7 +138,9 @@ export class OctreeCollisionWorld {
       y: Math.floor(entity.position.y + entity.radius) + 1,
       z: Math.floor(entity.position.z + entity.aboveEye) + 1,
     };
-    for (const model of this.mapModels) {
+    const candidates = this.collisionMapModelCandidates(entity);
+    for (const index of candidates) {
+      const model = this.mapModels[index];
       const result = collideMapModel(entity, direction, model);
       if (result) return result;
     }
@@ -127,6 +149,29 @@ export class OctreeCollisionWorld {
       if (result) return result;
     }
     return undefined;
+  }
+
+  private collisionMapModelCandidates(entity: PhysicsEntity): readonly number[] {
+    if (!this.mapModelBroadphase) return allIndices(this.mapModels.length, this.mapModelCandidates);
+    const horizontalRadius = Math.max(entity.radius, entity.xRadius, entity.yRadius);
+    const bounds: Bounds = {
+      minimum: { x: entity.position.x - horizontalRadius, y: entity.position.y - horizontalRadius,
+        z: entity.position.z - entity.eyeHeight },
+      maximum: { x: entity.position.x + horizontalRadius, y: entity.position.y + horizontalRadius,
+        z: entity.position.z + entity.aboveEye },
+    };
+    this.mapModelCandidates.length = 0;
+    queryMapModelBounds(this.mapModelBroadphase, bounds, this.mapModelCandidates);
+    this.mapModelCandidates.sort(ascending);
+    return this.mapModelCandidates;
+  }
+
+  private rayMapModelCandidates(origin: Vec3, direction: Vec3, maximumDistance: number, radius: number): readonly number[] {
+    if (!this.mapModelBroadphase) return allIndices(this.mapModels.length, this.mapModelCandidates);
+    this.mapModelCandidates.length = 0;
+    queryMapModelRay(this.mapModelBroadphase, origin, direction, maximumDistance, radius, this.mapModelCandidates);
+    this.mapModelCandidates.sort(ascending);
+    return this.mapModelCandidates;
   }
 
   private visit(cube: OctreeCube, entity: PhysicsEntity, direction: Vec3, cutoff: number, minimum: Vec3,
@@ -187,6 +232,127 @@ export class OctreeCollisionWorld {
     cache.set(cube, planes);
     return planes;
   }
+}
+
+const MAPMODEL_BROADPHASE_LEAF_SIZE = 8;
+
+function buildMapModelBroadphase(models: readonly MapModelCollision[]): MapModelBroadphaseNode | undefined {
+  if (!models.length) return undefined;
+  const entries = models.map((model, index) => ({ ...mapModelBounds(model), index }));
+  return buildMapModelBroadphaseNode(entries);
+}
+
+function buildMapModelBroadphaseNode(entries: MapModelBounds[]): MapModelBroadphaseNode {
+  const bounds = combineBounds(entries);
+  if (entries.length <= MAPMODEL_BROADPHASE_LEAF_SIZE) return { ...bounds, models: entries };
+  const size = {
+    x: bounds.maximum.x - bounds.minimum.x,
+    y: bounds.maximum.y - bounds.minimum.y,
+    z: bounds.maximum.z - bounds.minimum.z,
+  };
+  const axis: keyof Vec3 = size.x >= size.y && size.x >= size.z ? "x" : size.y >= size.z ? "y" : "z";
+  entries.sort((left, right) => boundsCenter(left, axis) - boundsCenter(right, axis) || left.index - right.index);
+  const middle = Math.floor(entries.length / 2);
+  return {
+    ...bounds,
+    left: buildMapModelBroadphaseNode(entries.slice(0, middle)),
+    right: buildMapModelBroadphaseNode(entries.slice(middle)),
+  };
+}
+
+function mapModelBounds(model: MapModelCollision): Bounds {
+  const yaw = model.yaw * Math.PI / 180;
+  const cosine = Math.cos(yaw), sine = Math.sin(yaw);
+  const center = {
+    x: model.center.x * cosine - model.center.y * sine + model.origin.x,
+    y: model.center.y * cosine + model.center.x * sine + model.origin.y,
+    z: model.center.z + model.origin.z,
+  };
+  const maximumEllipseRadius = Math.max(Math.abs(model.radius.x), Math.abs(model.radius.y));
+  const boxRadiusX = Math.abs(cosine) * Math.abs(model.radius.x) + Math.abs(sine) * Math.abs(model.radius.y);
+  const boxRadiusY = Math.abs(sine) * Math.abs(model.radius.x) + Math.abs(cosine) * Math.abs(model.radius.y);
+  const radius = {
+    x: model.ellipse ? Math.max(maximumEllipseRadius, boxRadiusX) : boxRadiusX,
+    y: model.ellipse ? Math.max(maximumEllipseRadius, boxRadiusY) : boxRadiusY,
+    z: Math.abs(model.radius.z),
+  };
+  return {
+    minimum: { x: center.x - radius.x, y: center.y - radius.y, z: center.z - radius.z },
+    maximum: { x: center.x + radius.x, y: center.y + radius.y, z: center.z + radius.z },
+  };
+}
+
+function combineBounds(entries: readonly Bounds[]): Bounds {
+  const minimum = { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY, z: Number.POSITIVE_INFINITY };
+  const maximum = { x: Number.NEGATIVE_INFINITY, y: Number.NEGATIVE_INFINITY, z: Number.NEGATIVE_INFINITY };
+  for (const entry of entries) {
+    minimum.x = Math.min(minimum.x, entry.minimum.x);
+    minimum.y = Math.min(minimum.y, entry.minimum.y);
+    minimum.z = Math.min(minimum.z, entry.minimum.z);
+    maximum.x = Math.max(maximum.x, entry.maximum.x);
+    maximum.y = Math.max(maximum.y, entry.maximum.y);
+    maximum.z = Math.max(maximum.z, entry.maximum.z);
+  }
+  return { minimum, maximum };
+}
+
+function boundsCenter(bounds: Bounds, axis: keyof Vec3): number {
+  return (bounds.minimum[axis] + bounds.maximum[axis]) * 0.5;
+}
+
+function queryMapModelBounds(node: MapModelBroadphaseNode, bounds: Bounds, result: number[]): void {
+  if (!boundsOverlap(node, bounds)) return;
+  if (node.models) {
+    for (const model of node.models) if (boundsOverlap(model, bounds)) result.push(model.index);
+    return;
+  }
+  if (node.left) queryMapModelBounds(node.left, bounds, result);
+  if (node.right) queryMapModelBounds(node.right, bounds, result);
+}
+
+function queryMapModelRay(node: MapModelBroadphaseNode, origin: Vec3, direction: Vec3, maximumDistance: number, radius: number,
+                          result: number[]): void {
+  if (!rayIntersectsAabb(origin, direction, node, maximumDistance, radius)) return;
+  if (node.models) {
+    for (const model of node.models) {
+      if (rayIntersectsAabb(origin, direction, model, maximumDistance, radius)) result.push(model.index);
+    }
+    return;
+  }
+  if (node.left) queryMapModelRay(node.left, origin, direction, maximumDistance, radius, result);
+  if (node.right) queryMapModelRay(node.right, origin, direction, maximumDistance, radius, result);
+}
+
+function rayIntersectsAabb(origin: Vec3, direction: Vec3, bounds: Bounds, maximumDistance: number, radius: number): boolean {
+  let entering = 0, leaving = maximumDistance;
+  for (const axis of ["x", "y", "z"] as const) {
+    const minimum = bounds.minimum[axis] - radius, maximum = bounds.maximum[axis] + radius;
+    if (Math.abs(direction[axis]) < 1e-9) {
+      if (origin[axis] < minimum || origin[axis] > maximum) return false;
+      continue;
+    }
+    let first = (minimum - origin[axis]) / direction[axis], second = (maximum - origin[axis]) / direction[axis];
+    if (first > second) [first, second] = [second, first];
+    entering = Math.max(entering, first);
+    leaving = Math.min(leaving, second);
+    if (entering > leaving) return false;
+  }
+  return leaving >= 0;
+}
+
+function boundsOverlap(left: Bounds, right: Bounds): boolean {
+  return left.maximum.x >= right.minimum.x && left.minimum.x <= right.maximum.x && left.maximum.y >= right.minimum.y &&
+    left.minimum.y <= right.maximum.y && left.maximum.z >= right.minimum.z && left.minimum.z <= right.maximum.z;
+}
+
+function allIndices(length: number, result: number[]): readonly number[] {
+  result.length = length;
+  for (let index = 0; index < length; index++) result[index] = index;
+  return result;
+}
+
+function ascending(left: number, right: number): number {
+  return left - right;
 }
 
 function collideSolid(entity: PhysicsEntity, direction: Vec3, cutoff: number, cube: OctreeCube,
