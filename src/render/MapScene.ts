@@ -74,6 +74,8 @@ export interface ViewportTuning {
   vibrance: number;
 }
 
+export const DEFAULT_VIEWPORT_TUNING: Readonly<ViewportTuning> = { contrast: 1.1, gamma: 1.4, vibrance: 1.15 };
+
 export class MapScene {
   readonly engine: Engine;
   readonly scene: Scene;
@@ -141,7 +143,7 @@ export class MapScene {
   private lastWaypointDebugUpdate = 0;
   private readonly entityModelAnimations: EntityModelAnimation[] = [];
   private currentMap?: SauerMap;
-  private viewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
+  private viewportTuning: ViewportTuning = { ...DEFAULT_VIEWPORT_TUNING };
   private debugLoadout = false;
   private playerModel = 0;
   private localGameMode = 0;

@@ -2,7 +2,7 @@ import "./style.css";
 import { SauerMapParser } from "./engine/worldio";
 import type { SauerMap } from "./engine/octa";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
-import { MapScene, type SceneStats, type ViewportTuning } from "./render/MapScene";
+import { DEFAULT_VIEWPORT_TUNING, MapScene, type SceneStats, type ViewportTuning } from "./render/MapScene";
 import { PhysicsState } from "./engine/physics/types";
 import { FpsHud } from "./platform/browser/FpsHud";
 
@@ -58,16 +58,16 @@ app.innerHTML = `
           <button id="settings-reset" type="button">Reset</button>
         </header>
         <label class="setting-row" for="contrast">
-          <span><strong>Contrast</strong><output id="contrast-value" for="contrast">100%</output></span>
-          <input id="contrast" type="range" min="0.5" max="1.5" value="1" step="0.01" />
+          <span><strong>Contrast</strong><output id="contrast-value" for="contrast">110%</output></span>
+          <input id="contrast" type="range" min="0.5" max="1.5" value="1.1" step="0.01" />
         </label>
         <label class="setting-row" for="gamma">
-          <span><strong>Gamma</strong><output id="gamma-value" for="gamma">1.00</output></span>
-          <input id="gamma" type="range" min="0.5" max="2" value="1" step="0.01" />
+          <span><strong>Gamma</strong><output id="gamma-value" for="gamma">1.40</output></span>
+          <input id="gamma" type="range" min="0.5" max="2" value="1.4" step="0.01" />
         </label>
         <label class="setting-row" for="vibrance">
-          <span><strong>Vibrance</strong><output id="vibrance-value" for="vibrance">100%</output></span>
-          <input id="vibrance" type="range" min="0" max="2" value="1" step="0.01" />
+          <span><strong>Vibrance</strong><output id="vibrance-value" for="vibrance">115%</output></span>
+          <input id="vibrance" type="range" min="0" max="2" value="1.15" step="0.01" />
         </label>
         <label class="setting-check" for="thirdperson">
           <span><strong>Third-person view</strong><small>Show your player model</small></span>
@@ -137,7 +137,6 @@ let maps: MapListItem[] = [];
 let activeMapName = "";
 let multiplayerConnected = false;
 const viewportSettingsStorageKey = "sauerweb.viewport-settings";
-const defaultViewportTuning: ViewportTuning = { contrast: 1, gamma: 1, vibrance: 1 };
 const gameplaySettingsStorageKey = "sauerweb.gameplay-settings";
 
 void loadMapIndex();
@@ -174,7 +173,7 @@ cameraMode.addEventListener("click", () => toggleCameraMode());
 physicsPause.addEventListener("click", () => togglePhysicsPause());
 physicsReset.addEventListener("click", () => mapScene.resetPlayer());
 settingsToggle.addEventListener("click", () => setSettingsOpen(settingsPanel.hidden));
-settingsReset.addEventListener("click", () => setViewportTuning(defaultViewportTuning));
+settingsReset.addEventListener("click", () => setViewportTuning(DEFAULT_VIEWPORT_TUNING));
 [contrastInput, gammaInput, vibranceInput].forEach((input) => input.addEventListener("input", updateViewportTuning));
 thirdpersonInput.addEventListener("change", updateGameplaySettings);
 teamskinsInput.addEventListener("change", updateGameplaySettings);
@@ -253,17 +252,17 @@ function readViewportTuning(): ViewportTuning {
   try {
     const stored = JSON.parse(localStorage.getItem(viewportSettingsStorageKey) ?? "null") as Partial<ViewportTuning> | null;
     return {
-      contrast: settingValue(stored?.contrast, 0.5, 1.5),
-      gamma: settingValue(stored?.gamma, 0.5, 2),
-      vibrance: settingValue(stored?.vibrance, 0, 2),
+      contrast: settingValue(stored?.contrast, 0.5, 1.5, DEFAULT_VIEWPORT_TUNING.contrast),
+      gamma: settingValue(stored?.gamma, 0.5, 2, DEFAULT_VIEWPORT_TUNING.gamma),
+      vibrance: settingValue(stored?.vibrance, 0, 2, DEFAULT_VIEWPORT_TUNING.vibrance),
     };
   } catch {
-    return { ...defaultViewportTuning };
+    return { ...DEFAULT_VIEWPORT_TUNING };
   }
 }
 
-function settingValue(value: unknown, minimum: number, maximum: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : 1;
+function settingValue(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
 }
 
 async function loadMapIndex(): Promise<void> {
