@@ -9,6 +9,7 @@ export interface ModelAdjustment {
 export interface ModelGeometry {
   meshes: ModelGeometryMesh[];
   joints?: ModelJointPose[];
+  bindJoints?: ModelJointPose[];
 }
 
 export interface ModelJointPose {
@@ -176,7 +177,7 @@ function skinMd5Joints(model: PreparedMd5Model, joints: ModelJointPose[]): Model
     }
     return { name: mesh.name, positions, uvs: mesh.uvs, indices: mesh.indices, bones: mesh.bones };
   });
-  return { meshes, joints };
+  return { meshes, joints, bindJoints: model.bindJoints };
 }
 
 export interface Md5AnimationInfo {
@@ -220,9 +221,10 @@ export function interpolateModelGeometry(current: ModelGeometry, next: ModelGeom
   if (reusable) {
     if (reusable.meshes !== meshes) reusable.meshes = meshes;
     if (reusable.joints !== joints) reusable.joints = joints;
+    reusable.bindJoints = current.bindJoints;
     return reusable;
   }
-  return { meshes, joints };
+  return { meshes, joints, bindJoints: current.bindJoints };
 }
 
 function interpolateJointPose(current: ModelJointPose, next: ModelJointPose, amount: number, reusable?: ModelJointPose): ModelJointPose {
@@ -685,8 +687,9 @@ export function parseIqmParts(buffer: ArrayBuffer, parts: Array<{ buffer: ArrayB
     });
   }
   if (!meshes.length) throw new Error("IQM model contains no renderable geometry.");
-  const joints = iqmJointPoses(view, transforms);
-  return { meshes, joints };
+  const bindJoints = iqmJointPoses(view);
+  const joints = transforms ? iqmJointPoses(view, transforms) : bindJoints;
+  return { meshes, joints, bindJoints };
 }
 
 function iqmJointPoses(view: DataView, animated?: IqmTransform[]): ModelJointPose[] | undefined {

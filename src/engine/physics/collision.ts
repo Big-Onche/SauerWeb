@@ -517,9 +517,14 @@ function rayIntersectsPlanes(origin: Vec3, direction: Vec3, planes: Plane[], max
                              radius = 0): RaycastResult | undefined {
   let entering = 0, leaving = maximumDistance;
   let normal = { x: -direction.x, y: -direction.y, z: -direction.z };
+  let boundarySlope = Number.POSITIVE_INFINITY;
   for (const candidate of planes) {
     const offset = dot(candidate, origin) + candidate.offset - radius;
     const slope = dot(candidate, direction);
+    if (Math.abs(offset) <= 1e-7 && slope < boundarySlope) {
+      normal = { x: candidate.x, y: candidate.y, z: candidate.z };
+      boundarySlope = slope;
+    }
     if (Math.abs(slope) < 1e-9) {
       if (offset > 0) return undefined;
       continue;

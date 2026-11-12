@@ -59,6 +59,10 @@ import { FrameProfiler } from "../platform/browser/FrameProfiler";
 
 export type CameraMode = "free" | "player";
 
+export function isBotLocallySimulated(ownerNumber: number, localClientNumber: number): boolean {
+  return ownerNumber < 0 || ownerNumber === localClientNumber;
+}
+
 export interface SceneStats {
   meshes: number;
   faces: number;
@@ -202,7 +206,10 @@ export class MapScene {
       if (!distance) return undefined;
       const hit = this.physics.raycast({ x: from.x, y: from.z, z: from.y }, {
         x: direction.x / distance, y: direction.y / distance, z: direction.z / distance,
-      }, distance, radius, true);
+      }, distance, radius, false);
+      if (hit && hit.distance <= 1e-5 && direction.x * hit.normal.x + direction.y * hit.normal.y + direction.z * hit.normal.z >= -1e-6) {
+        return undefined;
+      }
       return hit ? { position: { x: hit.position.x, y: hit.position.z, z: hit.position.y },
         normal: { x: hit.normal.x, y: hit.normal.z, z: hit.normal.y } } : undefined;
     }, (milliseconds) => this.frameProfiler.record("playerGeometry", milliseconds), () => this.frameProfiler.enabled);
@@ -1148,7 +1155,7 @@ export class MapScene {
     const localNetworkPlayer = multiplayer.players.get(multiplayer.clientNumber);
     for (const [clientNumber, player] of multiplayer.players) {
       const ownedBot = this.bots.bots.get(clientNumber);
-      if (ownedBot?.ownerNumber === multiplayer.clientNumber) continue;
+      if (ownedBot && isBotLocallySimulated(ownedBot.ownerNumber, multiplayer.clientNumber)) continue;
       if (!this.renderDiagnostics.bots && player.aiType !== 0) continue;
       const local = clientNumber === multiplayer.clientNumber;
       if (!local) interpolateNetworkEntity(player, nowMilliseconds);
@@ -1189,7 +1196,7 @@ export class MapScene {
     }
     for (const bot of this.bots.bots.values()) {
       if (!this.renderDiagnostics.bots) continue;
-      if (multiplayer.players.has(bot.clientNumber) && bot.ownerNumber !== multiplayer.clientNumber) continue;
+      if (multiplayer.players.has(bot.clientNumber) && !isBotLocallySimulated(bot.ownerNumber, multiplayer.clientNumber)) continue;
       players.push({
         id: bot.clientNumber, model: bot.model % 5, team: bot.team, local: false,
         visible: bot.clientState !== ClientState.Spectator && bot.clientState !== ClientState.Spawning,

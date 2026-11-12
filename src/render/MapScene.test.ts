@@ -2,7 +2,15 @@ import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
 import type { RegisteredMapEntity, SauerMap } from "../engine/octa";
-import { computeTangents, MapScene } from "./MapScene";
+import { computeTangents, isBotLocallySimulated, MapScene } from "./MapScene";
+
+describe("bot render ownership", () => {
+  it("uses the live bot simulation for offline and locally owned bots", () => {
+    expect(isBotLocallySimulated(-1, 0)).toBe(true);
+    expect(isBotLocallySimulated(3, 3)).toBe(true);
+    expect(isBotLocallySimulated(3, 7)).toBe(false);
+  });
+});
 
 describe("computeTangents", () => {
   it("builds a right-handed tangent frame from world UVs", () => {
