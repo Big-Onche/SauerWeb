@@ -100,35 +100,65 @@ export interface Md5AnimationInfo {
   frameRate: number;
 }
 
-export function interpolateModelGeometry(current: ModelGeometry, next: ModelGeometry, interpolation: number): ModelGeometry {
+export function interpolateModelGeometry(current: ModelGeometry, next: ModelGeometry, interpolation: number,
+                                         reusable?: ModelGeometry): ModelGeometry {
   if (interpolation <= 0 || current.meshes.length !== next.meshes.length) return current;
   const amount = Math.min(interpolation, 1);
-  const joints = current.joints && next.joints && current.joints.length === next.joints.length
-    ? current.joints.map((joint, index) => interpolateJointPose(joint, next.joints![index], amount)) : current.joints;
-  return {
-    meshes: current.meshes.map((mesh, meshIndex) => {
-      const nextMesh = next.meshes[meshIndex];
-      if (mesh.positions.length !== nextMesh.positions.length) return mesh;
-      return {
-        ...mesh,
-        positions: mesh.positions.map((position, index) => position + (nextMesh.positions[index] - position) * amount),
-      };
-    }),
-    joints,
-  };
+  let joints = current.joints;
+  if (current.joints && next.joints && current.joints.length === next.joints.length) {
+    joints = reusable?.joints?.length === current.joints.length ? reusable.joints : new Array<ModelJointPose>(current.joints.length);
+    for (let index = 0; index < joints.length; index++) {
+      joints[index] = interpolateJointPose(current.joints[index], next.joints[index], amount, joints[index]);
+    }
+  }
+  const meshes = reusable?.meshes.length === current.meshes.length ? reusable.meshes : new Array<ModelGeometryMesh>(current.meshes.length);
+  for (let meshIndex = 0; meshIndex < current.meshes.length; meshIndex++) {
+    const mesh = current.meshes[meshIndex];
+    const nextMesh = next.meshes[meshIndex];
+    if (mesh.positions.length !== nextMesh.positions.length) {
+      meshes[meshIndex] = mesh;
+      continue;
+    }
+    const target = meshes[meshIndex];
+    const positions = target?.positions.length === mesh.positions.length ? target.positions : new Array<number>(mesh.positions.length);
+    for (let index = 0; index < positions.length; index++) {
+      positions[index] = mesh.positions[index] + (nextMesh.positions[index] - mesh.positions[index]) * amount;
+    }
+    if (target && target !== current.meshes[meshIndex] && target !== next.meshes[meshIndex]) {
+      target.name = mesh.name;
+      target.positions = positions;
+      target.uvs = mesh.uvs;
+      target.indices = mesh.indices;
+      target.bones = mesh.bones;
+      meshes[meshIndex] = target;
+    } else meshes[meshIndex] = { ...mesh, positions };
+  }
+  if (reusable) {
+    if (reusable.meshes !== meshes) reusable.meshes = meshes;
+    if (reusable.joints !== joints) reusable.joints = joints;
+    return reusable;
+  }
+  return { meshes, joints };
 }
 
-function interpolateJointPose(current: ModelJointPose, next: ModelJointPose, amount: number): ModelJointPose {
+function interpolateJointPose(current: ModelJointPose, next: ModelJointPose, amount: number, reusable?: ModelJointPose): ModelJointPose {
   const direction = current.orientation.reduce((sum, value, index) => sum + value * next.orientation[index], 0) < 0 ? -1 : 1;
-  const orientation = current.orientation.map((value, index) => value + (next.orientation[index] * direction - value) * amount) as
-    [number, number, number, number];
+  const orientation = reusable?.orientation ?? [0, 0, 0, 0];
+  for (let index = 0; index < orientation.length; index++) {
+    orientation[index] = current.orientation[index] + (next.orientation[index] * direction - current.orientation[index]) * amount;
+  }
   const length = Math.hypot(...orientation) || 1;
-  return {
-    name: current.name,
-    parent: current.parent,
-    position: current.position.map((value, index) => value + (next.position[index] - value) * amount) as [number, number, number],
-    orientation: orientation.map((value) => value / length) as [number, number, number, number],
-  };
+  for (let index = 0; index < orientation.length; index++) orientation[index] /= length;
+  const position = reusable?.position ?? [0, 0, 0];
+  for (let index = 0; index < position.length; index++) {
+    position[index] = current.position[index] + (next.position[index] - current.position[index]) * amount;
+  }
+  if (reusable) {
+    reusable.name = current.name;
+    reusable.parent = current.parent;
+    return reusable;
+  }
+  return { name: current.name, parent: current.parent, position, orientation };
 }
 
 export function md5AnimationInfo(source: string): Md5AnimationInfo {

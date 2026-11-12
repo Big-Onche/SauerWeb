@@ -47,6 +47,7 @@ interface PlayerModelInstance {
   updateToken: number;
   updating: boolean;
   pendingUpdate?: ModelUpdateRequest;
+  interpolatedGeometry?: ModelGeometry;
   ragdoll?: PlayerRagdollState;
 }
 
@@ -95,6 +96,8 @@ interface SavedRagdoll {
   expiresAt: number;
 }
 
+const MAX_GEOMETRY_FRAME_CACHE = 32;
+
 // Browser counterpart of src/fpsgame/render.cpp's model batching and src/engine/ragdoll.h's death simulation.
 export class PlayerRenderer {
   private readonly instances = new Map<number, PlayerModelInstance>();
@@ -107,6 +110,7 @@ export class PlayerRenderer {
   private readonly meshVertexBuffers = new WeakMap<Mesh, MeshVertexBuffers>();
   private assets?: Promise<PlayerModelAsset[]>;
   private viewWeapons?: Promise<ViewWeaponAsset[]>;
+  private geometryGeneration = 0;
 
   constructor(private readonly scene: Scene, private readonly ragdollCollider?: RagdollCollider,
               private readonly performanceRecorder?: (milliseconds: number) => void, private readonly profilingEnabled?: () => boolean) {}
@@ -142,12 +146,14 @@ export class PlayerRenderer {
   }
 
   clear(): void {
+    this.geometryGeneration++;
     this.instances.forEach((instance) => this.disposeInstance(instance));
     this.instances.clear();
     this.savedRagdolls.forEach((saved) => this.disposeInstance(saved.instance));
     this.savedRagdolls.length = 0;
     this.materials.forEach((material) => material.dispose(true, true));
     this.materials.clear();
+    this.geometryFrames.clear();
   }
 
   private saveRagdoll(id: number, instance: PlayerModelInstance, nowMilliseconds: number): void {
@@ -271,7 +277,7 @@ export class PlayerRenderer {
       -(asset.pitch ?? 0) * Math.PI / 180, 0);
     const frame = position.frame + (position.nextFrame !== position.frame ? position.interpolation : 0);
     if (instance.visualKey === visualKey && instance.animation === animation && instance.frame === frame) return;
-    const geometry = await this.geometry(asset, animationPath, animationSource, animationBuffer, position);
+    const geometry = await this.geometry(asset, animationPath, animationSource, animationBuffer, position, instance);
     if (token !== instance.updateToken) return;
     if (instance.visualKey !== visualKey || instance.meshes.length !== geometry.meshes.length) {
       this.createMeshes(instance, definition, asset, geometry);
@@ -443,18 +449,26 @@ export class PlayerRenderer {
   }
 
   private async geometry(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
-                         animationBuffer: ArrayBuffer | undefined, position: ModelAnimationPosition): Promise<ModelGeometry> {
+                         animationBuffer: ArrayBuffer | undefined, position: ModelAnimationPosition,
+                         instance?: PlayerModelInstance): Promise<ModelGeometry> {
     const current = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.frame);
     if (position.interpolation <= 0 || position.nextFrame === position.frame) return current;
     const next = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.nextFrame);
-    return this.profile(() => interpolateModelGeometry(current, next, position.interpolation));
+    const geometry = this.profile(() => interpolateModelGeometry(current, next, position.interpolation, instance?.interpolatedGeometry));
+    if (instance) instance.interpolatedGeometry = geometry;
+    return geometry;
   }
 
   private async geometryFrame(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
                               animationBuffer: ArrayBuffer | undefined, frame: number): Promise<ModelGeometry> {
+    const generation = this.geometryGeneration;
     const key = `${asset.geometryPath}:${animationPath ?? "bind"}:${frame}`;
     const cached = this.geometryFrames.get(key);
-    if (cached) return cached;
+    if (cached) {
+      this.geometryFrames.delete(key);
+      this.geometryFrames.set(key, cached);
+      return cached;
+    }
     let geometry: ModelGeometry;
     if (asset.format === "MD5") {
       const source = await this.fetchText(asset.geometryPath!);
@@ -464,7 +478,13 @@ export class PlayerRenderer {
       geometry = this.profile(() => parseIqm(source, animationBuffer, frame));
     }
     else throw new Error(`Player model format ${asset.format ?? "unknown"} is not supported.`);
+    if (generation !== this.geometryGeneration) return geometry;
     this.geometryFrames.set(key, geometry);
+    while (this.geometryFrames.size > MAX_GEOMETRY_FRAME_CACHE) {
+      const oldest = this.geometryFrames.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.geometryFrames.delete(oldest);
+    }
     return geometry;
   }
 
@@ -483,8 +503,32 @@ export class PlayerRenderer {
   private updateMeshes(meshes: Mesh[], sources: ModelGeometryMesh[], asset: MapModelAsset): void {
     this.profile(() => {
       sources.forEach((source, index) => {
-        const positions = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
-        this.applyMesh(meshes[index], source, positions);
+        const mesh = meshes[index];
+        const translate = asset.translate ?? [0, 0, 0];
+        const scale = asset.scale ?? 0.25;
+        const existing = this.meshVertexBuffers.get(mesh);
+        const created = !existing || existing.positions.length !== source.positions.length;
+        const buffers = created
+          ? { positions: new Float32Array(source.positions.length), normals: new Float32Array(source.positions.length), indices: source.indices }
+          : existing;
+        for (let offset = 0; offset < buffers.positions.length; offset += 3) {
+          buffers.positions[offset] = (source.positions[offset] + translate[0]) * scale;
+          buffers.positions[offset + 1] = (source.positions[offset + 1] + translate[2]) * scale;
+          buffers.positions[offset + 2] = (source.positions[offset + 2] + translate[1]) * scale;
+        }
+        VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
+        if (created) {
+          const data = new VertexData();
+          data.positions = buffers.positions;
+          data.indices = source.indices;
+          data.uvs = source.uvs;
+          data.normals = buffers.normals;
+          data.applyToMesh(mesh, true);
+          this.meshVertexBuffers.set(mesh, buffers);
+        } else {
+          mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, true);
+          mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
+        }
       });
     });
   }
@@ -561,6 +605,8 @@ export class PlayerRenderer {
   }
 
   private disposeInstance(instance: PlayerModelInstance): void {
+    instance.updateToken++;
+    instance.pendingUpdate = undefined;
     instance.meshes.forEach((mesh) => mesh.dispose());
     this.disposeWeapon(instance);
     instance.root.dispose();

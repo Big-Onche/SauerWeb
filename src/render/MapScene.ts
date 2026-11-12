@@ -328,7 +328,7 @@ export class MapScene {
       triangles += batch.indices.length / 3;
       vertices += batch.positions.length / 3;
     });
-    map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
+    if (this.entityDebug && !this.entityMeshes.length) map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
     this.particleRenderer.loadMap(map.entityRegistry);
     const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
       () => generation === this.loadGeneration, teleporter);
@@ -388,8 +388,10 @@ export class MapScene {
   }
 
   setEntityDebug(enabled: boolean): void {
+    if (enabled === this.entityDebug) return;
     this.entityDebug = enabled;
-    this.entityMeshes.forEach((mesh) => mesh.setEnabled(enabled));
+    this.clearEntityDebugResources();
+    if (enabled) this.currentMap?.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
   }
 
   setViewportTuning(tuning: ViewportTuning): void {
@@ -612,7 +614,6 @@ export class MapScene {
     marker.material = this.getEntityMaterial(entity.category);
     marker.metadata = { entityIndex: entity.index, entityType: entity.typeName, attributes: entity.namedAttributes };
     marker.isPickable = true;
-    marker.setEnabled(this.entityDebug);
     this.entityMeshes.push(marker);
     const direction = entity.orientation?.direction
       ? toBabylonDirection(entity.orientation.direction)
@@ -621,8 +622,14 @@ export class MapScene {
     const line = MeshBuilder.CreateLines(`entity-${entity.index}-orientation`, { points: [position, position.add(direction.scale(7))] }, this.scene);
     line.color = this.entityColor(entity.category);
     line.isPickable = false;
-    line.setEnabled(this.entityDebug);
     this.entityMeshes.push(line);
+  }
+
+  private clearEntityDebugResources(): void {
+    this.entityMeshes.forEach((mesh) => mesh.dispose());
+    this.entityMeshes.length = 0;
+    this.entityMaterials.forEach((material) => material.dispose());
+    this.entityMaterials.clear();
   }
 
   private getEntityMaterial(category: string): StandardMaterial {

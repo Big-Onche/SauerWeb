@@ -76,6 +76,23 @@ describe("MD5 model loading", () => {
     expect(interpolated.meshes[0].positions).not.toEqual(next.meshes[0].positions);
   });
 
+  it("reuses interpolated player geometry buffers", () => {
+    const directory = path.resolve(".Sauerbraten/packages/models/mrfixit");
+    const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
+    const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
+    const current = parseMd5(mesh, animation, [], 0);
+    const next = parseMd5(mesh, animation, [], 1);
+    const reusable = interpolateModelGeometry(current, next, 0.25);
+    const positions = reusable.meshes[0].positions;
+    const joints = reusable.joints;
+
+    expect(interpolateModelGeometry(current, next, 0.75, reusable)).toBe(reusable);
+    expect(reusable.meshes[0].positions).toBe(positions);
+    expect(reusable.joints).toBe(joints);
+    expect(reusable.meshes[0].positions[0]).toBeCloseTo(current.meshes[0].positions[0] +
+      (next.meshes[0].positions[0] - current.meshes[0].positions[0]) * 0.75);
+  });
+
   it("skins the Ogro player model at successive IQM animation frames", () => {
     const directory = path.resolve(".Sauerbraten/packages/models/ogro2");
     const meshBytes = fs.readFileSync(path.join(directory, "ogro.iqm"));
