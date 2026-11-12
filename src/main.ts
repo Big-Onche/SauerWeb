@@ -17,6 +17,7 @@ const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "
 type OptionTab = typeof OPTION_TABS[number];
 
 const EXPERIMENTAL_DISCLAIMER_KEY = "sauerweb.experimental-disclaimer-dismissed";
+const REPORT_ISSUE_URL = "https://github.com/Big-Onche/SauerWeb/issues";
 
 const app = required<HTMLDivElement>("#app");
 const onlinePresence = new OnlinePresence();
@@ -94,7 +95,7 @@ function renderMainMenu(): void {
           <div class="menu-rule compact"></div>
           ${menuButton("options..", "options", true)}
           ${menuButton("about..", "about", true)}
-          ${menuButton("quit", "quit", false, "exit")}
+          ${menuLink("Report an issue", REPORT_ISSUE_URL, "info")}
         </nav>
       </section>
       <dialog id="playermodel-dialog" class="playermodel-dialog" aria-labelledby="playermodel-title">
@@ -573,6 +574,10 @@ function launchMap(name: string): void {
 
 function menuButton(label: string, action: string, enabled: boolean, icon = "menu"): string {
   return `<button type="button" data-action="${action}" ${enabled ? "" : "disabled"}><img src="/api/packages/icons/${icon}.jpg" alt="" /><span>${label}</span></button>`;
+}
+
+function menuLink(label: string, href: string, icon = "menu"): string {
+  return `<a href="${href}" target="_blank" rel="noopener noreferrer"><img src="/api/packages/icons/${icon}.jpg" alt="" /><span>${label}</span></a>`;
 }
 
 function backgroundMarkup(showLogo: boolean): string {

@@ -39,9 +39,12 @@ button { color: inherit; }
 .menu-rule { height: 1px; margin: 15px 0 12px; background: linear-gradient(90deg, transparent, #a4acad88 8%, #a4acad88 92%, transparent); }
 .menu-rule.compact { margin: 8px 0; }
 .menu-actions { display: grid; gap: 2px; }
-.menu-actions button { display: flex; align-items: center; gap: 12px; height: 34px; padding: 2px 9px; border: 1px solid transparent; border-radius: 2px; background: transparent; font-size: 21px; text-align: left; cursor: pointer; text-shadow: 0 2px 2px #000; }
-.menu-actions button img { width: 25px; height: 25px; border: 1px solid #929a9690; filter: saturate(.6); }
-.menu-actions button:not(:disabled):hover, .menu-actions button:not(:disabled):focus-visible { border-color: #d9953d88; outline: none; background: linear-gradient(90deg, #c878214f, transparent); color: #ffd49b; }
+.menu-actions button, .menu-actions a { display: flex; align-items: center; gap: 12px; height: 34px; padding: 2px 9px; border: 1px solid transparent;
+  border-radius: 2px; background: transparent; color: inherit; font-size: 21px; text-align: left; text-decoration: none; cursor: pointer;
+  text-shadow: 0 2px 2px #000; }
+.menu-actions button img, .menu-actions a img { width: 25px; height: 25px; border: 1px solid #929a9690; filter: saturate(.6); }
+.menu-actions button:not(:disabled):hover, .menu-actions button:not(:disabled):focus-visible, .menu-actions a:hover, .menu-actions a:focus-visible {
+  border-color: #d9953d88; outline: none; background: linear-gradient(90deg, #c878214f, transparent); color: #ffd49b; }
 .menu-actions button:disabled { color: #808787; cursor: not-allowed; opacity: .5; }
 .options-dialog { display: flex; flex-direction: column; width: min(850px, calc(100vw - 64px)); height: min(610px, calc(100vh - 64px)); padding: 20px 22px 14px; }
 .option-tabs { display: flex; gap: 2px; border-bottom: 1px solid #858f8f; }
