@@ -281,7 +281,11 @@ export class BotManager {
       this.physics.simulateEntity(bot, Math.max(1, elapsed));
       this.timeouts(bot, elapsed, now);
       this.checkItems(bot, now);
-      bot.weaponSystem.update(now, bot.ai.target);
+      const fired = bot.weaponSystem.update(now, bot.ai.target);
+      if (fired && bot.selectedGun === Gun.Pistol && bot.skill <= 100) {
+        const controller = bot.weaponSystem.controller;
+        controller.gunWait += Math.trunc(controller.gunWait * ((101 - bot.skill + this.rnd(111 - bot.skill)) / 100));
+      }
       bot.weaponSystem.controller.setAttacking(false);
       bot.jumping = false;
       if (!bot.alive || bot.health <= 0 || bot.clientState === ClientState.Dead) this.killed(bot, undefined, now);
@@ -497,17 +501,16 @@ export class BotManager {
   }
 
   private combat(bot: BotActor, enemy: Damageable, now: number): void {
+    this.selectWeapon(bot, distance(bot.position, enemy.position));
     const aim = this.getaimpos(bot, enemy, now), delta = subtract(aim, bot.position), dist = magnitude(delta);
     const visible = this.lineOfSight(bot.position, aim, dist);
     if (visible) {
       bot.ai.enemySeen = now;
-      bot.ai.target = aim;
-      this.selectWeapon(bot, dist);
       this.turnAndMove(bot, aim, now, 1.5, false);
       const definition = WEAPONS[bot.selectedGun], ready = now - bot.lastAction >= bot.gunWait;
-      const error = angularError(bot, aim);
-      const reaction = Math.max(30, 101 - bot.skill);
-      if (ready && dist >= Math.max(definition.explosionRadius, 2) && dist <= definition.range + 4 && error <= reaction) {
+      bot.ai.target = findorientation(bot.position, bot.yaw, bot.pitch, definition.range);
+      if (ready && dist >= Math.max(definition.explosionRadius, 2) && dist <= definition.range + 4 &&
+          this.hastarget(bot, aim, now, definition.attackDelay, definition.projectileSpeed > 0)) {
         bot.weaponSystem.controller.setAttacking(true);
         bot.ai.lastAction = now;
       }
@@ -579,14 +582,25 @@ export class BotManager {
     }
     if (bot.skill <= 100 && now >= bot.ai.lastAimRandom) {
       const skew = [1, 10, 50, 5, 20, 1, 100, 10, 10, 10, 1, 1][bot.selectedGun];
-      const spread = enemy.radius * skew / Math.max(bot.skill, 1);
-      bot.ai.aimRandom = { x: (this.random() * 2 - 1) * spread, y: (this.random() * 2 - 1) * spread,
-        z: (this.random() * 2 - 1) * spread };
+      const radius = enemy.radius * skew, range = Math.trunc(radius * 2) + 1, skill = Math.max(bot.skill, 1);
+      bot.ai.aimRandom = { x: (this.rnd(range) - radius) / skill, y: (this.rnd(range) - radius) / skill,
+        z: (this.rnd(range) - radius) / skill };
       const duration = (bot.skill + 10) * 10;
       bot.ai.lastAimRandom = now + duration + this.rnd(duration);
     }
     result.x += bot.ai.aimRandom.x; result.y += bot.ai.aimRandom.y; result.z += bot.ai.aimRandom.z;
     return result;
+  }
+
+  // Original: src/fpsgame/ai.cpp, hastarget().
+  private hastarget(bot: BotActor, aim: Vec3, now: number, attackDelay: number, projectile: boolean): boolean {
+    if (bot.selectedGun === Gun.Fist) return true;
+    const desired = yawPitch(bot.position, aim);
+    const denominator = bot.skill * attackDelay / 200;
+    const skew = clamp(denominator > 0 ? (now - bot.ai.enemyMillis) / denominator : 1, 0,
+      projectile ? 0.25 : Number.MAX_VALUE);
+    return Math.abs(shortestAngle(desired.yaw - bot.yaw)) <= bot.ai.views[0] * skew &&
+      Math.abs(desired.pitch - bot.pitch) <= bot.ai.views[1] * skew;
   }
 
   private selectWeapon(bot: BotActor, distanceToEnemy: number): void {
@@ -714,9 +728,15 @@ function yawPitch(from: Vec3, to: Vec3): { yaw: number; pitch: number } {
   return { yaw: normalizeAngle(-Math.atan2(delta.x, delta.y) * 180 / Math.PI), pitch: Math.asin(clamp(delta.z / dist, -1, 1)) * 180 / Math.PI };
 }
 
-function angularError(actor: PhysicsEntity, target: Vec3): number {
-  const desired = yawPitch(actor.position, target);
-  return Math.abs(shortestAngle(desired.yaw - actor.yaw)) + Math.abs(desired.pitch - actor.pitch);
+// Original: src/fpsgame/ai.cpp, findorientation().
+// The weapon fires along the actor's current view, not directly at its desired aim point.
+export function findorientation(origin: Vec3, yaw: number, pitch: number, distance: number): Vec3 {
+  const yawRadians = yaw * Math.PI / 180, pitchRadians = pitch * Math.PI / 180, horizontal = Math.cos(pitchRadians);
+  return {
+    x: origin.x - Math.sin(yawRadians) * horizontal * distance,
+    y: origin.y + Math.cos(yawRadians) * horizontal * distance,
+    z: origin.z + Math.sin(pitchRadians) * distance,
+  };
 }
 
 function signedByte(value: number): number { return value << 24 >> 24; }
