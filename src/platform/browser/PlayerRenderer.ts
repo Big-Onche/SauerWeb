@@ -96,7 +96,9 @@ interface SavedRagdoll {
   expiresAt: number;
 }
 
-const MAX_GEOMETRY_FRAME_CACHE = 32;
+// Local bots can use all five models concurrently. Their active locomotion/idle loops total roughly 360 distinct skinned frames;
+// a smaller cache continually reparses and reskins evicted MD5/IQM frames. Leave room for attack transitions while remaining bounded.
+const MAX_GEOMETRY_FRAME_CACHE = 512;
 
 // Browser counterpart of src/fpsgame/render.cpp's model batching and src/engine/ragdoll.h's death simulation.
 export class PlayerRenderer {
@@ -463,18 +465,18 @@ export class PlayerRenderer {
                               animationBuffer: ArrayBuffer | undefined, frame: number): Promise<ModelGeometry> {
     const generation = this.geometryGeneration;
     const key = `${asset.geometryPath}:${animationPath ?? "bind"}:${frame}`;
-    const cached = this.geometryFrames.get(key);
-    if (cached) {
-      this.geometryFrames.delete(key);
-      this.geometryFrames.set(key, cached);
-      return cached;
-    }
+    const cached = this.cachedGeometryFrame(key);
+    if (cached) return cached;
     let geometry: ModelGeometry;
     if (asset.format === "MD5") {
       const source = await this.fetchText(asset.geometryPath!);
+      const shared = this.cachedGeometryFrame(key);
+      if (shared) return shared;
       geometry = this.profile(() => parseMd5(source, animationSource, [], frame));
     } else if (asset.format === "IQM") {
       const source = await this.fetchBinary(asset.geometryPath!);
+      const shared = this.cachedGeometryFrame(key);
+      if (shared) return shared;
       geometry = this.profile(() => parseIqm(source, animationBuffer, frame));
     }
     else throw new Error(`Player model format ${asset.format ?? "unknown"} is not supported.`);
@@ -486,6 +488,14 @@ export class PlayerRenderer {
       this.geometryFrames.delete(oldest);
     }
     return geometry;
+  }
+
+  private cachedGeometryFrame(key: string): ModelGeometry | undefined {
+    const cached = this.geometryFrames.get(key);
+    if (!cached) return undefined;
+    this.geometryFrames.delete(key);
+    this.geometryFrames.set(key, cached);
+    return cached;
   }
 
   private createMeshes(instance: PlayerModelInstance, definition: PlayerModelAsset, asset: MapModelAsset, geometry: ModelGeometry): void {
