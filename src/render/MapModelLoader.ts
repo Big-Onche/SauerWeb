@@ -21,6 +21,29 @@ export interface LoadedMapModels {
   vertices: number;
   collisions: MapModelCollision[];
   animations: EntityModelAnimation[];
+  resources: MapModelResources;
+}
+
+export class MapModelResources {
+  private readonly materials = new Set<StandardMaterial>();
+  private readonly textures = new Set<Texture>();
+
+  ownMaterial(material: StandardMaterial): StandardMaterial {
+    this.materials.add(material);
+    return material;
+  }
+
+  ownTexture(texture: Texture): Texture {
+    this.textures.add(texture);
+    return texture;
+  }
+
+  dispose(): void {
+    this.materials.forEach((material) => material.dispose(false, false));
+    this.textures.forEach((texture) => texture.dispose());
+    this.materials.clear();
+    this.textures.clear();
+  }
 }
 
 export interface EntityModelAnimation {
@@ -36,6 +59,7 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
   let vertices = 0;
   const collisions: MapModelCollision[] = [];
   const animations: EntityModelAnimation[] = [];
+  const resources = new MapModelResources();
   const referenced = new Map<number, RegisteredMapEntity[]>();
   for (const entity of entities) {
     if (entity.typeName !== "mapmodel") continue;
@@ -83,7 +107,7 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
       for (const entity of instances) {
         const animation: EntityModelAnimation = { meshes: [], entity, asset };
         for (const source of geometry.meshes) {
-          const mesh = createModelMesh(scene, source, asset, entity, materials, wireframe, animated);
+          const mesh = createModelMesh(scene, source, asset, entity, materials, resources, wireframe, animated);
           meshes.push(mesh);
           animation.meshes.push(mesh);
           triangles += source.indices.length / 3;
@@ -97,7 +121,7 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
     }
   }));
   issues.forEach((issue) => console.warn(issue));
-  return { meshes, issues, triangles, vertices, collisions, animations };
+  return { meshes, issues, triangles, vertices, collisions, animations, resources };
 }
 
 // Original: src/fpsgame/entities.cpp
@@ -148,7 +172,8 @@ function collisionBounds(geometry: ModelGeometry, asset: MapModelAsset): {
 }
 
 function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapModelAsset, entity: RegisteredMapEntity,
-                         materials: Map<string, StandardMaterial>, wireframe: boolean, animated = false): Mesh {
+                         materials: Map<string, StandardMaterial>, resources: MapModelResources, wireframe: boolean,
+                         animated = false): Mesh {
   const mesh = new Mesh(`mapmodel-${entity.index}-${asset.name}-${source.name}`, scene);
   const data = new VertexData();
   const translated = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
@@ -164,7 +189,7 @@ function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapMode
   const materialKey = `${source.name}:${skin?.diffusePath ?? ""}:${meshSettings?.cullFace ?? asset.cullFace ?? true}`;
   let material = materials.get(materialKey);
   if (!material) {
-    material = createModelMaterial(scene, asset, skin, meshSettings, wireframe, materialKey);
+    material = createModelMaterial(scene, asset, skin, meshSettings, resources, wireframe, materialKey);
     materials.set(materialKey, material);
   }
   mesh.material = material;
@@ -188,15 +213,16 @@ function translateAndScale(positions: number[], translate: [number, number, numb
 }
 
 function createModelMaterial(scene: Scene, asset: MapModelAsset, skin: MapModelSkin | undefined,
-                             meshSettings: MapModelMeshSettings | undefined, wireframe: boolean, key: string): StandardMaterial {
-  const material = new StandardMaterial(`mapmodel-material-${asset.index}-${key}`, scene);
+                             meshSettings: MapModelMeshSettings | undefined, resources: MapModelResources, wireframe: boolean,
+                             key: string): StandardMaterial {
+  const material = resources.ownMaterial(new StandardMaterial(`mapmodel-material-${asset.index}-${key}`, scene));
   material.backFaceCulling = meshSettings?.cullFace ?? asset.cullFace ?? true;
   material.wireframe = wireframe;
   material.specularColor = Color3.White().scale(asset.specular ?? 1);
   material.ambientColor = Color3.White().scale(asset.ambient ?? 0.3);
   const diffuseUrl = packageAssetUrl(skin?.diffusePath);
   if (diffuseUrl) {
-    const texture = new Texture(diffuseUrl, scene, false, false);
+    const texture = resources.ownTexture(new Texture(diffuseUrl, scene, false, false));
     texture.hasAlpha = true;
     material.diffuseTexture = texture;
     material.emissiveTexture = texture;
@@ -204,7 +230,7 @@ function createModelMaterial(scene: Scene, asset: MapModelAsset, skin: MapModelS
     material.useAlphaFromDiffuseTexture = true;
   }
   const masksUrl = packageAssetUrl(skin?.masksPath);
-  if (masksUrl) material.specularTexture = new Texture(masksUrl, scene, false, false);
+  if (masksUrl) material.specularTexture = resources.ownTexture(new Texture(masksUrl, scene, false, false));
   if (asset.alphaBlend) material.transparencyMode = Material.MATERIAL_ALPHABLEND;
   else {
     material.transparencyMode = Material.MATERIAL_ALPHATEST;

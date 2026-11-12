@@ -26,7 +26,7 @@ import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRend
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 import { toBabylonDirection, toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 import { resolveMapLighting } from "./MapLighting";
-import { animateEntityModels, loadMapModels, type EntityModelAnimation } from "./MapModelLoader";
+import { animateEntityModels, loadMapModels, type EntityModelAnimation, type MapModelResources } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { installSauerFogDistance } from "./SauerFogShader";
@@ -131,6 +131,7 @@ export class MapScene {
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
+  private mapModelResources?: MapModelResources;
   private readonly waypointMeshes: Mesh[] = [];
   private lastWaypointDebugUpdate = 0;
   private readonly entityModelAnimations: EntityModelAnimation[] = [];
@@ -235,6 +236,8 @@ export class MapScene {
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
+    this.mapModelResources?.dispose();
+    this.mapModelResources = undefined;
     this.volumeMeshes.length = 0;
     this.volumeMaterials.forEach((material) => material.dispose(true, true));
     this.volumeMaterials.clear();
@@ -301,6 +304,18 @@ export class MapScene {
     this.particleRenderer.loadMap(map.entityRegistry);
     const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
       () => generation === this.loadGeneration, teleporter);
+    if (generation !== this.loadGeneration) {
+      loadedMapModels.resources.dispose();
+      return {
+        meshes: batches.length + materialBatches.length,
+        faces,
+        triangles,
+        vertices,
+        materialVolumes: map.materialVolumes.length,
+        mapModelIssues: loadedMapModels.issues,
+      };
+    }
+    this.mapModelResources = loadedMapModels.resources;
     this.physics.setMapModels(loadedMapModels.collisions);
     this.mapModelMeshes.push(...loadedMapModels.meshes);
     this.entityModelAnimations.push(...loadedMapModels.animations);
@@ -504,6 +519,8 @@ export class MapScene {
     this.ctfRenderer.clear();
     this.particleRenderer.clear();
     this.weaponRenderer.clear();
+    this.mapModelResources?.dispose();
+    this.mapModelResources = undefined;
     this.engine.dispose();
   }
 
