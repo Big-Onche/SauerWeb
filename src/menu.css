@@ -17,6 +17,10 @@ button { color: inherit; }
 .sauer-logo { position: absolute; top: clamp(0px, 1.5vh, 16px); left: 50%; z-index: 1; width: min(900px, 94vw, 100vh); height: auto; transform: translateX(-50%); pointer-events: none; }
 .sauer-dialog { position: relative; z-index: 2; isolation: isolate; border: 0; background: transparent; box-shadow: 0 25px 80px #000b; }
 .sauer-dialog > :not(.gui-skin) { position: relative; z-index: 2; }
+.online-players { position: absolute; bottom: 18px; left: 20px; z-index: 2; display: flex; align-items: center; gap: 8px; color: #bec8c1;
+  font-size: 14px; font-weight: 600; letter-spacing: .04em; text-shadow: 0 2px 2px #000; pointer-events: none; }
+.online-players[hidden] { display: none; }
+.online-players i { width: 8px; height: 8px; border-radius: 50%; background: #70c878; box-shadow: 0 0 7px #5bd868aa; }
 .main-dialog { width: min(430px, calc(100vw - 30px)); margin-top: min(34vh, 310px); padding: 22px 30px 18px; }
 .identity-row { display: grid; grid-template-columns: 88px 1fr; gap: 16px; }
 .portrait { width: 88px; height: 88px; padding: 4px; border: 1px solid #a6b0ae; border-radius: 2px; background: #111; cursor: pointer; opacity: 1 !important; }

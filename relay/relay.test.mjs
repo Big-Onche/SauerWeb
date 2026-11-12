@@ -2,7 +2,7 @@ import dgram from "node:dgram";
 import http from "node:http";
 import { WebSocket } from "ws";
 import { describe, expect, it } from "vitest";
-import { attachSauerRelay, parseMasterServerList, parseTrustedProxies, resolveClientAddress } from "./relay.mjs";
+import { attachPresence, attachSauerRelay, parseMasterServerList, parseTrustedProxies, resolveClientAddress } from "./relay.mjs";
 
 describe("parseMasterServerList", () => {
   it("parses and deduplicates the original addserver format", () => {
@@ -113,3 +113,54 @@ describe("relay connection limits", () => {
     await new Promise((resolve) => udp.close(resolve));
   });
 });
+
+describe("browser presence", () => {
+  it("counts unique sessions, replaces a resumed session, and expires stale sessions", async () => {
+    const server = http.createServer();
+    const presence = attachPresence(server, { staleMilliseconds: 80, sweepMilliseconds: 10 });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = (session) => `ws://127.0.0.1:${server.address().port}/presence?session=${session}`;
+    const first = new WebSocket(url("11111111-1111-4111-8111-111111111111"));
+    const firstCount = nextPresenceCount(first);
+    await opened(first);
+    await expect(firstCount).resolves.toBe(1);
+
+    const second = new WebSocket(url("22222222-2222-4222-8222-222222222222"));
+    const firstSeesTwo = nextPresenceCount(first);
+    const secondSeesTwo = nextPresenceCount(second);
+    await opened(second);
+    await expect(firstSeesTwo).resolves.toBe(2);
+    await expect(secondSeesTwo).resolves.toBe(2);
+
+    const resumed = new WebSocket(url("11111111-1111-4111-8111-111111111111"));
+    const replaced = new Promise((resolve) => first.once("close", resolve));
+    await opened(resumed);
+    await replaced;
+    resumed.send("heartbeat");
+    const resumedCounts = [];
+    resumed.on("message", (payload) => resumedCounts.push(JSON.parse(payload.toString()).count));
+    await new Promise((resolve) => setTimeout(resolve, 55));
+    resumed.send("heartbeat");
+    await new Promise((resolve) => setTimeout(resolve, 45));
+    expect(resumedCounts).toContain(1);
+
+    resumed.close();
+    second.close();
+    presence.close();
+    await new Promise((resolve) => server.close(resolve));
+  });
+});
+
+function opened(webSocket) {
+  return new Promise((resolve, reject) => {
+    webSocket.once("open", resolve);
+    webSocket.once("error", reject);
+  });
+}
+
+function nextPresenceCount(webSocket) {
+  return new Promise((resolve, reject) => {
+    webSocket.once("message", (payload) => resolve(JSON.parse(payload.toString()).count));
+    webSocket.once("error", reject);
+  });
+}

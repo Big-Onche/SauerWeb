@@ -7,6 +7,9 @@ export function configuredServers(environment?: NodeJS.ProcessEnv): RelayServer[
 export function attachSauerRelay(server: Server | Http2SecureServer,
                                  options?: { servers?: RelayServer[]; trustedProxies?: string | string[];
                                    updateServers?: (servers: RelayServer[]) => Promise<RelayServer[]> }): { servers: RelayServer[]; close(): void };
+export function attachPresence(server: Server | Http2SecureServer, options?: { staleMilliseconds?: number; sweepMilliseconds?: number }): {
+  close(): void;
+};
 export function resolveClientAddress(request: IncomingMessage, trustedProxies?: TrustedProxy[]): string;
 export function parseTrustedProxies(value: string | string[]): TrustedProxy[];
 export function queryConfiguredServers(servers?: RelayServer[]): Promise<unknown[]>;

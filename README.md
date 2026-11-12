@@ -60,7 +60,7 @@ $env:SAUER_RELAY_SERVERS = "127.0.0.1:28785=Local server,play.example.net:28785=
 npm run dev
 ```
 
-For production, run `npm run build` and `npm run relay`. The standalone process serves `/api/servers`, `/health`, and `/relay`; its port defaults to 8080
+For production, run `npm run build` and `npm run relay`. The standalone process serves `/api/servers`, `/health`, `/relay`, and `/presence`; its port defaults to 8080
 and can be changed with `SAUER_RELAY_PORT`. Put it behind the same HTTPS reverse proxy as the static site, or configure native TLS with
 `SAUER_RELAY_TLS_KEY` and `SAUER_RELAY_TLS_CERT`. `SAUER_RELAY_ORIGINS` accepts a comma-separated browser-origin allowlist. Connection, message-size,
 packet-rate, and byte-rate limits are enforced in the relay. The relay trusts `X-Forwarded-For` only from loopback proxies by default; set

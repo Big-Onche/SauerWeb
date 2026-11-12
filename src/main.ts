@@ -6,6 +6,7 @@ import { PLAYER_MODEL_INFO, PLAYER_MODEL_NAMES } from "./fpsgame/render";
 import { guiSkinMarkup } from "./guiSkin";
 import { bindCrosshairSettings, CROSSHAIRS, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 import { loadHudSettings, saveHudSettings } from "./platform/browser/HudSettings";
+import { onlinePlayersLabel, OnlinePresence } from "./presence";
 
 interface MapListItem {
   name: string;
@@ -16,6 +17,7 @@ const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "
 type OptionTab = typeof OPTION_TABS[number];
 
 const app = required<HTMLDivElement>("#app");
+const onlinePresence = new OnlinePresence();
 
 let availableMaps: Map<string, MapListItem> | undefined;
 let selectedPage = "ffa-1";
@@ -29,6 +31,8 @@ let serverBrowserLoaded = false;
 let serverBrowserRequest = 0;
 const serverBrowserOptions = { searchlan: false, autoupdateservers: true, autosortservers: true };
 const backgroundDecals = createBackgroundDecals();
+
+onlinePresence.addEventListener("change", updateOnlinePlayerCounter);
 
 route();
 window.addEventListener("popstate", route);
@@ -62,6 +66,7 @@ function renderMainMenu(): void {
   app.innerHTML = `
     <main class="sauer-screen">
       ${backgroundMarkup(true)}
+      <div class="online-players" hidden><i aria-hidden="true"></i><span></span></div>
       <section class="sauer-dialog main-dialog" aria-labelledby="main-menu-title">
         ${guiSkinMarkup()}
         <h1 id="main-menu-title" class="sr-only">Sauerbraten main menu</h1>
@@ -120,6 +125,8 @@ function renderMainMenu(): void {
       </dialog>
     </main>`;
 
+  updateOnlinePlayerCounter();
+
   const playerName = required<HTMLInputElement>("#player-name");
   playerName.addEventListener("change", () => savePlayerName(playerName.value));
   const playermodelDialog = required<HTMLDialogElement>("#playermodel-dialog");
@@ -177,6 +184,15 @@ function renderMainMenu(): void {
   const about = required<HTMLDialogElement>("#about-dialog");
   required<HTMLButtonElement>("[data-action='about']").addEventListener("click", () => about.showModal());
   about.querySelector("button")?.addEventListener("click", () => about.close());
+}
+
+function updateOnlinePlayerCounter(): void {
+  const counter = document.querySelector<HTMLDivElement>(".online-players");
+  if (!counter) return;
+  const count = onlinePresence.count;
+  counter.hidden = count === undefined;
+  const label = counter.querySelector("span");
+  if (label && count !== undefined) label.textContent = onlinePlayersLabel(count);
 }
 
 function renderOptionsMenu(activeTab: OptionTab = "game"): void {

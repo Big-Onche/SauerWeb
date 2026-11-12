@@ -17,6 +17,8 @@ const DEFAULT_MASTER_NAME = "master.sauerbraten.org";
 const DEFAULT_MASTER_PORT = 28787;
 const DEFAULT_LAN_INFO_PORT = 28786;
 const DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128";
+const PRESENCE_STALE_MILLISECONDS = 45_000;
+const PRESENCE_SWEEP_MILLISECONDS = 5_000;
 
 export function configuredServers(environment = process.env) {
   const value = environment.SAUER_RELAY_SERVERS || "127.0.0.1:28785";
@@ -128,6 +130,75 @@ export function attachSauerRelay(httpServer, options = {}) {
   });
 
   return { servers, close: () => webSockets.close() };
+}
+
+export function attachPresence(httpServer, options = {}) {
+  const staleMilliseconds = options.staleMilliseconds ?? PRESENCE_STALE_MILLISECONDS;
+  const sweepMilliseconds = options.sweepMilliseconds ?? PRESENCE_SWEEP_MILLISECONDS;
+  const allowedOrigins = new Set((process.env.SAUER_RELAY_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean));
+  const sessions = new Map();
+  const webSockets = new WebSocketServer({ noServer: true, maxPayload: 32, perMessageDeflate: false });
+  const broadcast = () => {
+    const message = JSON.stringify({ type: "presence", count: sessions.size });
+    for (const session of sessions.values()) if (session.webSocket.readyState === WebSocket.OPEN) session.webSocket.send(message);
+  };
+  const remove = (id, webSocket) => {
+    if (sessions.get(id)?.webSocket !== webSocket) return;
+    sessions.delete(id);
+    broadcast();
+  };
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url || "/", "http://relay.invalid");
+    if (url.pathname !== "/presence") return;
+    const id = url.searchParams.get("session") || "";
+    const origin = request.headers.origin || "";
+    if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(id) || (allowedOrigins.size && !allowedOrigins.has(origin))) {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    webSockets.handleUpgrade(request, socket, head, (webSocket) => webSockets.emit("connection", webSocket, request, id));
+  });
+
+  webSockets.on("connection", (webSocket, _request, id) => {
+    const previous = sessions.get(id)?.webSocket;
+    sessions.set(id, { webSocket, lastHeartbeat: Date.now() });
+    if (previous && previous !== webSocket) previous.terminate();
+    webSocket.on("message", (payload, isBinary) => {
+      if (isBinary || payload.toString() !== "heartbeat") {
+        webSocket.close(1008, "Invalid presence heartbeat");
+        return;
+      }
+      const session = sessions.get(id);
+      if (session?.webSocket === webSocket) session.lastHeartbeat = Date.now();
+    });
+    webSocket.on("close", () => remove(id, webSocket));
+    webSocket.on("error", () => remove(id, webSocket));
+    broadcast();
+  });
+
+  const sweep = setInterval(() => {
+    const cutoff = Date.now() - staleMilliseconds;
+    let changed = false;
+    for (const [id, session] of sessions) {
+      if (session.lastHeartbeat >= cutoff) continue;
+      sessions.delete(id);
+      session.webSocket.terminate();
+      changed = true;
+    }
+    if (changed) broadcast();
+  }, sweepMilliseconds);
+  sweep.unref();
+
+  return {
+    close: () => {
+      clearInterval(sweep);
+      for (const session of sessions.values()) session.webSocket.terminate();
+      sessions.clear();
+      webSockets.close();
+    },
+  };
 }
 
 export function resolveClientAddress(request, trustedProxies = parseTrustedProxies(DEFAULT_TRUSTED_PROXIES)) {
@@ -421,5 +492,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     key: fs.readFileSync(process.env.SAUER_RELAY_TLS_KEY), cert: fs.readFileSync(process.env.SAUER_RELAY_TLS_CERT),
   }, handler) : http.createServer(handler);
   attachSauerRelay(server, { servers });
+  attachPresence(server);
   server.listen(port, () => console.log(`SauerWeb relay listening on ${port}`));
 }

@@ -36,6 +36,7 @@ Nginx
    |-- /api/ (except servers)    -> 127.0.0.1:8081 (asset/metadata service)
    |-- /api/servers              -> 127.0.0.1:8080 (relay service)
    |-- /relay (WebSocket)        -> 127.0.0.1:8080 (relay service)
+   |-- /presence (WebSocket)     -> 127.0.0.1:8080 (relay service)
    `-- /health                   -> 127.0.0.1:8080 (relay service)
 
 Relay service -> Sauerbraten master server and game servers over outbound TCP/UDP
@@ -46,7 +47,7 @@ process binds to all host interfaces, so the UFW and provider-firewall rules are
 application; open its game ports only if it runs on the same host.
 
 > **Why is an asset service required?** The current Vite plugin generates the map list, texture manifests, player-model metadata, and HUD-weapon metadata
-> at runtime. `npm run relay` serves only `/api/servers`, `/health`, and `/relay`. Nginx can serve `dist` directly, but a deployment of the current code still
+> at runtime. `npm run relay` serves only `/api/servers`, `/health`, `/relay`, and `/presence`. Nginx can serve `dist` directly, but a deployment of the current code still
 > needs the private Vite service for the remaining `/api/*` routes. Do not expose that service directly to the Internet.
 
 ## Prerequisites
@@ -349,6 +350,20 @@ server {
         proxy_buffering off;
     }
 
+    location = /presence {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1m;
+        proxy_send_timeout 1m;
+        proxy_buffering off;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:8081;
         proxy_http_version 1.1;
@@ -375,8 +390,9 @@ server {
 ```
 
 The exact-match `/api/servers` location must appear alongside `/api/`; it ensures the server browser is handled by the relay process. The WebSocket
-headers on `/relay` are also required. This single-proxy setup overwrites, rather than appends, `X-Forwarded-For`, so a header supplied by the public
-client cannot become authoritative. If another load balancer sits in front of Nginx, configure Nginx's Real IP module with that load balancer's exact
+headers on `/relay` and `/presence` are also required. This single-proxy setup overwrites, rather than appends, `X-Forwarded-For`, so a header supplied by
+the public client cannot become authoritative. `/presence` uses 15-second application heartbeats, so its one-minute proxy timeouts leave enough margin for
+the relay's 45-second stale-session cleanup. If another load balancer sits in front of Nginx, configure Nginx's Real IP module with that load balancer's exact
 addresses before relying on `$remote_addr`. Do not cache `/api/servers` or generated metadata responses.
 
 Enable and validate the site:
@@ -444,7 +460,9 @@ js=$(find /opt/sauerweb/dist/assets -maxdepth 1 -type f -name '*.js' -printf '%f
 curl -sS -o /dev/null -w 'JavaScript HTTP %{http_code}\n' "https://sauerweb.org/assets/$js"
 ```
 
-Expected statuses: root 200, health 204, servers/maps/models/JavaScript 200. Test from a **different device or network** (PC and mobile), load a map, and connect to a public game server. In developer tools, the `/relay` WebSocket must upgrade with `101 Switching Protocols`. Successful `curl` checks from the VPS alone do not prove external reachability.
+Expected statuses: root 200, health 204, servers/maps/models/JavaScript 200. Test from a **different device or network** (PC and mobile), load a map,
+and connect to a public game server. In developer tools, the `/relay` and `/presence` WebSockets must upgrade with `101 Switching Protocols`. Successful
+`curl` checks from the VPS alone do not prove external reachability.
 
 ## Operations
 
@@ -498,7 +516,7 @@ Review upstream changes before deploying them. If `git pull --ff-only` refuses b
 - **The page loads but maps or models fail:** verify the `SAUERBRATEN_DIR` shown in the asset service and its `data`, `packages/base`, and
   `packages/models` directories, then inspect `journalctl -u sauerweb-assets.service` and the failing `/api/*` request.
 - **`502 Bad Gateway`:** confirm both systemd services are running and listening on their expected loopback ports.
-- **WebSocket does not upgrade:** confirm `/relay` is using HTTP/1.1 and forwarding the `Upgrade` and `Connection` headers.
+- **WebSocket does not upgrade:** confirm `/relay` and `/presence` are using HTTP/1.1 and forwarding the `Upgrade` and `Connection` headers.
 - **The server list is empty:** test outbound TCP access to the configured master server and inspect relay logs. Explicitly configured servers can be added
   with `SAUER_RELAY_SERVERS`.
 - **Servers appear offline:** allow outbound UDP to the game and server-information ports in any provider firewall or outbound firewall policy.

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
-import { attachSauerRelay, configuredServers, serverListMiddleware } from "./relay/relay.mjs";
+import { attachPresence, attachSauerRelay, configuredServers, serverListMiddleware } from "./relay/relay.mjs";
 import { loadSauerbratenDirectory, validateSauerbratenDirectory } from "./sauerbratenDirectory";
 
 let sauerRoot = "";
@@ -730,7 +730,10 @@ function sauerMapsPlugin(): Plugin {
   return {
     name: "sauer-maps",
     configureServer(server) {
-      if (server.httpServer) attachSauerRelay(server.httpServer, { servers: relayServers });
+      if (server.httpServer) {
+        attachSauerRelay(server.httpServer, { servers: relayServers });
+        attachPresence(server.httpServer);
+      }
       server.middlewares.use("/api/servers", serverListMiddleware(relayServers));
       server.middlewares.use("/api/hudguns", (_request, response) => {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
