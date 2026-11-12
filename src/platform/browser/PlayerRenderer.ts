@@ -7,17 +7,18 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene } from "@babylonjs/core/scene";
-import type { MapModelAsset, PlayerModelAsset, ViewWeaponAsset } from "../../assets/types";
+import type { MapModelAsset, PlayerModelAnimation, PlayerModelAsset, ViewWeaponAsset } from "../../assets/types";
 import { packageAssetUrl } from "../../assets/TextureResolver";
 import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
 import { parseRagdoll, RAGDOLL_FADE, RAGDOLL_MILLIS, RagdollSimulation, type RagdollCollider,
   type RagdollSkeleton } from "../../engine/ragdoll";
-import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, prepareMd5Animation, prepareMd5Model, skinMd5Model,
+import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseIqmParts, prepareMd5Animation, prepareMd5Model,
+  skinMd5Model, skinMd5ModelParts,
   type ModelGeometry, type ModelGeometryMesh, type ModelJointPose, type PreparedMd5Animation,
   type PreparedMd5Model } from "../../engine/rendermodel";
 import type { Vec3 } from "../../engine/octa";
 import { ClientState } from "../../engine/physics/types";
-import { getplayermodelinfo, playerSkin, renderclient, type RenderClientState } from "../../fpsgame/render";
+import { getplayermodelinfo, playerSkin, renderclient, renderclientLocomotion, type RenderClientState } from "../../fpsgame/render";
 import { toBabylonPosition } from "../../render/coordinates";
 import { selectModelSkin } from "../../render/modelSkin";
 
@@ -58,6 +59,8 @@ interface ModelUpdateRequest {
   skin: "ffa" | "blueTeam" | "redTeam";
   visualKey: string;
   animation: string;
+  secondaryAnimation?: string;
+  secondaryAnimationMilliseconds?: number;
   animationMilliseconds: number;
   loop: boolean;
   yaw: number;
@@ -204,8 +207,13 @@ export class PlayerRenderer {
     const skin = playerSkin(gameMode, teamskins, localTeam, player.team, player.local);
     const visualKey = `${model.index}:${skin}:${player.selectedGun}`;
     const baseAnimation = renderclient(player, nowMilliseconds);
+    const locomotionAnimation = renderclientLocomotion(player);
     const attacking = player.lastAttackGun === player.selectedGun && nowMilliseconds - player.lastAction < player.gunWait + 50;
-    const animation = attacking ? `attack ${player.selectedGun + 1}` : baseAnimation === "idle" ? `hold ${player.selectedGun + 1}` : baseAnimation;
+    const canAttack = baseAnimation !== "pain" && player.state === ClientState.Alive;
+    const animation = attacking && canAttack ? `attack ${player.selectedGun + 1}`
+      : baseAnimation === "idle" ? `hold ${player.selectedGun + 1}` : baseAnimation;
+    const secondaryAnimation = attacking && canAttack || baseAnimation === "pain" ? locomotionAnimation : undefined;
+    const secondaryAnimationMilliseconds = locomotionAnimation === "jump" ? player.timeInAir ?? 0 : nowMilliseconds;
     const animationMilliseconds = animation === "dying" ? Math.max(0, nowMilliseconds - (player.deadAt ?? nowMilliseconds))
       : animation === "pain" ? Math.max(0, nowMilliseconds - (player.lastPain ?? nowMilliseconds))
         : animation === "jump" ? player.timeInAir ?? 0 : attacking ? Math.max(0, nowMilliseconds - player.lastAction) : nowMilliseconds;
@@ -216,6 +224,8 @@ export class PlayerRenderer {
       skin,
       visualKey,
       animation,
+      secondaryAnimation,
+      secondaryAnimationMilliseconds,
       animationMilliseconds,
       loop,
       yaw: player.yaw,
@@ -238,9 +248,9 @@ export class PlayerRenderer {
       while (instance.pendingUpdate) {
         const request = instance.pendingUpdate;
         instance.pendingUpdate = undefined;
-        await this.updateModel(instance, request.modelIndex, request.skin, request.visualKey, request.animation,
-          request.animationMilliseconds, request.loop, request.yaw, request.selectedGun, request.deadAt, request.nowMilliseconds,
-          request.velocity, request.token);
+        await this.updateModel(instance, request.modelIndex, request.skin, request.visualKey, request.animation, request.secondaryAnimation,
+          request.secondaryAnimationMilliseconds, request.animationMilliseconds, request.loop, request.yaw, request.selectedGun, request.deadAt,
+          request.nowMilliseconds, request.velocity, request.token);
       }
     } finally {
       instance.updating = false;
@@ -249,7 +259,8 @@ export class PlayerRenderer {
   }
 
   private async updateModel(instance: PlayerModelInstance, modelIndex: number, skin: "ffa" | "blueTeam" | "redTeam", visualKey: string,
-                            animation: string, animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number,
+                            animation: string, secondaryAnimation: string | undefined, secondaryAnimationMilliseconds: number | undefined,
+                            animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number,
                             deadAt: number | undefined, nowMilliseconds: number, velocity: Vec3, token: number): Promise<void> {
     const assets = await (this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
       if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
@@ -269,7 +280,17 @@ export class PlayerRenderer {
     let position: ModelAnimationPosition = { frame: 0, nextFrame: 0, interpolation: 0 };
     let animationSource: string | undefined;
     let animationBuffer: ArrayBuffer | undefined;
-    if (asset.format === "MD5" && animationPath) {
+    let geometry: ModelGeometry | undefined;
+    if (secondaryAnimation) {
+      const selectedParts = definition.animationParts.map((part) => {
+        const primary = part.animations[animation];
+        const secondary = part.animations[secondaryAnimation];
+        const spec = primary && (!secondary || primary.priority >= secondary.priority) ? primary : secondary ?? primary ?? animationSpec;
+        return { spec, roots: part.roots, milliseconds: spec === primary ? animationMilliseconds : secondaryAnimationMilliseconds ?? nowMilliseconds,
+          loop: spec === primary ? loop : secondaryAnimation !== "jump" };
+      }).filter((part): part is typeof part & { spec: NonNullable<typeof part.spec> } => Boolean(part.spec));
+      geometry = await this.geometryParts(asset, selectedParts, instance);
+    } else if (asset.format === "MD5" && animationPath) {
       animationSource = await this.fetchText(animationPath);
       const info = md5AnimationInfo(animationSource);
       position = modelAnimationPosition(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
@@ -282,9 +303,9 @@ export class PlayerRenderer {
     }
     instance.root.rotationQuaternion = Quaternion.RotationYawPitchRoll(-(yaw + 90 + (asset.yaw ?? 0)) * Math.PI / 180,
       -(asset.pitch ?? 0) * Math.PI / 180, 0);
-    const frame = position.frame + (position.nextFrame !== position.frame ? position.interpolation : 0);
+    const frame = secondaryAnimation ? nowMilliseconds : position.frame + (position.nextFrame !== position.frame ? position.interpolation : 0);
     if (instance.visualKey === visualKey && instance.animation === animation && instance.frame === frame) return;
-    const geometry = await this.geometry(asset, animationPath, animationSource, animationBuffer, position, instance);
+    geometry ??= await this.geometry(asset, animationPath, animationSource, animationBuffer, position, instance);
     if (token !== instance.updateToken) return;
     if (instance.visualKey !== visualKey || instance.meshes.length !== geometry.meshes.length) {
       this.createMeshes(instance, definition, asset, geometry);
@@ -464,6 +485,54 @@ export class PlayerRenderer {
     const geometry = this.profile(() => interpolateModelGeometry(current, next, position.interpolation, instance?.interpolatedGeometry));
     if (instance) instance.interpolatedGeometry = geometry;
     return geometry;
+  }
+
+  private async geometryParts(asset: MapModelAsset,
+                              parts: Array<{ spec: PlayerModelAnimation; roots: string[]; milliseconds: number; loop: boolean }>,
+                              instance: PlayerModelInstance): Promise<ModelGeometry> {
+    const positions: ModelAnimationPosition[] = [];
+    const sources: Array<string | ArrayBuffer> = [];
+    for (const part of parts) {
+      if (asset.format === "MD5") {
+        const source = await this.fetchText(part.spec.path);
+        const info = md5AnimationInfo(source);
+        sources.push(source);
+        positions.push(modelAnimationPosition(info.frameCount, part.spec.speed, part.milliseconds, part.loop, part.spec.startOffset,
+          part.spec.endOffset));
+      } else {
+        const source = await this.fetchBinary(part.spec.path);
+        const info = iqmAnimationInfo(source);
+        sources.push(source);
+        positions.push(modelAnimationPosition(info.frameCount, part.spec.speed, part.milliseconds, part.loop, part.spec.startOffset,
+          part.spec.endOffset));
+      }
+    }
+    let current: ModelGeometry;
+    if (asset.format === "MD5") {
+      const modelSource = await this.fetchText(asset.geometryPath!);
+      let model = this.md5Models.get(asset.geometryPath!);
+      if (!model) {
+        model = this.profile(() => prepareMd5Model(modelSource));
+        this.md5Models.set(asset.geometryPath!, model);
+      }
+      const animations = parts.map((part, index) => {
+        let prepared = this.md5Animations.get(part.spec.path);
+        if (!prepared) {
+          prepared = this.profile(() => prepareMd5Animation(sources[index] as string));
+          this.md5Animations.set(part.spec.path, prepared);
+        }
+        return prepared;
+      });
+      current = this.profile(() => skinMd5ModelParts(model!, parts.map((part, index) => ({ animation: animations[index],
+        frame: positions[index].frame, nextFrame: positions[index].nextFrame, interpolation: positions[index].interpolation,
+        roots: part.roots }))));
+    } else if (asset.format === "IQM") {
+      const model = await this.fetchBinary(asset.geometryPath!);
+      current = this.profile(() => parseIqmParts(model, parts.map((part, index) => ({ buffer: sources[index] as ArrayBuffer,
+        frame: positions[index].frame, nextFrame: positions[index].nextFrame, interpolation: positions[index].interpolation,
+        roots: part.roots }))));
+    } else return this.geometry(asset, undefined, undefined, undefined, { frame: 0, nextFrame: 0, interpolation: 0 }, instance);
+    return current;
   }
 
   private async geometryFrame(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,

@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadSauerbratenDirectory } from "../../sauerbratenDirectory";
-import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseMd2, parseMd5, prepareMd5Animation,
-  prepareMd5Model, skinMd5Model } from "./rendermodel";
+import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseIqmParts, parseMd2, parseMd5,
+  prepareMd5Animation, prepareMd5Model, skinMd5Model, skinMd5ModelParts } from "./rendermodel";
 
 const modelsDirectory = path.join(loadSauerbratenDirectory("test"), "packages", "models");
 
@@ -94,6 +94,20 @@ describe("MD5 model loading", () => {
     expect(interpolated.meshes[0].positions).not.toEqual(next.meshes[0].positions);
   });
 
+  it("combines Sauerbraten locomotion and attack animation parts", () => {
+    const directory = path.join(modelsDirectory, "mrfixit");
+    const model = prepareMd5Model(fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8"));
+    const run = prepareMd5Animation(fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8"));
+    const attack = prepareMd5Animation(fs.readFileSync(path.join(directory, "shotgun_shoot.md5anim"), "utf8"));
+    const combined = skinMd5ModelParts(model, [
+      { animation: run, frame: 1, roots: [] },
+      { animation: attack, frame: 1, roots: ["Spine1"] },
+    ]).meshes[0].positions;
+
+    expect(combined).not.toEqual(skinMd5Model(model, run, 1).meshes[0].positions);
+    expect(combined).not.toEqual(skinMd5Model(model, attack, 1).meshes[0].positions);
+  });
+
   it("reuses interpolated player geometry buffers", () => {
     const directory = path.join(modelsDirectory, "mrfixit");
     const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
@@ -122,5 +136,23 @@ describe("MD5 model loading", () => {
     const firstFrame = parseIqm(mesh, animation, 0).meshes[0];
     expect(parseIqm(mesh, animation, 1).meshes[0].positions).not.toEqual(firstFrame.positions);
     expect(firstFrame.bones).toHaveLength(firstFrame.positions.length / 3);
+  });
+
+  it("combines Ogro's IQM locomotion and upper-body attack parts", () => {
+    const directory = path.join(modelsDirectory, "ogro2");
+    const buffer = (name: string) => {
+      const bytes = fs.readFileSync(path.join(directory, name));
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    };
+    const mesh = buffer("ogro.iqm");
+    const run = buffer("run.iqm");
+    const attack = buffer("shotgun_shoot.iqm");
+    const combined = parseIqmParts(mesh, [
+      { buffer: run, frame: 1, roots: [] },
+      { buffer: attack, frame: 1, roots: ["Waist"] },
+    ]).meshes[0].positions;
+
+    expect(combined).not.toEqual(parseIqm(mesh, run, 1).meshes[0].positions);
+    expect(combined).not.toEqual(parseIqm(mesh, attack, 1).meshes[0].positions);
   });
 });

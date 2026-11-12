@@ -489,14 +489,22 @@ function resolvePlayerModels() {
   return definitions.map((definition, index) => {
     const animationConfig = path.join(packagesDirectory, "models", definition.animations);
     const animationDirectory = path.dirname(animationConfig);
-    const animations: Record<string, { path: string; speed: number; startOffset: number; endOffset: number }> = {};
+    type Animation = { path: string; speed: number; priority: number; startOffset: number; endOffset: number };
+    const animationParts: Array<{ roots: string[]; animations: Record<string, Animation> }> = [{ roots: [], animations: {} }];
     if (fs.existsSync(animationConfig)) {
       for (const statement of splitStatements(fs.readFileSync(animationConfig, "utf8"))) {
         const tokens = tokenize(statement.text);
-        if (tokens[0]?.toLowerCase() !== `${definition.format}anim` || !tokens[1] || !tokens[2] || animations[tokens[1].toLowerCase()]) continue;
+        const command = tokens[0]?.toLowerCase();
+        if (command === `${definition.format}animpart`) {
+          animationParts.push({ roots: tokens.slice(1).flatMap((root) => root.split(/\s+/)).filter(Boolean), animations: {} });
+          continue;
+        }
+        const animations = animationParts[animationParts.length - 1].animations;
+        if (command !== `${definition.format}anim` || !tokens[1] || !tokens[2] || animations[tokens[1].toLowerCase()]) continue;
         animations[tokens[1].toLowerCase()] = {
           path: resolveModelAssetPath(animationDirectory, tokens[2]),
           speed: numberArg(tokens[3], 0),
+          priority: numberArg(tokens[4], 0),
           startOffset: numberArg(tokens[5], 0),
           endOffset: numberArg(tokens[6], 0),
         };
@@ -509,7 +517,8 @@ function resolvePlayerModels() {
       ffa: model(definition.ffa),
       blueTeam: model(definition.blueTeam),
       redTeam: model(definition.redTeam),
-      animations,
+      animations: animationParts[0].animations,
+      animationParts,
       ragdollPath: packageRelativePath(path.join(packagesDirectory, "models", definition.ragdoll)),
     };
   });

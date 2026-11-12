@@ -81,6 +81,10 @@ export function renderclient(player: RenderClientState, nowMilliseconds: number)
   if (player.state === ClientState.Editing || player.state === ClientState.Spectator) return "edit";
   if (player.state === ClientState.Lagged) return "lag";
   if (nowMilliseconds - (player.lastPain ?? 0) < 300) return "pain";
+  return renderclientLocomotion(player);
+}
+
+export function renderclientLocomotion(player: RenderClientState): PlayerAnimation {
   if (player.inWater && player.physicsState <= PhysicsState.Fall) {
     return player.move || player.strafe || (player.velocityZ ?? 0) > 0 ? "swim" : "sink";
   }

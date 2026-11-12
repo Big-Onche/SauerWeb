@@ -133,6 +133,27 @@ export function prepareMd5Model(source: string): PreparedMd5Model {
 
 export function skinMd5Model(model: PreparedMd5Model, animation?: PreparedMd5Animation, animationFrame = 0): ModelGeometry {
   const joints = animation ? sampleMd5AnimationFrame(animation, animationFrame) : model.bindJoints;
+  return skinMd5Joints(model, joints);
+}
+
+export function skinMd5ModelParts(model: PreparedMd5Model,
+                                  parts: Array<{ animation: PreparedMd5Animation; frame: number; nextFrame?: number; interpolation?: number;
+                                    roots: string[] }>): ModelGeometry {
+  if (!parts.length) return skinMd5Joints(model, model.bindJoints);
+  const localParts = parts.map((part) => {
+    const joints = sampleMd5AnimationLocals(part.animation, part.frame);
+    if (part.interpolation && part.nextFrame !== undefined && part.nextFrame !== part.frame) {
+      const next = sampleMd5AnimationLocals(part.animation, part.nextFrame);
+      joints.forEach((joint, index) => interpolateJointPose(joint, next[index], part.interpolation!, joint));
+    }
+    return { ...part, joints };
+  });
+  const partByJoint = animationPartAssignments(localParts[0].joints, parts.map((part) => part.roots));
+  const locals = localParts[0].joints.map((_, index) => localParts[partByJoint[index]]?.joints[index] ?? localParts[0].joints[index]);
+  return skinMd5Joints(model, composeMd5Joints(locals));
+}
+
+function skinMd5Joints(model: PreparedMd5Model, joints: ModelJointPose[]): ModelGeometry {
   if (joints.length !== model.bindJoints.length) throw new Error("MD5 animation does not match its mesh skeleton.");
   const meshes = model.meshes.map((mesh) => {
     const positions = new Array<number>(mesh.vertices.length * 3).fill(0);
@@ -253,6 +274,10 @@ export function prepareMd5Animation(source: string, adjustments: ModelAdjustment
 }
 
 function sampleMd5AnimationFrame(animation: PreparedMd5Animation, animationFrame: number): ModelJointPose[] {
+  return composeMd5Joints(sampleMd5AnimationLocals(animation, animationFrame));
+}
+
+function sampleMd5AnimationLocals(animation: PreparedMd5Animation, animationFrame: number): ModelJointPose[] {
   const frame = Math.min(animation.frames.length - 1, Math.max(0, Math.trunc(animationFrame)));
   const data = animation.frames[frame];
   if (!data) throw new Error(`MD5 animation has no readable frame ${frame}.`);
@@ -273,15 +298,36 @@ function sampleMd5AnimationFrame(animation: PreparedMd5Animation, animationFrame
     if (adjustment) {
       ({ position, orientation } = applyMd5Adjustment(position, orientation, adjustment));
     }
-    if (entry.parent >= 0) {
-      const parent = joints[entry.parent];
+    joints.push({ name: entry.name, parent: entry.parent, position, orientation });
+  });
+  return joints;
+}
+
+function composeMd5Joints(locals: ModelJointPose[]): ModelJointPose[] {
+  const joints: ModelJointPose[] = [];
+  for (const local of locals) {
+    let position = [...local.position] as [number, number, number];
+    let orientation = [...local.orientation] as [number, number, number, number];
+    if (local.parent >= 0) {
+      const parent = joints[local.parent];
       const rotated = rotateMd5Vector(position, parent.orientation);
       position = [parent.position[0] + rotated[0], parent.position[1] + rotated[1], parent.position[2] + rotated[2]];
       orientation = multiplyMd5Quaternions(parent.orientation, orientation);
     }
-    joints.push({ name: entry.name, parent: entry.parent, position, orientation });
-  });
+    joints.push({ name: local.name, parent: local.parent, position, orientation });
+  }
   return joints;
+}
+
+function animationPartAssignments(joints: Array<{ name: string; parent: number }>, partRoots: string[][]): number[] {
+  const assignments = new Array<number>(joints.length).fill(0);
+  for (let part = 1; part < partRoots.length; part++) {
+    const roots = new Set(partRoots[part]);
+    for (let joint = 0; joint < joints.length; joint++) {
+      if (roots.has(joints[joint].name) || joints[joint].parent >= 0 && assignments[joints[joint].parent] === part) assignments[joint] = part;
+    }
+  }
+  return assignments;
 }
 
 function applyMd5Adjustment(position: [number, number, number], orientation: [number, number, number, number],
@@ -545,6 +591,11 @@ export function iqmAnimationInfo(buffer: ArrayBuffer): IqmAnimationInfo {
 }
 
 export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, animationFrame = 0): ModelGeometry {
+  return parseIqmParts(buffer, animationBuffer ? [{ buffer: animationBuffer, frame: animationFrame, roots: [] }] : []);
+}
+
+export function parseIqmParts(buffer: ArrayBuffer, parts: Array<{ buffer: ArrayBuffer; frame: number; nextFrame?: number; interpolation?: number;
+  roots: string[] }>): ModelGeometry {
   const view = new DataView(buffer);
   validateIqm(view);
   const fileSize = view.getUint32(20, true);
@@ -583,8 +634,9 @@ export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, ani
     rangeWithin(blendIndexOffset, vertexCount * 4, fileSize) && rangeWithin(blendWeightOffset, vertexCount * 4, fileSize);
   const blendIndices = hasBlendData ? blendIndexOffset! : 0;
   const blendWeights = hasBlendData ? blendWeightOffset! : 0;
-  const animatedPositions = animationBuffer && hasBlendData
-    ? skinIqmPositions(view, positionOffset, vertexCount, blendIndices, blendWeights, animationBuffer, animationFrame)
+  const transforms = parts.length ? iqmPartTransforms(view, parts) : undefined;
+  const animatedPositions = transforms && hasBlendData
+    ? skinIqmPositions(view, positionOffset, vertexCount, blendIndices, blendWeights, transforms)
     : undefined;
   const meshes: ModelGeometryMesh[] = [];
   for (let meshIndex = 0; meshIndex < meshCount; meshIndex++) {
@@ -633,20 +685,18 @@ export function parseIqm(buffer: ArrayBuffer, animationBuffer?: ArrayBuffer, ani
     });
   }
   if (!meshes.length) throw new Error("IQM model contains no renderable geometry.");
-  const joints = iqmJointPoses(view, animationBuffer, animationFrame);
+  const joints = iqmJointPoses(view, transforms);
   return { meshes, joints };
 }
 
-function iqmJointPoses(view: DataView, animationBuffer: ArrayBuffer | undefined, animationFrame: number): ModelJointPose[] | undefined {
+function iqmJointPoses(view: DataView, animated?: IqmTransform[]): ModelJointPose[] | undefined {
   const jointCount = view.getUint32(68, true);
   const jointOffset = view.getUint32(72, true);
   const textSize = view.getUint32(28, true);
   const textOffset = view.getUint32(32, true);
   if (!jointCount || !rangeWithin(jointOffset, jointCount * 48, view.byteLength)) return undefined;
-  const source = animationBuffer ? new DataView(animationBuffer) : undefined;
-  const animated = source && source.getUint32(76, true) === jointCount
-    ? readIqmFrame(source, source.getUint32(80, true), jointCount, animationFrame) : readIqmJoints(view, jointOffset, jointCount);
-  return animated.map((transform, index) => {
+  const transforms = animated?.length === jointCount ? animated : readIqmJoints(view, jointOffset, jointCount);
+  return transforms.map((transform, index) => {
     const entry = jointOffset + index * 48;
     const nameOffset = view.getUint32(entry, true);
     const orientation = transform.orientation;
@@ -666,17 +716,11 @@ interface IqmTransform {
 }
 
 function skinIqmPositions(view: DataView, positionOffset: number, vertexCount: number, blendIndexOffset: number, blendWeightOffset: number,
-                          animationBuffer: ArrayBuffer, animationFrame: number): Array<[number, number, number]> {
-  const animation = new DataView(animationBuffer);
-  validateIqm(animation);
+                          animated: IqmTransform[]): Array<[number, number, number]> {
   const jointCount = view.getUint32(68, true);
   const jointOffset = view.getUint32(72, true);
-  const poseCount = animation.getUint32(76, true);
-  const poseOffset = animation.getUint32(80, true);
-  if (!jointCount || poseCount !== jointCount || !rangeWithin(jointOffset, jointCount * 48, view.byteLength) ||
-      !rangeWithin(poseOffset, poseCount * 88, animation.byteLength)) return [];
+  if (!jointCount || animated.length !== jointCount || !rangeWithin(jointOffset, jointCount * 48, view.byteLength)) return [];
   const base = readIqmJoints(view, jointOffset, jointCount);
-  const animated = readIqmFrame(animation, poseOffset, poseCount, animationFrame);
   const result: Array<[number, number, number]> = [];
   for (let vertex = 0; vertex < vertexCount; vertex++) {
     const offset = positionOffset + vertex * 12;
@@ -699,6 +743,35 @@ function skinIqmPositions(view: DataView, positionOffset: number, vertexCount: n
   return result;
 }
 
+function iqmPartTransforms(model: DataView, parts: Array<{ buffer: ArrayBuffer; frame: number; nextFrame?: number; interpolation?: number;
+  roots: string[] }>): IqmTransform[] | undefined {
+  const jointCount = model.getUint32(68, true);
+  const jointOffset = model.getUint32(72, true);
+  const textSize = model.getUint32(28, true);
+  const textOffset = model.getUint32(32, true);
+  if (!jointCount || !rangeWithin(jointOffset, jointCount * 48, model.byteLength)) return undefined;
+  const joints = Array.from({ length: jointCount }, (_, index) => {
+    const offset = jointOffset + index * 48;
+    const nameOffset = model.getUint32(offset, true);
+    return { name: readAscii(model, textOffset + nameOffset, Math.max(0, textSize - nameOffset)), parent: model.getInt32(offset + 4, true) };
+  });
+  const assignments = animationPartAssignments(joints, parts.map((part) => part.roots));
+  const locals = parts.map((part) => {
+    const animation = new DataView(part.buffer);
+    validateIqm(animation);
+    if (animation.getUint32(76, true) !== jointCount) return undefined;
+    const current = readIqmFrameLocals(animation, animation.getUint32(80, true), jointCount, part.frame);
+    if (part.interpolation && part.nextFrame !== undefined && part.nextFrame !== part.frame) {
+      const next = readIqmFrameLocals(animation, animation.getUint32(80, true), jointCount, part.nextFrame);
+      current.forEach((transform, index) => interpolateIqmTransform(transform, next[index], part.interpolation!, transform));
+    }
+    return current;
+  });
+  if (!locals[0]) return undefined;
+  const selected = joints.map((_, index) => locals[assignments[index]]?.[index] ?? locals[0]![index]);
+  return composeIqmTransforms(selected, joints.map((joint) => joint.parent));
+}
+
 function readIqmJoints(view: DataView, offset: number, count: number): IqmTransform[] {
   const result: IqmTransform[] = [];
   for (let index = 0; index < count; index++) {
@@ -714,7 +787,7 @@ function readIqmJoints(view: DataView, offset: number, count: number): IqmTransf
   return result;
 }
 
-function readIqmFrame(view: DataView, poseOffset: number, poseCount: number, requestedFrame: number): IqmTransform[] {
+function readIqmFrameLocals(view: DataView, poseOffset: number, poseCount: number, requestedFrame: number): IqmTransform[] {
   const frameCount = Math.max(1, view.getUint32(92, true));
   const channelCount = view.getUint32(96, true);
   const framesOffset = view.getUint32(100, true);
@@ -723,7 +796,6 @@ function readIqmFrame(view: DataView, poseOffset: number, poseCount: number, req
   const result: IqmTransform[] = [];
   for (let index = 0; index < poseCount; index++) {
     const offset = poseOffset + index * 88;
-    const parent = view.getInt32(offset, true);
     const mask = view.getUint32(offset + 4, true);
     const values = Array.from({ length: 10 }, (_, component) => view.getFloat32(offset + 8 + component * 4, true));
     for (let component = 0; component < 10; component++) {
@@ -736,8 +808,28 @@ function readIqmFrame(view: DataView, poseOffset: number, poseCount: number, req
       orientation: normalizeIqmQuaternion([values[3], values[4], values[5], values[6]]),
       scale: [values[7], values[8], values[9]],
     };
-    result.push(parent >= 0 ? combineIqmTransforms(result[parent], transform) : transform);
+    result.push(transform);
   }
+  return result;
+}
+
+function composeIqmTransforms(locals: IqmTransform[], parents: number[]): IqmTransform[] {
+  const result: IqmTransform[] = [];
+  for (let index = 0; index < locals.length; index++) {
+    result.push(parents[index] >= 0 ? combineIqmTransforms(result[parents[index]], locals[index]) : locals[index]);
+  }
+  return result;
+}
+
+function interpolateIqmTransform(current: IqmTransform, next: IqmTransform, amount: number, result: IqmTransform): IqmTransform {
+  for (let axis = 0; axis < 3; axis++) {
+    result.position[axis] = current.position[axis] + (next.position[axis] - current.position[axis]) * amount;
+    result.scale[axis] = current.scale[axis] + (next.scale[axis] - current.scale[axis]) * amount;
+  }
+  const sign = current.orientation[0] * next.orientation[0] + current.orientation[1] * next.orientation[1] +
+    current.orientation[2] * next.orientation[2] + current.orientation[3] * next.orientation[3] < 0 ? -1 : 1;
+  result.orientation = normalizeIqmQuaternion(current.orientation.map((value, index) =>
+    value + (next.orientation[index] * sign - value) * amount) as [number, number, number, number]);
   return result;
 }
 

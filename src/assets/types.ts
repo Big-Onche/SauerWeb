@@ -115,12 +115,19 @@ export interface PlayerModelAsset {
   blueTeam: MapModelAsset;
   redTeam: MapModelAsset;
   animations: Record<string, PlayerModelAnimation>;
+  animationParts: PlayerModelAnimationPart[];
   ragdollPath?: string;
+}
+
+export interface PlayerModelAnimationPart {
+  roots: string[];
+  animations: Record<string, PlayerModelAnimation>;
 }
 
 export interface PlayerModelAnimation {
   path: string;
   speed: number;
+  priority: number;
   startOffset: number;
   endOffset: number;
 }
