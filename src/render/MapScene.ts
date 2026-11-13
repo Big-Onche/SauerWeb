@@ -43,9 +43,11 @@ import { MultiplayerHUD } from "../platform/browser/MultiplayerHUD";
 import { SpectatorHUD } from "../platform/browser/SpectatorHUD";
 import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platform/browser/PlayerRenderer";
 import { CtfRenderer } from "../platform/browser/CtfRenderer";
+import { CollectRenderer } from "../platform/browser/CollectRenderer";
 import { ITEM_ICONS } from "../fpsgame/entities";
 import { ClientState, PhysicsState } from "../engine/physics/types";
 import { ctfTeamFlag } from "../fpsgame/ctf";
+import { COLLECT_TOKEN_LIMIT, collectTeamBase } from "../fpsgame/collect";
 import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
 import type { RuntimeMode } from "../runtime";
 import { lineCylinderIntersection } from "../fpsgame/weapon/HitscanSystem";
@@ -119,7 +121,7 @@ export class MapScene {
     },
     spawnRequest: (bot) => this.fpsClient.multiplayer.requestOwnedBotSpawn(bot.clientNumber),
     changed: () => this.syncBotTargets(),
-    objective: (bot, _state, interests) => this.ctfAiObjective(bot, interests),
+    objective: (bot, _state, interests) => this.gameModeAiObjective(bot, interests),
     itemPickup: (bot, entityIndex, now) => this.fpsClient.multiplayer.tryBotItemPickup(bot, entityIndex, now),
     itemAvailable: (bot, entityIndex) => this.fpsClient.multiplayer.isBotItemAvailable(bot, entityIndex),
     quadExpired: (bot) => this.fpsClient.multiplayer.notifyQuadExpired(bot.position),
@@ -135,6 +137,7 @@ export class MapScene {
   private readonly killFeed: KillFeed;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
+  private readonly collectRenderer: CollectRenderer;
   private readonly gameAudio: WeaponAudio;
   private cameraMode: CameraMode = "free";
   private thirdperson = false;
@@ -227,6 +230,7 @@ export class MapScene {
         normal: { x: hit.normal.x, y: hit.normal.z, z: hit.normal.y } } : undefined;
     }, (milliseconds) => this.frameProfiler.record("playerGeometry", milliseconds), () => this.frameProfiler.enabled);
     this.ctfRenderer = new CtfRenderer(this.scene);
+    this.collectRenderer = new CollectRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
     this.weaponInput.enabled = runtimeMode === "game";
     this.touchControls.setGameplayEnabled(runtimeMode === "game");
@@ -297,6 +301,7 @@ export class MapScene {
     const lighting = resolveMapLighting(map, lightingOverrides);
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
+    this.collectRenderer.clear();
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.mapModelResources?.dispose();
     this.mapModelResources = undefined;
@@ -595,6 +600,7 @@ export class MapScene {
     this.performanceOverlay.dispose();
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
+    this.collectRenderer.clear();
     this.particleRenderer.clear();
     this.weaponRenderer.clear();
     this.gameAudio.dispose();
@@ -998,12 +1004,12 @@ export class MapScene {
     const hudPlayer = followed ?? this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
     this.frameProfiler.measure("hud", () => this.weaponHUD.render(hudPlayer ? {
       health: hudPlayer.health, maxHealth: hudPlayer.maxHealth, armour: hudPlayer.armour, armourType: hudPlayer.armourType,
-      selectedGun: hudPlayer.selectedGun, ammo: hudPlayer.ammo, state: hudPlayer.state, flags: hudPlayer.flags,
+      selectedGun: hudPlayer.selectedGun, ammo: hudPlayer.ammo, state: hudPlayer.state, flags: hudPlayer.flags, tokens: hudPlayer.tokens,
       clientNumber: hudPlayer.clientNumber,
     } : {
       health: this.physics.player.health, maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour,
       armourType: this.physics.player.armourType, selectedGun: this.weapons.controller.inventory.selectedGun,
-      ammo: this.weapons.controller.inventory.ammo, state: this.physics.player.clientState, flags: 0,
+      ammo: this.weapons.controller.inventory.ammo, state: this.physics.player.clientState, flags: 0, tokens: 0,
     }));
     this.frameProfiler.measure("weaponSimulation", () => this.weapons.update(nowMilliseconds, aimTarget));
     this.botUpdatePlayers.length = 0;
@@ -1026,7 +1032,7 @@ export class MapScene {
       if (this.fpsClient.multiplayer.isLocalGame) {
         for (const bot of this.bots.bots.values()) {
           const player = this.fpsClient.multiplayer.players.get(bot.clientNumber);
-          if (bot.ownerNumber < 0 && player) bot.flags = player.flags;
+          if (player) { bot.flags = player.flags; bot.tokens = player.tokens; }
         }
       }
     });
@@ -1293,6 +1299,9 @@ export class MapScene {
     this.ctfRenderer.render(multiplayer.ctfMode.flags, multiplayer.players, multiplayer.clientNumber, localNetworkPlayer?.team ?? "",
       this.physics.player.position, this.physics.player.aboveEye, this.physics.player.yaw, multiplayer.gameMode,
       (clientNumber) => this.playerRenderer.flagAttachmentPosition(clientNumber));
+    this.collectRenderer.render(multiplayer.collectMode.bases, multiplayer.collectMode.tokens, multiplayer.players, multiplayer.clientNumber,
+      localNetworkPlayer?.team ?? "", multiplayer.gameMode, nowMilliseconds,
+      (clientNumber) => this.playerRenderer.flagAttachmentPosition(clientNumber));
   }
 
   private syncBotTargets(): void {
@@ -1306,9 +1315,31 @@ export class MapScene {
   }
 
   // Original: src/fpsgame/ctf.h, ctfclientmode::aicheck() / aihomerun().
-  private ctfAiObjective(bot: BotActor, interests: AiInterest[]): boolean {
+  private gameModeAiObjective(bot: BotActor, interests: AiInterest[]): boolean {
     const multiplayer = this.fpsClient.multiplayer;
-    if (!multiplayer.isLocalGame || !gameModeHas(multiplayer.gameMode, GameModeFlag.Ctf) ||
+    if (gameModeHas(multiplayer.gameMode, GameModeFlag.Collect)) {
+      const team = collectTeamBase(bot.team), feet = { ...bot.position, z: bot.position.z - bot.eyeHeight };
+      if (bot.tokens > 0) {
+        for (const base of multiplayer.collectMode.bases) {
+          if (base.team === team) continue;
+          const node = this.bots.waypoints.closestwaypoint(base.o, SIGHTMIN, true);
+          if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Pursue, node, target: -(base.id + 1),
+            targetType: AiTargetType.Affinity, score: squaredDistance(feet, base.o) / (bot.tokens > 2 ? 1000 : 100) });
+        }
+      }
+      if (bot.tokens < COLLECT_TOKEN_LIMIT) {
+        for (const token of multiplayer.collectMode.tokens) {
+          const node = this.bots.waypoints.closestwaypoint(token.o, SIGHTMIN, true);
+          if (!this.bots.waypoints.iswaypoint(node)) continue;
+          const collectible = token.team !== team && (token.team > 0 || -token.team === team);
+          interests.push({ state: AiStateType.Pursue, node, target: token.id, targetType: AiTargetType.Affinity,
+            score: squaredDistance(feet, token.o) / (collectible ? 10 : 1) });
+        }
+      }
+      return interests.length > 0;
+    }
+    if (!multiplayer.isLocalGame) return false;
+    if (!gameModeHas(multiplayer.gameMode, GameModeFlag.Ctf) ||
         gameModeHas(multiplayer.gameMode, GameModeFlag.Protect) || gameModeHas(multiplayer.gameMode, GameModeFlag.Hold)) return false;
     const team = ctfTeamFlag(bot.team), carrying = multiplayer.ctfMode.flags.find((flag) => flag.owner === bot.clientNumber);
     const ownFlag = multiplayer.ctfMode.flags.find((flag) => flag.team === team);
@@ -1767,4 +1798,9 @@ async function canvasObjectUrl(canvas: HTMLCanvasElement): Promise<string> {
     canvas.toBlob((value) => value ? resolve(value) : reject(new Error("Could not encode a skybox face.")), "image/png");
   });
   return URL.createObjectURL(blob);
+}
+
+function squaredDistance(left: RegisteredMapEntity["position"], right: RegisteredMapEntity["position"]): number {
+  const x = left.x - right.x, y = left.y - right.y, z = left.z - right.z;
+  return x * x + y * y + z * z;
 }

@@ -5,6 +5,7 @@ import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
 import { EnetClient, type EnetEvent, ENET_PACKET_FLAG_UNSEQUENCED } from "../network/enet";
 import { PacketReader, PacketWriter } from "../network/protocol";
 import { CtfClientMode, ctfTeamFlag, type LocalCtfEvent } from "./ctf";
+import { CollectClientMode, COLLECT_RESPAWN_SECONDS, COLLECT_SCORE_LIMIT, collectTeamBase, type CollectLocalEvent } from "./collect";
 import { DMF, DNF, DVELF, GameModeFlag, gameModeHas, gameModeName, NetworkMessage, PROTOCOL_VERSION } from "./game";
 import { WeaponSystem } from "./weapon";
 import { createDamageable, hitpush, type Damageable } from "./weapon/DamageSystem";
@@ -14,6 +15,7 @@ import type { ConsoleLineType } from "../platform/browser/GameConsole";
 import { applyNetworkPosition, createNetworkInterpolation, resetNetworkInterpolation, type NetworkInterpolation } from "./networkInterpolation";
 import { canpickup, FpsEntities, I_BOOST, I_CARTRIDGES, I_QUAD, pickup, type EntityEffect, type PickupState } from "./entities";
 import { GameSound } from "./sound";
+import { MATF_CLIP, MAT_GAMECLIP } from "../engine/material";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -36,6 +38,7 @@ export interface NetworkPlayer extends Damageable {
   frags: number;
   deaths: number;
   flags: number;
+  tokens: number;
   ping: number;
   yaw: number;
   pitch: number;
@@ -98,6 +101,7 @@ export class MultiplayerClient extends EventTarget {
   readonly players = new Map<number, NetworkPlayer>();
   readonly transport = new EnetClient();
   readonly ctfMode = new CtfClientMode();
+  readonly collectMode: CollectClientMode;
   readonly entities: FpsEntities;
   readonly teamScores = new Map<string, number>();
   connected = false;
@@ -119,11 +123,13 @@ export class MultiplayerClient extends EventTarget {
   private mapInfoPending = false;
   private captureBases: CaptureBase[] = [];
   private localGame = false;
+  private localIntermission = false;
   private quadWasActive = false;
   private lastQuadUpdate = 0;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
     super();
+    this.collectMode = new CollectClientMode((origin, yaw) => this.moveCollectToken(origin, yaw));
     this.entities = new FpsEntities(physics, {
       effect: (effect, local) => this.emit({ type: "entity-effect", effect, local }),
       send: (effect) => this.sendEntityEffect(effect),
@@ -156,11 +162,13 @@ export class MultiplayerClient extends EventTarget {
   // scoreboard, spectator and client-mode code serve both local and remote games.
   startLocalGame(playerName: string, playerModel = 0): void {
     this.disconnect();
+    this.collectMode.setup(this.mapEntities);
     this.localGame = true;
     this.clientNumber = 0;
     this.endpoint = { host: "local", port: 0, playerName: playerName.slice(0, 15) || "unnamed", playerModel };
     this.serverDescription = "local bot match";
     this.mapStarted = performance.now();
+    this.localIntermission = false;
     this.timeLeftSeconds = 10 * 60;
     const player = this.playerFor(this.clientNumber);
     Object.assign(player, { name: this.endpoint.playerName, model: playerModel, state: ClientState.Alive, alive: true });
@@ -183,6 +191,8 @@ export class MultiplayerClient extends EventTarget {
     this.mapInfoPending = Boolean(this.loadedMapName);
     this.weapons.controller.serverAuthoritative = false;
     this.weapons.clear();
+    this.collectMode.reset();
+    this.localIntermission = false;
     this.syncTargets();
   }
 
@@ -213,7 +223,7 @@ export class MultiplayerClient extends EventTarget {
     this.entities.checkitems(nowMilliseconds);
     if (this.localGame) {
       this.syncLocalPlayer();
-      this.timeLeftSeconds = Math.max(0, 10 * 60 - Math.trunc((nowMilliseconds - this.mapStarted) / 1000));
+      this.timeLeftSeconds = this.localIntermission ? 0 : Math.max(0, 10 * 60 - Math.trunc((nowMilliseconds - this.mapStarted) / 1000));
       if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
         for (const player of this.players.values()) {
           if (player.state !== ClientState.Alive) continue;
@@ -221,6 +231,23 @@ export class MultiplayerClient extends EventTarget {
           this.ctfMode.checkItems(player, feet, this.gameMode, (flag, version) => {
             if (this.ctfMode.takeFlagLocal(player, flag, version, this.gameMode,
               (event) => this.announceLocalFlag(player, event))) this.emit({ type: "players" });
+          });
+        }
+      }
+      if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
+        this.collectMode.updateLocal(nowMilliseconds, (event) => this.announceLocalCollect(event));
+        for (const player of this.players.values()) {
+          if (player.state !== ClientState.Alive) continue;
+          const feet = { ...player.position, z: player.position.z - player.eyeHeight };
+          this.collectMode.checkItems(player, feet, {
+            takeToken: (id) => {
+              if (this.collectMode.takeTokenLocal(player, id, (event) => this.announceLocalCollect(event))) this.emit({ type: "players" });
+            },
+            depositTokens: (base) => {
+              if (this.collectMode.depositTokensLocal(player, base, nowMilliseconds, Math.random,
+                (event) => this.announceLocalCollect(event))) this.emit({ type: "players" });
+            },
+            lookupMaterial: (position) => this.physics.lookupMaterial(position), gameClipMask: MATF_CLIP, gameClipValue: MAT_GAMECLIP,
           });
         }
       }
@@ -247,6 +274,10 @@ export class MultiplayerClient extends EventTarget {
         items.putInt(-1);
       }
       if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) this.ctfMode.putInitFlags(items, this.gameMode);
+      if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
+        items.putInt(NetworkMessage.InitTokens);
+        this.collectMode.putInitTokens(items);
+      }
       if (gameModeHas(this.gameMode, GameModeFlag.Capture)) {
         const bases = this.mapEntities.filter((entity) => entity.typeName === "base");
         items.putInt(NetworkMessage.Bases).putInt(bases.length);
@@ -259,7 +290,10 @@ export class MultiplayerClient extends EventTarget {
       if (itemBytes.length) this.transport.send(1, itemBytes, true);
       this.mapInfoPending = false;
     }
-    if (!this.isSpectator && !this.physics.player.alive && (this.respawnRequested || this.weapons.controller.attacking) &&
+    const localPlayer = this.players.get(this.clientNumber);
+    const respawnReady = !gameModeHas(this.gameMode, GameModeFlag.Collect) || !localPlayer ||
+      nowMilliseconds - localPlayer.deadAt >= COLLECT_RESPAWN_SECONDS * 1000;
+    if (!this.isSpectator && !this.physics.player.alive && respawnReady && (this.respawnRequested || this.weapons.controller.attacking) &&
         nowMilliseconds - this.lastSpawnAttempt >= 1000) {
       this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TrySpawn).finish(), true);
       this.lastSpawnAttempt = nowMilliseconds;
@@ -269,6 +303,26 @@ export class MultiplayerClient extends EventTarget {
       this.ctfMode.checkItems(this.players.get(this.clientNumber), feet, this.gameMode, (flag, version) => {
         this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TakeFlag).putInt(flag).putInt(version).finish(), true);
       });
+    }
+    if (this.physics.player.alive && gameModeHas(this.gameMode, GameModeFlag.Collect)) {
+      const player = this.players.get(this.clientNumber);
+      const feet = { ...this.physics.player.position, z: this.physics.player.position.z - this.physics.player.eyeHeight };
+      if (player) this.collectMode.checkItems(player, feet, {
+        takeToken: (id) => this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TakeToken).putInt(id).finish(), true),
+        depositTokens: (base) => this.transport.send(1, new PacketWriter().putInt(NetworkMessage.DepositTokens).putInt(base).finish(), true),
+        lookupMaterial: (position) => this.physics.lookupMaterial(position), gameClipMask: MATF_CLIP, gameClipValue: MAT_GAMECLIP,
+      });
+    }
+    if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
+      for (const player of this.players.values()) {
+        if (player.aiType === 0 || player.ownerNumber !== this.clientNumber || player.state !== ClientState.Alive) continue;
+        const feet = { ...player.position, z: player.position.z - player.eyeHeight };
+        this.collectMode.checkItems(player, feet, {
+          takeToken: (id) => this.sendOwnedCollectRequest(player.clientNumber, NetworkMessage.TakeToken, id),
+          depositTokens: (base) => this.sendOwnedCollectRequest(player.clientNumber, NetworkMessage.DepositTokens, base),
+          lookupMaterial: (position) => this.physics.lookupMaterial(position), gameClipMask: MATF_CLIP, gameClipValue: MAT_GAMECLIP,
+        });
+      }
     }
     const bytes = messages.finish();
     if (bytes.length) this.transport.send(1, bytes);
@@ -280,7 +334,8 @@ export class MultiplayerClient extends EventTarget {
       if (left.state === ClientState.Spectator || right.state === ClientState.Spectator) {
         if (left.state !== right.state) return left.state === ClientState.Spectator ? 1 : -1;
       }
-      return gameModeHas(this.gameMode, GameModeFlag.Ctf) && right.flags !== left.flags ? right.flags - left.flags
+      return (gameModeHas(this.gameMode, GameModeFlag.Ctf) || gameModeHas(this.gameMode, GameModeFlag.Collect)) && right.flags !== left.flags
+        ? right.flags - left.flags
         : right.frags - left.frags || left.name.localeCompare(right.name);
     });
   }
@@ -293,6 +348,7 @@ export class MultiplayerClient extends EventTarget {
 
   getTeamScore(team: string): number {
     if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) return this.ctfMode.scores[ctfTeamFlag(team) - 1] ?? 0;
+    if (gameModeHas(this.gameMode, GameModeFlag.Collect)) return this.collectMode.scores[collectTeamBase(team) - 1] ?? 0;
     return this.teamScores.get(team) ?? 0;
   }
 
@@ -325,12 +381,14 @@ export class MultiplayerClient extends EventTarget {
   }
 
   syncLocalBot(bot: PhysicsEntity & { clientNumber: number; ownerNumber: number; skill: number; name: string; team: string; model: number;
-    lifeSequence: number; frags: number; deaths: number; flags: number; selectedGun: number; ammo: Int32Array; lastAction: number; gunWait: number;
+    lifeSequence: number; frags: number; deaths: number; flags: number; tokens: number; selectedGun: number; ammo: Int32Array;
+    lastAction: number; gunWait: number;
     lastAttackGun: number; lastPain: number; deadAt: number }): void {
     const player = this.playerFor(bot.clientNumber);
     Object.assign(player, {
       ownerNumber: bot.ownerNumber, aiType: 1, skill: bot.skill, name: bot.name, team: bot.team, model: bot.model % 5,
-      lifeSequence: bot.lifeSequence, frags: bot.frags, deaths: bot.deaths, flags: bot.flags, selectedGun: bot.selectedGun, ammo: bot.ammo,
+      lifeSequence: bot.lifeSequence, frags: bot.frags, deaths: bot.deaths, flags: bot.flags, tokens: bot.tokens,
+      selectedGun: bot.selectedGun, ammo: bot.ammo,
       lastAction: bot.lastAction, gunWait: bot.gunWait, lastAttackGun: bot.lastAttackGun, lastPain: bot.lastPain, deadAt: bot.deadAt,
       position: copyVec3(bot.position), velocity: copyVec3(bot.velocity), yaw: bot.yaw, pitch: bot.pitch, roll: bot.roll, move: bot.move,
       strafe: bot.strafe, physicsState: bot.physicsState, state: bot.clientState, alive: bot.alive, health: bot.health,
@@ -339,7 +397,12 @@ export class MultiplayerClient extends EventTarget {
   }
 
   clearLocalBots(): void {
-    for (const [clientNumber, player] of this.players) if (player.aiType !== 0 && player.ownerNumber < 0) this.players.delete(clientNumber);
+    for (const [clientNumber, player] of this.players) {
+      if (player.aiType === 0 || player.ownerNumber >= 0) continue;
+      if (gameModeHas(this.gameMode, GameModeFlag.Collect)) this.collectMode.leaveGameLocal(player, true,
+        (event) => this.announceLocalCollect(event));
+      this.players.delete(clientNumber);
+    }
     this.syncTargets();
   }
 
@@ -360,6 +423,11 @@ export class MultiplayerClient extends EventTarget {
     victim.alive = false;
     victim.deadAt = performance.now();
     this.dropLocalFlags(victim);
+    if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
+      const origin = victimNumber === this.clientNumber ? this.physics.player.position : victim.position;
+      this.collectMode.dropTokensLocal(victim, origin, !actor || actor.team === victim.team, performance.now(), Math.random,
+        (event) => this.announceLocalCollect(event));
+    }
     this.emit({ type: "playsound", sound: GameSound.Die1 + Math.floor(Math.random() * 2),
       position: victimNumber === this.clientNumber ? undefined : victim.position });
     const victimName = this.displayName(victim, "you"), actorName = this.displayName(actor, "you");
@@ -425,6 +493,9 @@ export class MultiplayerClient extends EventTarget {
   requestRespawn(): boolean {
     if (this.localGame) {
       if (this.physics.player.alive || this.isSpectator) return false;
+      const player = this.players.get(this.clientNumber);
+      if (gameModeHas(this.gameMode, GameModeFlag.Collect) && player &&
+          performance.now() - player.deadAt < COLLECT_RESPAWN_SECONDS * 1000) return false;
       this.spawnLocalPlayer();
       return true;
     }
@@ -447,12 +518,18 @@ export class MultiplayerClient extends EventTarget {
   setMapEntities(entities: readonly RegisteredMapEntity[]): void {
     this.mapEntities = entities.map((entity) => ({ ...entity, position: { ...entity.position }, attributes: [...entity.attributes] }));
     this.ctfMode.setup(entities, this.gameMode);
+    this.collectMode.setup(entities);
     this.entities.setMap(entities, this.gameMode, this.localGame, performance.now(), Math.max(1, this.players.size));
   }
 
   setGameMode(gameMode: number): void {
+    const changed = this.gameMode !== gameMode;
     this.gameMode = gameMode;
     this.entities.setGameMode(gameMode);
+    if (changed) {
+      this.collectMode.reset();
+      if (gameModeHas(gameMode, GameModeFlag.Collect)) this.collectMode.setup(this.mapEntities);
+    }
   }
 
   tryBotItemPickup(bot: PhysicsEntity & { clientNumber: number; ammo: Int32Array; weaponSystem: WeaponSystem }, entityIndex: number,
@@ -500,6 +577,7 @@ export class MultiplayerClient extends EventTarget {
       const player = this.players.get(this.clientNumber);
       if (!player || !gameModeHas(this.gameMode, GameModeFlag.Team)) return;
       this.dropLocalFlags(player);
+      if (gameModeHas(this.gameMode, GameModeFlag.Collect)) this.collectMode.leaveGameLocal(player, false);
       player.team = player.team === "good" ? "evil" : "good";
       Object.assign(this.physics.player, { team: player.team });
       this.emit({ type: "players" });
@@ -518,6 +596,7 @@ export class MultiplayerClient extends EventTarget {
       if (this.isSpectator === spectating) return false;
       const player = this.players.get(this.clientNumber);
       if (player) this.dropLocalFlags(player);
+      if (player && gameModeHas(this.gameMode, GameModeFlag.Collect)) this.collectMode.leaveGameLocal(player, false);
       this.setSpectatorState(this.clientNumber, spectating);
       if (!spectating) this.spawnLocalPlayer();
       return true;
@@ -657,11 +736,16 @@ export class MultiplayerClient extends EventTarget {
           const mapAlreadyLoaded = this.loadedMapName.toLocaleLowerCase() === this.mapName.toLocaleLowerCase();
           this.mapInfoPending = mapAlreadyLoaded;
           this.mapStarted = performance.now();
+          this.localIntermission = false;
           this.weapons.clear();
           this.teamScores.clear();
           this.ctfMode.reset();
+          this.collectMode.reset();
           this.entities.resetspawns();
-          if (mapAlreadyLoaded) this.ctfMode.setup(this.mapEntities, this.gameMode);
+          if (mapAlreadyLoaded) {
+            this.ctfMode.setup(this.mapEntities, this.gameMode);
+            this.collectMode.setup(this.mapEntities);
+          }
           this.captureBases = [];
           this.console(`game mode is ${gameModeName(this.gameMode)}`, "game-info");
           this.emit({ type: "map-change", map: this.mapName, mode: this.gameMode });
@@ -758,6 +842,12 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.ResetFlag: this.parseResetFlag(packet); break;
         case NetworkMessage.InvisibleFlag: this.ctfMode.setInvisible(packet.getInt(), packet.getInt() > 0); break;
         case NetworkMessage.ScoreFlag: this.parseScoreFlag(packet); break;
+        case NetworkMessage.InitTokens: this.parseInitTokens(packet); break;
+        case NetworkMessage.TakeToken: this.parseTakeToken(packet); break;
+        case NetworkMessage.ExpireTokens: this.parseExpireTokens(packet); break;
+        case NetworkMessage.DropTokens: this.parseDropTokens(packet); break;
+        case NetworkMessage.DepositTokens: this.parseDepositTokens(packet); break;
+        case NetworkMessage.StealTokens: this.parseStealTokens(packet); break;
         case NetworkMessage.ClientPing: {
           const player = this.players.get(sender), ping = packet.getInt();
           if (player) player.ping = ping;
@@ -829,6 +919,7 @@ export class MultiplayerClient extends EventTarget {
     player.alive = true;
     player.positionReady = clientNumber === this.clientNumber;
     player.deadAt = 0;
+    player.tokens = 0;
     if (clientNumber === this.clientNumber) {
       this.respawnRequested = false;
       this.syncLocalState(true);
@@ -1247,6 +1338,69 @@ export class MultiplayerClient extends EventTarget {
     this.emit({ type: "players" });
   }
 
+  // Original: src/fpsgame/collect.h, PARSEMESSAGES client cases.
+  private parseInitTokens(packet: PacketReader): void {
+    const carried = this.collectMode.parseInitTokens(packet, performance.now());
+    for (const player of this.players.values()) player.tokens = 0;
+    for (const entry of carried) this.playerFor(entry.clientNumber).tokens = entry.tokens;
+    this.emit({ type: "players" });
+  }
+
+  private parseTakeToken(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), id = packet.getInt(), total = packet.getInt(), player = this.playerFor(clientNumber);
+    const result = this.collectMode.takeToken(player, id, total);
+    if (result.token) this.emit({ type: "playsound", sound: result.friendly ? GameSound.ItemAmmo : GameSound.ItemHealth,
+      position: clientNumber === this.clientNumber ? undefined : player.position });
+    this.emit({ type: "players" });
+  }
+
+  private parseExpireTokens(packet: PacketReader): void {
+    for (let id = packet.getInt(); id >= 0; id = packet.getInt()) {
+      const token = this.collectMode.expireToken(id);
+      if (token) this.emit({ type: "playsound", sound: GameSound.ItemAmmo, position: token.o });
+    }
+  }
+
+  private parseDropTokens(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), player = this.playerFor(clientNumber);
+    const origin = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
+    for (let index = 0, id = packet.getInt(); id >= 0; index++, id = packet.getInt()) {
+      const team = packet.getInt(), yaw = packet.getInt();
+      const token = this.collectMode.dropToken(id, origin, team, yaw, performance.now(), clientNumber);
+      if (!index && token) this.emit({ type: "playsound", sound: GameSound.ItemSpawn,
+        position: clientNumber === this.clientNumber ? undefined : player.position });
+    }
+    this.emit({ type: "players" });
+  }
+
+  private parseDepositTokens(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), base = packet.getInt(), deposited = packet.getInt(), team = packet.getInt(), score = packet.getInt(),
+      flags = packet.getInt(), player = this.playerFor(clientNumber);
+    this.collectMode.depositTokens(player, base, deposited, team, score, flags, performance.now());
+    const localTeam = collectTeamBase(this.players.get(this.clientNumber)?.team ?? "");
+    const teamName = team === localTeam ? "your team" : "the enemy team";
+    this.console(`${this.displayName(player)} collected ${deposited} ${deposited === 1 ? "skull" : "skulls"} for ${teamName}`, "game-info");
+    this.emit({ type: "playsound", sound: team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
+    if (score >= COLLECT_SCORE_LIMIT) this.console(`${teamName} collected ${score} skulls`, "game-info");
+    this.emit({ type: "players" });
+  }
+
+  private parseStealTokens(packet: PacketReader): void {
+    const clientNumber = packet.getInt(), team = packet.getInt(), base = packet.getInt(), enemyTeam = packet.getInt(), score = packet.getInt(),
+      player = this.playerFor(clientNumber);
+    const origin = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
+    for (let index = 0, id = packet.getInt(); id >= 0; index++, id = packet.getInt()) {
+      const yaw = packet.getInt();
+      const token = this.collectMode.stealToken(player, id, origin, team, yaw, index, base, enemyTeam, score, performance.now());
+      if (!index) {
+        const localTeam = collectTeamBase(this.players.get(this.clientNumber)?.team ?? "");
+        this.console(`${this.displayName(player)} stole a skull from ${enemyTeam === localTeam ? "your team" : "the enemy team"}`, "game-info");
+        this.emit({ type: "playsound", sound: GameSound.FlagDrop, position: token?.o ?? this.collectMode.bases[base]?.tokenPos });
+      }
+    }
+    this.emit({ type: "players" });
+  }
+
   private buildPosition(player: PhysicsEntity = this.physics.player, clientNumber = this.clientNumber,
                         lifeSequence = this.playerFor(clientNumber).lifeSequence): Uint8Array {
     const packet = new PacketWriter().putInt(NetworkMessage.Pos).putUInt(clientNumber);
@@ -1343,7 +1497,7 @@ export class MultiplayerClient extends EventTarget {
     if (player) return player;
     player = Object.assign(createDamageable(`client:${clientNumber}`, copyVec3(this.physics.player.position)), {
       clientNumber, name: clientNumber === this.clientNumber ? this.endpoint?.playerName ?? "unnamed" : "unnamed", team: "", model: 0,
-      lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, ping: 0, yaw: 0, pitch: 0, roll: 0,
+      lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, tokens: 0, ping: 0, yaw: 0, pitch: 0, roll: 0,
       falling: { x: 0, y: 0, z: 0 }, move: 0 as const,
       strafe: 0 as const, physicsState: PhysicsState.Fall, selectedGun: Gun.Pistol, ammo: new Int32Array(12),
       quadMillis: 0,
@@ -1375,6 +1529,11 @@ export class MultiplayerClient extends EventTarget {
   private sendSimpleBotCommand(type: NetworkMessage): void {
     if (!this.connected) return;
     this.transport.send(1, new PacketWriter().putInt(type).finish(), true);
+  }
+
+  private sendOwnedCollectRequest(clientNumber: number, type: NetworkMessage.TakeToken | NetworkMessage.DepositTokens, value: number): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber).putInt(type).putInt(value).finish(), true);
   }
 
   private emit(detail: MultiplayerEvent): void { this.dispatchEvent(new CustomEvent<MultiplayerEvent>("multiplayer", { detail })); }
@@ -1413,6 +1572,50 @@ export class MultiplayerClient extends EventTarget {
       this.emit({ type: "playsound", sound: team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
       if (score >= 10) this.console(`${teamName} captured ${score} flags`, "game-info");
     }
+  }
+
+  private announceLocalCollect(event: CollectLocalEvent): void {
+    if (event.type === "expire") {
+      this.emit({ type: "playsound", sound: GameSound.ItemAmmo, position: event.token.o });
+      return;
+    }
+    if (event.type === "drop") {
+      if (event.tokens.length) this.emit({ type: "playsound", sound: GameSound.ItemSpawn,
+        position: event.player.clientNumber === this.clientNumber ? undefined : event.player.position });
+      return;
+    }
+    if (event.type === "take") {
+      this.emit({ type: "playsound", sound: event.friendly ? GameSound.ItemAmmo : GameSound.ItemHealth,
+        position: event.player.clientNumber === this.clientNumber ? undefined : event.player.position });
+      return;
+    }
+    const localTeam = collectTeamBase(this.players.get(this.clientNumber)?.team ?? "");
+    if (event.type === "steal") {
+      this.console(`${this.displayName(event.player)} stole a skull from ${event.enemyTeam === localTeam ? "your team" : "the enemy team"}`,
+        "game-info");
+      this.emit({ type: "playsound", sound: GameSound.FlagDrop, position: event.base.tokenPos });
+      return;
+    }
+    const teamName = event.team === localTeam ? "your team" : "the enemy team";
+    this.console(`${this.displayName(event.player)} collected ${event.deposited} ${event.deposited === 1 ? "skull" : "skulls"} for ${teamName}`,
+      "game-info");
+    this.emit({ type: "playsound", sound: event.team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
+    if (event.score >= COLLECT_SCORE_LIMIT) this.console(`${teamName} collected ${event.score} skulls`, "game-info");
+    if (event.score >= COLLECT_SCORE_LIMIT && !this.localIntermission) {
+      this.localIntermission = true;
+      this.timeLeftSeconds = 0;
+      this.logIntermission();
+    }
+  }
+
+  private moveCollectToken(origin: Vec3, yaw: number): Vec3 | undefined {
+    const radians = yaw * Math.PI / 180, direction = { x: -Math.sin(radians), y: Math.cos(radians), z: 0 };
+    const start = { x: origin.x + direction.x * 4, y: origin.y + direction.y * 4, z: origin.z + 4 };
+    const obstruction = this.physics.raycast(start, direction, 12, 4, true);
+    const distance = Math.max(0, Math.min(12, obstruction?.distance ?? 12));
+    const projected = { x: start.x + direction.x * distance, y: start.y + direction.y * distance, z: start.z };
+    const floor = this.physics.raycast(projected, { x: 0, y: 0, z: -1 }, 4096, 4, true);
+    return floor ? { ...projected, z: projected.z - floor.distance + 4 } : undefined;
   }
 
   private displayName(player: NetworkPlayer | undefined, localName = "you"): string {
@@ -1476,6 +1679,7 @@ export class MultiplayerClient extends EventTarget {
     player.alive = true;
     player.positionReady = true;
     player.lifeSequence++;
+    player.tokens = 0;
     this.physics.player.clientState = ClientState.Alive;
     this.physics.player.alive = true;
     this.copyLocalSpawnState(player);
@@ -1487,6 +1691,7 @@ export class MultiplayerClient extends EventTarget {
       health: this.physics.player.health, maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour,
       armourType: this.physics.player.armourType, selectedGun: this.weapons.controller.inventory.selectedGun,
       ammo: new Int32Array(this.weapons.controller.inventory.ammo), quadMillis: this.weapons.controller.quadMilliseconds,
+      tokens: 0,
     });
   }
 

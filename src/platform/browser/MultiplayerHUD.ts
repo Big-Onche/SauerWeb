@@ -85,12 +85,13 @@ export class MultiplayerHUD {
 
   private renderGroup(team: string, players: NetworkPlayer[], localTeam: string): string {
     const friendly = Boolean(team && team === localTeam);
-    const ctf = gameModeHas(this.client.gameMode, GameModeFlag.Ctf);
+    const ctf = gameModeHas(this.client.gameMode, GameModeFlag.Ctf), collect = gameModeHas(this.client.gameMode, GameModeFlag.Collect);
+    const objective = ctf || collect;
     const heading = team ? `${escapeHtml(team)}: ${this.client.getTeamScore(team)}` : "players";
-    return `<section class="score-team ${team ? friendly ? "friendly" : "enemy" : "free-for-all"}${ctf ? " ctf" : ""}">` +
-      `<h2>${heading}</h2><div class="score-heading"><span></span>${ctf ? "<span>flags</span>" : ""}<span>frags</span><span>deaths</span>` +
-      `<span>name</span><span>ping</span><span>cn</span></div>` +
-      players.map((entry) => this.renderPlayer(entry, friendly, ctf)).join("") + `</section>`;
+    return `<section class="score-team ${team ? friendly ? "friendly" : "enemy" : "free-for-all"}${objective ? " ctf" : ""}">` +
+      `<h2>${heading}</h2><div class="score-heading"><span></span>${objective ? `<span>${collect ? "skulls" : "flags"}</span>` : ""}` +
+      `<span>frags</span><span>deaths</span><span>name</span><span>ping</span><span>cn</span></div>` +
+      players.map((entry) => this.renderPlayer(entry, friendly, objective)).join("") + `</section>`;
   }
 
   private renderPlayer(entry: NetworkPlayer, friendly: boolean, ctf: boolean): string {

@@ -67,6 +67,7 @@ export interface BotActor extends PhysicsEntity {
   frags: number;
   deaths: number;
   flags: number;
+  tokens: number;
   selectedGun: Gun;
   ammo: Int32Array;
   lastAction: number;
@@ -187,6 +188,7 @@ export class BotManager {
       frags: 0,
       deaths: 0,
       flags: 0,
+      tokens: 0,
       selectedGun: Gun.Pistol,
       ammo: new Int32Array(12),
       lastAction: 0,
@@ -233,6 +235,7 @@ export class BotManager {
     bot.lifeSequence++;
     bot.respawned = -1;
     bot.deadAt = 0;
+    bot.tokens = 0;
     bot.lastNode = this.waypoints.closestwaypoint(spawn.position, SIGHTMIN, false);
     bot.ai = createAiInfo(now, bot.skill);
     bot.weaponSystem.controller.spawnForGameMode(this.gameMode, now);
@@ -287,7 +290,8 @@ export class BotManager {
       const bot = actors[index];
       this.profile("weapons", () => this.syncWeaponState(bot));
       if (!bot.alive) {
-        if (now - bot.deadAt >= 500 && bot.respawned !== bot.lifeSequence) {
+        const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) ? 5000 : 500;
+        if (now - bot.deadAt >= respawnDelay && bot.respawned !== bot.lifeSequence) {
           bot.respawned = bot.lifeSequence;
           if (bot.ownerNumber >= 0) this.callbacks.spawnRequest?.(bot);
           else this.spawned(bot, now);
@@ -474,7 +478,7 @@ export class BotManager {
       }
     } else if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
       for (const base of this.entities) {
-        if (base.type !== 31) continue;
+        if (base.typeName !== "flag") continue;
         const node = this.waypoints.closestwaypoint(base.position, SIGHTMIN, true);
         if (this.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Pursue, node, target: base.index,
           targetType: AiTargetType.Affinity, score: distance(bot.position, base.position) / 8 });

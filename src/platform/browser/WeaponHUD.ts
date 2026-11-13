@@ -36,6 +36,7 @@ export interface HudPlayerView {
   ammo: ArrayLike<number>;
   state: ClientState;
   flags: number;
+  tokens?: number;
   clientNumber?: number;
 }
 
@@ -76,7 +77,7 @@ export class WeaponHUD {
     const clock = this.multiplayer ? Math.max(0, this.multiplayer.timeLeftSeconds) : 0;
     const damageActive = performance.now() < this.damageUntil;
     const frame = [width, height, current.health, current.maxHealth, current.armour, current.armourType, current.selectedGun,
-      current.state, current.flags, this.controller.quadMilliseconds > 0, clock, damageActive,
+      current.state, current.flags, current.tokens ?? 0, this.controller.quadMilliseconds > 0, clock, damageActive,
       ...Array.from({ length: 7 }, (_, gun) => current.ammo[gun] ?? 0)].join(":");
     if (frame === this.lastFrame) return;
     this.lastFrame = frame;
@@ -153,14 +154,14 @@ export class WeaponHUD {
     if (objective !== undefined) {
       this.drawIcon(context, objective, objectiveX, ICON_Y);
       if (gameModeHas(this.multiplayer?.gameMode ?? 0, GameModeFlag.Collect)) {
-        this.drawNativeText(context, String(player.flags), objectiveX + ICON_SIZE + ICON_SPACE, ICON_TEXT_Y, "#ffffff", 2);
+        this.drawNativeText(context, String(player.tokens ?? 0), objectiveX + ICON_SIZE + ICON_SPACE, ICON_TEXT_Y, "#ffffff", 2);
       }
     }
   }
 
   private objectiveIcon(player: HudPlayerView): number | undefined {
     const mode = this.multiplayer?.gameMode ?? 0;
-    if (gameModeHas(mode, GameModeFlag.Collect) && player.flags > 0) return Icon.Token;
+    if (gameModeHas(mode, GameModeFlag.Collect) && (player.tokens ?? 0) > 0) return Icon.Token;
     if (!gameModeHas(mode, GameModeFlag.Ctf) || player.clientNumber === undefined || !this.multiplayer) return undefined;
     const carried = this.multiplayer.ctfMode.flags.find((flag) => flag.owner === player.clientNumber);
     if (!carried) return undefined;
