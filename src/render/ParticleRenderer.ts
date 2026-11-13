@@ -6,7 +6,7 @@ import { Material } from "@babylonjs/core/Materials/material";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
@@ -16,14 +16,17 @@ import type { Scene } from "@babylonjs/core/scene";
 import "@babylonjs/core/Shaders/particles.fragment";
 import "@babylonjs/core/Shaders/particles.vertex";
 import { packageAssetUrl } from "../assets/TextureResolver";
+import type { MapModelAsset } from "../assets/types";
 import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
+import { parseIqm, parseMd2, parseMd3, parseMd5, parseObj, type ModelGeometry } from "../engine/rendermodel";
 import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { toBabylonDirection, toBabylonPosition } from "./coordinates";
+import { selectModelSkin } from "./modelSkin";
 
 type ParticleTexture = "ball1.png" | "ball2.png" | "ball3.png" | "base.png" | "explosion.png" | "flames.png" | "flare.jpg" |
   "lensflares.png" | "lightning.jpg" | "muzzleflash1.jpg" | "muzzleflash2.jpg" | "muzzleflash3.jpg" | "smoke.png" | "snow.png" |
-  "spark.png" | "steam.png";
+  "spark.png" | "steam.png" | "blood.png" | "scorch.png";
 
 interface SpriteEffect {
   mesh: Mesh;
@@ -46,6 +49,11 @@ interface ProjectileEffect {
   gun: Gun;
   position: Vec3;
   mesh?: Mesh;
+}
+
+interface BouncerEffect {
+  meshes: Mesh[];
+  position: Vec3;
 }
 
 interface ParticleOptions {
@@ -93,6 +101,8 @@ export class ParticleRenderer {
   private readonly persistentMeshes = new Set<Mesh>();
   private readonly effects: SpriteEffect[] = [];
   private readonly projectiles = new Map<number, ProjectileEffect>();
+  private readonly bouncers = new Map<string, BouncerEffect>();
+  private bouncerTemplates?: Promise<Map<number, Mesh[]>>;
   private renderingEnabled = true;
 
   constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera,
@@ -113,6 +123,7 @@ export class ParticleRenderer {
     this.persistentMeshes.forEach((mesh) => { mesh.isVisible = enabled; });
     this.effects.forEach((effect) => { effect.mesh.isVisible = enabled; });
     this.projectiles.forEach((projectile) => { if (projectile.mesh) projectile.mesh.isVisible = enabled; });
+    this.bouncers.forEach((bouncer) => bouncer.meshes.forEach((mesh) => { mesh.isVisible = enabled; }));
   }
 
   // Original: src/fpsgame/entities.cpp, N_ITEMSPAWN and pickupeffects() particle_icon calls.
@@ -155,6 +166,9 @@ export class ParticleRenderer {
     this.persistentMeshes.clear();
     this.projectiles.forEach((projectile) => projectile.mesh && this.disposeMesh(projectile.mesh));
     this.projectiles.clear();
+    this.bouncers.forEach((bouncer) => bouncer.meshes.forEach((mesh) => mesh.dispose(false, false)));
+    this.bouncers.clear();
+    this.bouncerTemplates = undefined;
     this.systemPool.forEach(({ system }) => system.dispose(false));
     this.systemPool.length = 0;
     this.spritePool.forEach((mesh) => mesh.dispose());
@@ -271,6 +285,11 @@ export class ParticleRenderer {
       () => this.taggedMuzzle(event));
     else if (event.type === "projectile-spawned") this.spawnProjectile(event.id, event.gun, event.position);
     else if (event.type === "projectile-moved") this.moveProjectile(event.id, event.position);
+    else if (event.type === "bouncer-spawned") void this.spawnBouncer(event.key, event.bouncerType, event.variant, event.position);
+    else if (event.type === "bouncer-moved") this.moveBouncer(event.key, event.position, event.yaw, event.roll, event.smoke, event.fade);
+    else if (event.type === "bouncer-removed") this.removeBouncer(event.key);
+    else if (event.type === "bouncer-impact") this.decal(event.position, event.normal, "blood.png", 0x60ffff,
+      2.96 / event.bounces);
     else if (event.type === "explosion") this.explosion(event.gun, event.position, event.radius);
   }
 
@@ -324,6 +343,106 @@ export class ParticleRenderer {
     this.splash(position, "smoke.png", 0x404040, magic ? 0.6 : 2.4, 2, 300, magic ? 150 : 50, -20);
   }
 
+  // Original: src/fpsgame/weapon.cpp renderbouncers()/preloadbouncers().
+  private async spawnBouncer(key: string, type: number, variant: number, position: Vec3): Promise<void> {
+    const modelIndex = type === 0 ? 0 : type === 1 ? 1 + variant : type === 2 ? 4 + variant : 8 + variant;
+    if (this.bouncers.has(key)) return;
+    const effect: BouncerEffect = { meshes: [], position: { ...position } };
+    this.bouncers.set(key, effect);
+    const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates());
+    if (this.bouncers.get(key) !== effect) return;
+    const meshes = (templates.get(modelIndex) ?? []).map((template) => {
+      const mesh = template.clone(`bouncer-${key}-${template.name}`, null, false)!;
+      mesh.setEnabled(true);
+      mesh.isVisible = this.renderingEnabled;
+      mesh.position.copyFrom(toBabylonPosition(effect.position));
+      mesh.isPickable = false;
+      return mesh;
+    });
+    effect.meshes = meshes;
+  }
+
+  private moveBouncer(key: string, position: Vec3, yaw: number, roll: number, smoke: boolean, fade: number): void {
+    const bouncer = this.bouncers.get(key);
+    if (!bouncer) return;
+    bouncer.position = { ...position };
+    const rotation = Quaternion.RotationYawPitchRoll(-yaw * Math.PI / 180, roll * Math.PI / 180, 0);
+    bouncer.meshes.forEach((mesh) => {
+      mesh.position.copyFrom(toBabylonPosition(position));
+      mesh.rotationQuaternion = rotation;
+      mesh.visibility = fade;
+    });
+    if (smoke) this.splash(position, "smoke.png", 0x404040, 2.4, 1, 150, 50, -20);
+  }
+
+  private removeBouncer(key: string): void {
+    const bouncer = this.bouncers.get(key);
+    bouncer?.meshes.forEach((mesh) => mesh.dispose(false, false));
+    this.bouncers.delete(key);
+  }
+
+  private async loadBouncerTemplates(): Promise<Map<number, Mesh[]>> {
+    const response = await fetch("/api/bouncers", { cache: "no-store" });
+    if (!response.ok) throw new Error(`Bouncer manifest request failed (${response.status}).`);
+    const assets = await response.json() as MapModelAsset[];
+    const result = new Map<number, Mesh[]>();
+    await Promise.all(assets.map(async (asset) => {
+      if (asset.status !== "ready" || !asset.geometryPath) return;
+      const geometry = await this.fetchBouncerGeometry(asset);
+      const meshes = geometry.meshes.map((source) => {
+        const mesh = new Mesh(`bouncer-template-${asset.index}-${source.name}`, this.scene);
+        const data = new VertexData();
+        const translate = asset.translate ?? [0, 0, 0], scale = asset.scale ?? 0.25;
+        data.positions = new Array<number>(source.positions.length);
+        for (let index = 0; index < source.positions.length; index += 3) {
+          data.positions[index] = (source.positions[index] + translate[0]) * scale;
+          data.positions[index + 1] = (source.positions[index + 1] + translate[2]) * scale;
+          data.positions[index + 2] = (source.positions[index + 2] + translate[1]) * scale;
+        }
+        data.uvs = source.uvs;
+        data.indices = source.indices;
+        const normals: number[] = [];
+        VertexData.ComputeNormals(data.positions, source.indices, normals);
+        data.normals = normals;
+        data.applyToMesh(mesh);
+        const skin = selectModelSkin(asset.skins ?? [], source.name);
+        const materialKey = `bouncer:${asset.index}:${source.name}`;
+        let material = this.materials.get(materialKey);
+        if (!material) {
+          material = new StandardMaterial(`bouncer-material-${asset.index}-${source.name}`, this.scene);
+          material.backFaceCulling = asset.cullFace ?? true;
+          material.specularColor = Color3.White().scale(asset.specular ?? 1);
+          const diffuseUrl = packageAssetUrl(skin?.diffusePath);
+          if (diffuseUrl) {
+            const texture = new Texture(diffuseUrl, this.scene, false, false);
+            material.diffuseTexture = texture;
+            this.textures.set(materialKey, texture);
+          }
+          this.materials.set(materialKey, material);
+        }
+        mesh.material = material;
+        mesh.setEnabled(false);
+        mesh.isPickable = false;
+        this.persistentMeshes.add(mesh);
+        return mesh;
+      });
+      result.set(asset.index, meshes);
+    }));
+    return result;
+  }
+
+  private async fetchBouncerGeometry(asset: MapModelAsset): Promise<ModelGeometry> {
+    const response = await fetch(packageAssetUrl(asset.geometryPath) ?? "", { cache: "no-cache" });
+    if (!response.ok) throw new Error(`Could not load ${asset.geometryPath} (${response.status}).`);
+    if (asset.format === "OBJ") return parseObj(await response.text());
+    if (asset.format === "MD5") return parseMd5(await response.text());
+    const bytes = await response.arrayBuffer();
+    if (asset.format === "MD2") return parseMd2(bytes);
+    if (asset.format === "MD3") return parseMd3(bytes);
+    if (asset.format === "IQM") return parseIqm(bytes);
+    throw new Error(`${asset.format ?? "Unknown"} bouncer model format is unsupported.`);
+  }
+
   private explosion(gun: Gun, position: Vec3, radius: number): void {
     let closest: [number, ProjectileEffect] | undefined;
     this.projectiles.forEach((projectile, id) => {
@@ -339,6 +458,7 @@ export class ParticleRenderer {
     const magic = gun === Gun.Fireball || gun === Gun.Iceball || gun === Gun.Slimeball;
     this.sparks(position, magic ? 100 : 200, magic ? 200 : 300);
     if (magic) return;
+    this.decal(position, { x: 0, y: 0, z: 1 }, "scorch.png", 0xffffff, radius / 2);
     const blue = gun === Gun.Grenade;
     const duration = blue ? Math.max(120, (radius - 4) * 15) : Math.max(300, radius * 20);
     const effect = this.sprite(position, "explosion.png", blue ? 0x80ffff : 0xff8080, 4, duration, true, radius);
@@ -347,6 +467,18 @@ export class ParticleRenderer {
     light.intensity = 2;
     light.range = radius * 1.15;
     effect.light = light;
+  }
+
+  private decal(position: Vec3, normal: Vec3, texture: ParticleTexture, color: number, size: number): void {
+    const mesh = MeshBuilder.CreatePlane(`weapon-decal-${texture}`, { size: size * 2 }, this.scene);
+    mesh.position.copyFrom(toBabylonPosition(position));
+    const direction = toBabylonDirection(normal).normalize();
+    mesh.position.addInPlace(direction.scale(0.01));
+    mesh.lookAt(mesh.position.add(direction));
+    mesh.isPickable = false;
+    mesh.isVisible = this.renderingEnabled;
+    mesh.material = this.spriteMaterial(`decal-${texture}`, texture, color, false);
+    this.effects.push({ mesh, started: performance.now(), duration: 60_000, startScale: 1, endScale: 1 });
   }
 
   private sparks(position: Vec3, count: number, fadeMs: number): void {

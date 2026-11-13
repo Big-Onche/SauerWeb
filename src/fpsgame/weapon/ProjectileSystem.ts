@@ -1,6 +1,6 @@
 import type { Vec3 } from "../../engine/octa";
-import { GRAVITY } from "../../engine/physics/constants";
-import { addScaled, copyVec3, dot, magnitude, normalize, scaleVec3, subtract } from "../../engine/physics/vector";
+import { copyVec3, magnitude, normalize, scaleVec3, subtract } from "../../engine/physics/vector";
+import { BouncerSystem } from "./BouncerSystem";
 import type { Damageable } from "./DamageSystem";
 import { DamageSystem } from "./DamageSystem";
 import { ExplosionSystem } from "./ExplosionSystem";
@@ -21,19 +21,23 @@ interface Projectile {
 
 export class ProjectileSystem {
   private readonly projectiles: Projectile[] = [];
+  readonly bouncers: BouncerSystem;
   private nextId = 1;
+  serverAuthoritative = false;
 
   constructor(private readonly world: WeaponWorld, private readonly damage: DamageSystem, private readonly explosions: ExplosionSystem,
-              private readonly events: WeaponEvents) {}
+              private readonly events: WeaponEvents, random: () => number = Math.random) {
+    this.bouncers = new BouncerSystem(world, explosions, events, random);
+  }
 
-  spawn(gun: Gun, owner: Damageable, from: Vec3, target: Vec3, damageMultiplier: number): number {
+  spawn(gun: Gun, owner: Damageable, from: Vec3, target: Vec3, damageMultiplier: number, nowMilliseconds?: number): number {
     const definition = WEAPONS[gun];
+    if (gun === Gun.Grenade) return this.bouncers.spawnGrenadeShot(owner, from, target, damageMultiplier, { nowMilliseconds });
     const direction = subtract(target, from);
-    if (gun === Gun.Grenade) direction.z += magnitude(direction) / 8;
     normalize(direction);
     const projectile: Projectile = { id: this.nextId++, gun, owner, position: copyVec3(from), velocity: direction,
       remaining: definition.projectileLifetime || Number.POSITIVE_INFINITY,
-      remainingDistance: gun === Gun.Grenade ? Number.POSITIVE_INFINITY : magnitude(subtract(target, from)), damageMultiplier };
+      remainingDistance: magnitude(subtract(target, from)), damageMultiplier };
     scaleVec3(projectile.velocity, definition.projectileSpeed);
     this.projectiles.push(projectile);
     this.events.emit({ type: "projectile-spawned", gun, id: projectile.id, position: copyVec3(from) });
@@ -41,36 +45,28 @@ export class ProjectileSystem {
   }
 
   update(milliseconds: number, targets: readonly Damageable[]): void {
+    this.bouncers.serverAuthoritative = this.serverAuthoritative;
+    this.bouncers.updatebouncers(milliseconds, targets);
     const seconds = milliseconds / 1000;
     for (let index = this.projectiles.length - 1; index >= 0; index--) {
       const projectile = this.projectiles[index];
-      if (projectile.gun === Gun.Grenade) projectile.velocity.z -= GRAVITY * 0.8 * seconds;
       const travelDistance = magnitude(projectile.velocity) * seconds;
       const reachesEndpoint = travelDistance + 1e-6 >= projectile.remainingDistance;
       const distance = Math.min(travelDistance, projectile.remainingDistance);
       const direction = copyVec3(projectile.velocity);
       normalize(direction);
-      const worldHit = this.world.raycast(projectile.position, direction, distance, projectile.gun === Gun.Grenade ? 1.5 : 0);
+      const worldHit = this.world.raycast(projectile.position, direction, distance);
       let targetHit: Damageable | undefined;
       let hitDistance = worldHit?.distance ?? distance;
-      if (projectile.gun !== Gun.Grenade) {
-        for (const target of targets) {
-          if (target === projectile.owner || !target.alive) continue;
-          const candidate = lineCylinderIntersection(projectile.position, direction, hitDistance, target);
-          if (candidate !== undefined && candidate < hitDistance) {
-            hitDistance = candidate;
-            targetHit = target;
-          }
+      for (const target of targets) {
+        if (target === projectile.owner || !target.alive) continue;
+        const candidate = lineCylinderIntersection(projectile.position, direction, hitDistance, target);
+        if (candidate !== undefined && candidate < hitDistance) {
+          hitDistance = candidate;
+          targetHit = target;
         }
       }
-      if (projectile.gun === Gun.Grenade && worldHit) {
-        projectile.position = addDistance(projectile.position, direction, Math.max(0, worldHit.distance - 0.05));
-        const reflected = dot(projectile.velocity, worldHit.normal);
-        const speed = magnitude(projectile.velocity);
-        const elasticity = 0.5;
-        scaleVec3(projectile.velocity, 1 + (1 - elasticity) * reflected / speed);
-        addScaled(projectile.velocity, worldHit.normal, -elasticity * 2 * reflected);
-      } else if (worldHit || targetHit) {
+      if (worldHit || targetHit) {
         projectile.position = addDistance(projectile.position, direction, hitDistance);
         this.detonate(projectile, targets, targetHit);
         this.projectiles.splice(index, 1);
@@ -89,19 +85,21 @@ export class ProjectileSystem {
 
   clear(): void {
     this.projectiles.length = 0;
+    this.bouncers.clearbouncers();
   }
 
   get activeCount(): number {
-    return this.projectiles.length;
+    return this.projectiles.length + this.bouncers.activeCount;
   }
 
   private detonate(projectile: Projectile, targets: readonly Damageable[], directTarget?: Damageable): void {
     const amount = WEAPONS[projectile.gun].damage * projectile.damageMultiplier;
-    if (directTarget) {
+    if (directTarget && !this.serverAuthoritative) {
       const direction = subtract(directTarget.position, projectile.position);
       normalize(direction);
       this.damage.damage(directTarget, projectile.owner, amount, direction, projectile.gun);
     }
-    this.explosions.explode(projectile.gun, projectile.owner, projectile.position, amount, targets, directTarget);
+    this.explosions.explode(projectile.gun, projectile.owner, projectile.position, amount, targets, directTarget,
+      !this.serverAuthoritative);
   }
 }

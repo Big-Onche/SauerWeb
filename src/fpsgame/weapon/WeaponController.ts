@@ -45,8 +45,9 @@ export class WeaponController {
     if (barrier && barrier.distance > 0 && barrier.distance < aimedDistance) to = copyVec3(barrier.position);
     addScaled(this.owner.velocity, direction, definition.kickAmount * -2.5);
     const multiplier = this.quadMilliseconds > 0 ? 4 : 1;
+    this.projectiles.serverAuthoritative = this.serverAuthoritative;
     let rays: Vec3[] = [], hits: WeaponHit[] = [];
-    if (definition.projectileSpeed) this.projectiles.spawn(gun, this.owner, from, to, multiplier);
+    if (definition.projectileSpeed) this.projectiles.spawn(gun, this.owner, from, to, multiplier, nowMilliseconds);
     else ({ endpoints: rays, hits } = this.hitscan.fire(gun, this.owner, from, to, multiplier, targets, !this.serverAuthoritative));
     if (definition.rays === 1 && rays.length) to = copyVec3(rays[0]);
     this.events.emit({ type: "shot", gun, millis: nowMilliseconds, from, to, rays, hits });

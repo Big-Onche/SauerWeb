@@ -19,7 +19,7 @@ export class WeaponSystem {
 
   constructor(world: WeaponWorld, player: Damageable, random: () => number = Math.random) {
     this.hitscan = new HitscanSystem(world, this.damage, random);
-    this.projectiles = new ProjectileSystem(world, this.damage, this.explosions, this.events);
+    this.projectiles = new ProjectileSystem(world, this.damage, this.explosions, this.events, random);
     this.controller = new WeaponController(player, world, this.hitscan, this.projectiles, this.events);
     this.targets.push(player);
   }
@@ -36,5 +36,10 @@ export class WeaponSystem {
   resetClock(nowMilliseconds: number): void {
     this.previousUpdate = nowMilliseconds;
     this.controller.setAttacking(false);
+  }
+
+  clear(): void {
+    this.projectiles.clear();
+    this.previousUpdate = 0;
   }
 }

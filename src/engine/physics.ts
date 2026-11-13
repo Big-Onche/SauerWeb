@@ -58,6 +58,14 @@ export class PhysicsSimulation {
     }
   }
 
+  lookupMaterial(position: Vec3): number {
+    return this.collisionWorld?.lookupMaterial(position) ?? 0;
+  }
+
+  collideBouncer(position: Vec3, radius: number, direction: Vec3): { normal: Vec3 } | undefined {
+    return this.collisionWorld?.collideBouncer(position, radius, direction);
+  }
+
   spawn(position: Vec3, yaw: number, nowMilliseconds: number): void {
     this.spawnPosition = copyVec3(position);
     this.spawnYaw = yaw;

@@ -199,7 +199,11 @@ export class BotManager {
       ai: createAiInfo(performance.now(), clamp(init.skill, 1, 101)),
       weaponSystem: undefined as unknown as WeaponSystem,
     } satisfies Omit<BotActor, "weaponSystem"> & { weaponSystem: WeaponSystem };
-    actor.weaponSystem = new WeaponSystem({ raycast: (origin, direction, distance, radius) => this.physics.raycast(origin, direction, distance, radius) }, actor, this.random);
+    actor.weaponSystem = new WeaponSystem({
+      raycast: (origin, direction, distance, radius, skipFirst) => this.physics.raycast(origin, direction, distance, radius, skipFirst),
+      lookupMaterial: (position) => this.physics.lookupMaterial(position),
+      collideBouncer: (position, radius, direction) => this.physics.collideBouncer(position, radius, direction),
+    }, actor, this.random);
     actor.weaponSystem.controller.spawnForGameMode(this.gameMode);
     actor.weaponSystem.controller.serverAuthoritative = actor.ownerNumber >= 0;
     actor.ammo = actor.weaponSystem.controller.inventory.ammo;

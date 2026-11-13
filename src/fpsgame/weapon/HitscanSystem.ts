@@ -12,7 +12,9 @@ export interface WorldHit {
 }
 
 export interface WeaponWorld {
-  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius?: number): WorldHit | undefined;
+  raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius?: number, skipFirst?: boolean): WorldHit | undefined;
+  lookupMaterial?(position: Vec3): number;
+  collideBouncer?(position: Vec3, radius: number, direction: Vec3): { normal: Vec3 } | undefined;
 }
 
 export interface HitscanResult {

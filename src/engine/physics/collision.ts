@@ -1,6 +1,6 @@
 import { MATF_CLIP, MATF_VOLUME, MAT_CLIP, MAT_GAMECLIP, MAT_GLASS, MAT_NOCLIP } from "../material";
 import type { OctreeCube, SauerMap, Vec3 } from "../octa";
-import { type PhysicsEntity, PhysicsEntityType } from "./types";
+import { CollisionType, type PhysicsEntity, PhysicsEntityType } from "./types";
 import { dot, magnitude, normalize, subtract } from "./vector";
 
 export interface CollisionResult {
@@ -149,6 +149,14 @@ export class OctreeCollisionWorld {
       if (result) return result;
     }
     return undefined;
+  }
+
+  collideBouncer(position: Vec3, radius: number, direction: Vec3): CollisionResult | undefined {
+    const entity = {
+      position, radius, xRadius: radius, yRadius: radius, eyeHeight: radius, aboveEye: radius,
+      collisionType: CollisionType.EllipsePrecise, entityType: PhysicsEntityType.Bounce,
+    } as PhysicsEntity;
+    return this.collide(entity, direction);
   }
 
   private collisionMapModelCandidates(entity: PhysicsEntity): readonly number[] {

@@ -760,6 +760,15 @@ function sauerMapsPlugin(): Plugin {
         response.setHeader("Cache-Control", "no-store");
         response.end(JSON.stringify(resolveHudGuns()));
       });
+      server.middlewares.use("/api/bouncers", (_request, response) => {
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.end(JSON.stringify(resolveMapModels([
+          "projectiles/grenade", "gibs/gib01", "gibs/gib02", "gibs/gib03", "debris/debris01", "debris/debris02",
+          "debris/debris03", "debris/debris04", "barreldebris/debris01", "barreldebris/debris02", "barreldebris/debris03",
+          "barreldebris/debris04",
+        ])));
+      });
       server.middlewares.use("/api/playermodels", (_request, response) => {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         response.setHeader("Cache-Control", "no-store");

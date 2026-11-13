@@ -99,6 +99,8 @@ export class MapScene {
         this.weapons.events.emit({ type: "shot-effect", gun: event.gun, from: event.from, to: event.to, rays: event.rays,
           clientNumber: bot.clientNumber });
       }
+      if (event.type === "bouncer-spawned" || event.type === "bouncer-moved" || event.type === "bouncer-removed" ||
+          event.type === "bouncer-impact" || event.type === "explosion") this.weapons.events.emit(event);
       if (event.type === "death" && event.target === this.physics.player) {
         if (bot.ownerNumber < 0 && this.fpsClient.multiplayer.clientNumber >= 0) {
           const victim = this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
