@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SauerMap } from "../engine/octa";
 import { buildWaterLookupData, causticFrame, resolveMapCaustics, shouldUseCaustics } from "./MapCaustics";
+import { WATER_OFFSET } from "./MapWater";
 
 describe("map caustics", () => {
   it("uses Sauerbraten defaults and reads map variables", () => {
@@ -34,7 +35,9 @@ describe("map caustics", () => {
     }]);
 
     expect(lookup).toMatchObject({ resolution: 4, cellSize: 4 });
-    expect(decodeLookup(lookup!.data, 0)).toEqual([0, 8]);
+    expect(decodeLookup(lookup!, 0)[0]).toBe(0);
+    expect(decodeLookup(lookup!, 0)[1]).toBeCloseTo(8 - WATER_OFFSET, 3);
+    expect(decodeLookup(lookup!, 0)[1]).toBeLessThan(8);
     expect(decodeLookup(lookup!.data, 1)).toEqual([0, 0]);
   });
 });
@@ -47,7 +50,9 @@ function emptyMap(): SauerMap {
   };
 }
 
-function decodeLookup(data: Uint8Array, cell: number): [number, number] {
+function decodeLookup(lookup: NonNullable<ReturnType<typeof buildWaterLookupData>>, cell: number): [number, number] {
+  const data = lookup.data;
   const offset = cell * 4;
-  return [data[offset] * 256 + data[offset + 1], data[offset + 2] * 256 + data[offset + 3]];
+  return [(data[offset] * 256 + data[offset + 1]) * lookup.heightScale,
+    (data[offset + 2] * 256 + data[offset + 3]) * lookup.heightScale];
 }

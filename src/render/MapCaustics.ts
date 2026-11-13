@@ -9,6 +9,7 @@ import type { SubMesh } from "@babylonjs/core/Meshes/subMesh";
 import type { Scene } from "@babylonjs/core/scene";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import type { MaterialVolume, SauerMap } from "../engine/octa";
+import { WATER_OFFSET } from "./MapWater";
 
 export const CAUSTIC_FRAME_COUNT = 32;
 export const DEFAULT_CAUSTIC_SCALE = 50;
@@ -31,6 +32,7 @@ export interface WaterLookupData {
   data: Uint8Array;
   resolution: number;
   cellSize: number;
+  heightScale: number;
 }
 
 export const CAUSTIC_SHADER_DEFINITIONS = `
@@ -42,7 +44,7 @@ uniform vec4 causticFrameInfo;
 
 float decodeCausticHeight(vec2 encoded) {
   vec2 bytes = floor(encoded * 255.0 + 0.5);
-  return bytes.x * 256.0 + bytes.y;
+  return (bytes.x * 256.0 + bytes.y) * causticLookupInfo.w;
 }
 
 float causticWaterCell(vec2 cell, float height) {
@@ -99,7 +101,8 @@ export class MapCausticResources {
     effect.setTexture("waterLookupSampler", this.lookup);
     effect.setTexture("firstCausticSampler", this.frames[frame.first]);
     effect.setTexture("secondCausticSampler", this.frames[frame.second]);
-    effect.setFloat4("causticLookupInfo", this.lookupData.resolution, this.lookupData.cellSize, 100 / this.parameters.scale, 0);
+    effect.setFloat4("causticLookupInfo", this.lookupData.resolution, this.lookupData.cellSize, 100 / this.parameters.scale,
+      this.lookupData.heightScale);
     effect.setFloat4("causticFrameInfo", frame.fraction, this.parameters.contrast, 0, 0);
   }
 
@@ -174,27 +177,27 @@ export function buildWaterLookupData(worldSize: number, materialVolumes: Materia
   for (const volume of water) {
     const startX = Math.floor(volume.origin.x / cellSize), endX = Math.ceil((volume.origin.x + volume.size) / cellSize);
     const startZ = Math.floor(volume.origin.y / cellSize), endZ = Math.ceil((volume.origin.y + volume.size) / cellSize);
-    const bottom = volume.origin.z, top = volume.origin.z + volume.size;
+    const bottom = volume.origin.z, top = volume.origin.z + volume.size - WATER_OFFSET;
     for (let z = startZ; z < endZ; z++) for (let x = startX; x < endX; x++) {
       if (x < 0 || z < 0 || x >= resolution || z >= resolution) continue;
       const offset = (z * resolution + x) * 4;
-      const existingTop = decodeHeight(data[offset + 2], data[offset + 3]);
-      const existingBottom = decodeHeight(data[offset], data[offset + 1]);
-      encodeHeight(data, offset, existingTop > 0 ? Math.min(existingBottom, bottom) : bottom);
-      encodeHeight(data, offset + 2, Math.max(existingTop, top));
+      const existingTop = decodeHeight(data[offset + 2], data[offset + 3], worldSize);
+      const existingBottom = decodeHeight(data[offset], data[offset + 1], worldSize);
+      encodeHeight(data, offset, existingTop > 0 ? Math.min(existingBottom, bottom) : bottom, worldSize);
+      encodeHeight(data, offset + 2, Math.max(existingTop, top), worldSize);
     }
   }
-  return { data, resolution, cellSize };
+  return { data, resolution, cellSize, heightScale: worldSize / 0xffff };
 }
 
-function encodeHeight(data: Uint8Array, offset: number, height: number): void {
-  const value = Math.max(0, Math.min(0xffff, Math.round(height)));
+function encodeHeight(data: Uint8Array, offset: number, height: number, worldSize: number): void {
+  const value = Math.max(0, Math.min(0xffff, Math.round(height / worldSize * 0xffff)));
   data[offset] = value >>> 8;
   data[offset + 1] = value & 0xff;
 }
 
-function decodeHeight(high: number, low: number): number {
-  return high * 256 + low;
+function decodeHeight(high: number, low: number, worldSize: number): number {
+  return (high * 256 + low) / 0xffff * worldSize;
 }
 
 function numericVariable(map: SauerMap, name: string, fallback: number, minimum: number, maximum: number): number {
