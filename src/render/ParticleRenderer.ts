@@ -412,11 +412,27 @@ export class ParticleRenderer {
           material = new StandardMaterial(`bouncer-material-${asset.index}-${source.name}`, this.scene);
           material.backFaceCulling = asset.cullFace ?? true;
           material.specularColor = Color3.White().scale(asset.specular ?? 1);
+          material.ambientColor = Color3.White().scale(asset.ambient ?? 0.3);
           const diffuseUrl = packageAssetUrl(skin?.diffusePath);
           if (diffuseUrl) {
             const texture = new Texture(diffuseUrl, this.scene, false, false);
+            texture.hasAlpha = true;
             material.diffuseTexture = texture;
-            this.textures.set(materialKey, texture);
+            material.emissiveTexture = texture;
+            material.emissiveColor = Color3.White().scale(Math.max(asset.ambient ?? 0.3, Math.min(asset.glow ?? 0, 1)));
+            material.useAlphaFromDiffuseTexture = true;
+            this.textures.set(`${materialKey}:diffuse`, texture);
+          }
+          const masksUrl = packageAssetUrl(skin?.masksPath);
+          if (masksUrl) {
+            const masks = new Texture(masksUrl, this.scene, false, false);
+            material.specularTexture = masks;
+            this.textures.set(`${materialKey}:masks`, masks);
+          }
+          if (asset.alphaBlend) material.transparencyMode = Material.MATERIAL_ALPHABLEND;
+          else {
+            material.transparencyMode = Material.MATERIAL_ALPHATEST;
+            material.alphaCutOff = asset.alphaTest ?? 0.9;
           }
           this.materials.set(materialKey, material);
         }
