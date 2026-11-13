@@ -20,12 +20,39 @@ describe("generateMaterialGeometry", () => {
     expect(batches.find((batch) => batch.kind === "alpha")?.debugOnly).toBe(true);
   });
 
-  it("removes the shared face between equal adjacent liquid leaves", () => {
+  it("renders water surfaces without submerged bottom faces or shared faces", () => {
     const first = volume({ volume: "water" });
     const second = volume({ volume: "water", origin: { x: 8, y: 0, z: 0 } });
     const [batch] = generateMaterialGeometry(mapWith([first, second]));
 
-    expect(batch.faceCount).toBe(10);
+    expect(batch.faceCount).toBe(8);
+  });
+
+  it("keeps indexed water materials in separate batches", () => {
+    const batches = generateMaterialGeometry(mapWith([
+      volume({ volume: "water", volumeIndex: 0 }),
+      volume({ volume: "water", volumeIndex: 1, origin: { x: 16, y: 0, z: 0 } }),
+    ]));
+
+    expect(batches.map((batch) => batch.materialIndex)).toEqual([0, 1]);
+  });
+
+  it("tessellates high-quality water tops for vertex waves without changing logical face counts", () => {
+    const [low] = generateMaterialGeometry(mapWith([volume({ volume: "water" })]), 0);
+    const [ultra] = generateMaterialGeometry(mapWith([volume({ volume: "water" })]), 3);
+
+    expect(low.faceCount).toBe(5);
+    expect(low.indices).toHaveLength(30);
+    expect(ultra.faceCount).toBe(5);
+    expect(ultra.indices).toHaveLength(48);
+    expect(ultra.waveData).toHaveLength(ultra.positions.length / 3 * 2);
+  });
+
+  it("applies the native inward bias to vertical water polygons", () => {
+    const [water] = generateMaterialGeometry(mapWith([volume({ volume: "water" })]), 0);
+
+    expect(water.positions.slice(0, 12).filter((_, index) => index % 3 === 0)).toEqual([0.1, 0.1, 0.1, 0.1]);
+    expect(water.positions.slice(12, 24).filter((_, index) => index % 3 === 0)).toEqual([7.9, 7.9, 7.9, 7.9]);
   });
 });
 

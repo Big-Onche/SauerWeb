@@ -74,7 +74,7 @@ button { color: inherit; }
 .option-check span, .option-action span { display: grid; }.option-check strong, .option-action strong { font-size: 18px; font-weight: 500; }
 .option-check small, .option-action small { color: #8d9791; font-size: 12px; }.option-check input { width: 18px; height: 18px; accent-color: #c47b32; }
 .option-slider > span { color: #b9c0bb; font-size: 17px; }
-.option-slider > div { display: grid; grid-template-columns: minmax(150px, 260px) 38px; align-items: center; gap: 12px; }
+.option-slider > div { display: grid; grid-template-columns: minmax(150px, 260px) 62px; align-items: center; gap: 12px; }
 .option-slider input { width: 100%; accent-color: #c47b32; }
 .option-slider output { color: #f0bc78; font-variant-numeric: tabular-nums; text-align: right; }
 .option-select { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 8px 12px;

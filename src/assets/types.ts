@@ -36,6 +36,7 @@ export interface TextureManifest {
   skybox?: MapSkyOverrides;
   lighting?: MapLightingOverrides;
   fog?: MapFogOverrides;
+  water?: MapWaterOverrides;
   mapModels: MapModelAsset[];
   entityModels?: { teleporter?: MapModelAsset; pickups?: MapModelAsset[] };
   mapSounds?: MapSoundAsset[];
@@ -156,6 +157,17 @@ export interface MapFogOverrides {
   domeCap?: number;
   domeClip?: number;
   domeClouds?: number;
+}
+
+export interface WaterMaterialOverrides {
+  color?: number;
+  fogDistance?: number;
+  specular?: number;
+  waterfallColor?: number;
+}
+
+export interface MapWaterOverrides {
+  materials?: WaterMaterialOverrides[];
 }
 
 export interface ResolvedTexture {

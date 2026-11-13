@@ -1,7 +1,7 @@
 import type { SauerMap, Vec3 } from "./octa";
 import { FLOOR_Z, GRAVITY, JUMP_VELOCITY, SLOPE_Z } from "./physics/constants";
 import { OctreeCollisionWorld } from "./physics/collision";
-import type { MapModelCollision, RaycastResult } from "./physics/collision";
+import type { MapModelCollision, MaterialLookup, RaycastResult } from "./physics/collision";
 import { MAT_DEATH, MATF_VOLUME, MAT_LAVA, MAT_WATER } from "./material";
 import { GroundMover } from "./physics/ground";
 import type { PhysicsInputState } from "./physics/input";
@@ -60,6 +60,10 @@ export class PhysicsSimulation {
 
   lookupMaterial(position: Vec3): number {
     return this.collisionWorld?.lookupMaterial(position) ?? 0;
+  }
+
+  lookupMaterialCube(position: Vec3): MaterialLookup | undefined {
+    return this.collisionWorld?.lookupMaterialCube(position);
   }
 
   collideBouncer(position: Vec3, radius: number, direction: Vec3): { normal: Vec3 } | undefined {

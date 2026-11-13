@@ -53,6 +53,7 @@ interface ConfigState {
   skyColor?: number;
   lighting: { ambient?: number; skylight?: number };
   fog: ServerFog;
+  water: ServerWater;
   shaderName: string;
   shaderParameters: Record<string, number[]>;
   mapModels: string[];
@@ -78,6 +79,17 @@ interface ServerFog {
   domeClouds?: number;
 }
 
+interface ServerWaterMaterial {
+  color?: number;
+  fogDistance?: number;
+  specular?: number;
+  waterfallColor?: number;
+}
+
+interface ServerWater {
+  materials?: ServerWaterMaterial[];
+}
+
 const textureKinds: Record<string, TextureKind> = {
   "0": "diffuse", c: "diffuse", n: "normal", g: "glow", s: "specular", z: "depth", a: "alpha", d: "decal", e: "environment", u: "unknown",
 };
@@ -96,6 +108,7 @@ function readTextureManifest(mapName: string): {
   skybox?: ServerSkybox;
   lighting: ConfigState["lighting"];
   fog: ConfigState["fog"];
+  water: ConfigState["water"];
   mapModels: ReturnType<typeof resolveMapModels>;
   entityModels: { teleporter: ReturnType<typeof resolveMapModels>[number]; pickups: ReturnType<typeof resolveMapModels> };
   mapSounds: ConfigState["mapSounds"];
@@ -109,6 +122,7 @@ function readTextureManifest(mapName: string): {
     commands: 0,
     lighting: {},
     fog: {},
+    water: {},
     shaderName: "stdworld",
     shaderParameters: {},
     mapModels: [],
@@ -123,6 +137,7 @@ function readTextureManifest(mapName: string): {
     skybox: resolveSkyOverrides(state),
     lighting: state.lighting,
     fog: state.fog,
+    water: state.water,
     mapModels: resolveMapModels(state.mapModels),
     entityModels: {
       teleporter: resolveMapModels(["teleporter"])[0],
@@ -223,6 +238,18 @@ function executeStatement(text: string, source: string, line: number, state: Con
   }
   if (command === "fogcolour" || command === "fogdomecolour") {
     state.fog[command === "fogcolour" ? "color" : "domeColor"] = sauerColorArg(args, 0);
+    return;
+  }
+  const waterCommand = /^(water|water([2-4]))(colour|fog|spec|fallcolour)$/.exec(command);
+  if (waterCommand) {
+    const index = waterCommand[2] ? Number(waterCommand[2]) - 1 : 0;
+    const materials = state.water.materials ??= [];
+    const material = materials[index] ??= {};
+    const property = waterCommand[3];
+    if (property === "colour") material.color = sauerColorArg(args, 0);
+    else if (property === "fallcolour") material.waterfallColor = sauerColorArg(args, 0);
+    else if (property === "fog") material.fogDistance = clamp(numberArg(args[0], 150), 0, 10_000);
+    else material.specular = clamp(numberArg(args[0], 150), 0, 1000);
     return;
   }
   const fogDomeNumbers: Record<string, keyof ServerFog> = {

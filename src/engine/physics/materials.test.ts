@@ -11,6 +11,11 @@ describe("materials and mapmodel physics", () => {
     const map = mapWith(cube({ x: 0, y: 0, z: 0 }, 64, "empty", MAT_WATER + 2));
     const world = new OctreeCollisionWorld(map);
     expect(world.lookupMaterial({ x: 5, y: 5, z: 5 })).toBe(MAT_WATER + 2);
+    expect(world.lookupMaterialCube({ x: 5, y: 5, z: 5 })).toEqual({
+      material: MAT_WATER + 2,
+      origin: { x: 0, y: 0, z: 0 },
+      size: 64,
+    });
     const simulation = new PhysicsSimulation();
     simulation.setMap(map);
     simulation.spawn({ x: 8, y: 8, z: 20 }, 0, 0);

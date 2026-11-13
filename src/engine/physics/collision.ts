@@ -14,6 +14,12 @@ export interface RaycastResult {
   distance: number;
 }
 
+export interface MaterialLookup {
+  material: number;
+  origin: Vec3;
+  size: number;
+}
+
 export interface MapModelCollision {
   entityIndex: number;
   origin: Vec3;
@@ -81,8 +87,12 @@ export class OctreeCollisionWorld {
   }
 
   lookupMaterial(position: Vec3): number {
+    return this.lookupMaterialCube(position)?.material ?? 0;
+  }
+
+  lookupMaterialCube(position: Vec3): MaterialLookup | undefined {
     if (position.x < 0 || position.y < 0 || position.z < 0 || position.x >= this.map.header.worldSize ||
-        position.y >= this.map.header.worldSize || position.z >= this.map.header.worldSize) return 0;
+        position.y >= this.map.header.worldSize || position.z >= this.map.header.worldSize) return undefined;
     for (const root of this.map.world) {
       if (!contains(root, position)) continue;
       let cube = root;
@@ -91,9 +101,9 @@ export class OctreeCollisionWorld {
         if (!child) break;
         cube = child;
       }
-      return cube.material;
+      return { material: cube.material, origin: cube.origin, size: cube.size };
     }
-    return 0;
+    return undefined;
   }
 
   raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0, skipFirst = false): RaycastResult | undefined {

@@ -15,6 +15,7 @@ import { requestMobileLandscapeFullscreen } from "./platform/browser/TouchContro
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
 import { sauerFormattedMarkup } from "./sauerFormatting";
 import { TEAMKILL_PROTECTION_MESSAGE } from "./fpsgame/teamkillProtection";
+import { loadWaterQuality, saveWaterQuality, waterQualityLabel, type WaterQuality } from "./render/WaterSettings";
 
 interface MapListItem {
   name: string;
@@ -283,6 +284,13 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
     musicPlayer.setVolume(Number(musicVolume.value));
     syncSliderOutput(musicVolume);
   });
+  const waterQuality = document.querySelector<HTMLInputElement>("#water-quality");
+  waterQuality?.addEventListener("input", () => {
+    const quality = Number(waterQuality.value) as WaterQuality;
+    saveWaterQuality(quality);
+    const output = document.querySelector<HTMLOutputElement>("output[for='water-quality']");
+    if (output) output.value = waterQualityLabel(quality);
+  });
   document.querySelector<HTMLButtonElement>("[data-action='open-crosshair']")?.addEventListener("click", () => {
     navigate("/");
     document.querySelector<HTMLButtonElement>("[data-action='crosshair']")?.click();
@@ -306,8 +314,9 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
     `<button class="option-action" type="button" data-action="open-crosshair"><span><strong>crosshair</strong><small>Style, size and hit effects</small></span><b>adjust..</b></button>`,
   ]);
   if (tab === "gfx") return optionGroup("graphics", [
-    optionInfo("renderer", "WebGL"), optionInfo("shaders", "high detail"), optionInfo("dynamic lights", "enabled"),
-    optionNote("Graphics quality is selected automatically for this browser port."),
+    optionInfo("renderer", "WebGL"), optionSlider("water quality", "water-quality", loadWaterQuality(), 0, 3,
+      waterQualityLabel(loadWaterQuality())), optionInfo("dynamic lights", "enabled"),
+    optionNote("Low and medium favor frame rate. High adds sky reflection; ultra improves the animated wave detail."),
   ]);
   if (tab === "display") return optionGroup("display", [
     `<button class="option-action" type="button" data-action="fullscreen"><span><strong>fullscreen</strong><small>Toggle browser fullscreen mode</small></span><b>toggle</b></button>`,
@@ -394,9 +403,9 @@ function optionCheck(label: string, id: string, checked: boolean, description: s
     <input id="${id}" type="checkbox" ${checked ? "checked" : ""} /></label>`;
 }
 
-function optionSlider(label: string, id: string, value: number, minimum: number, maximum: number): string {
+function optionSlider(label: string, id: string, value: number, minimum: number, maximum: number, output = String(value)): string {
   return `<label class="option-slider" for="${id}"><span>${label}</span><div><input id="${id}" type="range" min="${minimum}" max="${maximum}"
-    value="${value}" /><output for="${id}">${value}</output></div></label>`;
+    value="${value}" /><output for="${id}">${output}</output></div></label>`;
 }
 
 function optionInfo(label: string, value: string): string {

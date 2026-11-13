@@ -19,7 +19,8 @@ import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import "@babylonjs/core/Shaders/postprocess.vertex";
 import type { RegisteredMapEntity, SauerMap } from "../engine/octa";
-import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverrides, MapSoundAsset, ResolvedTexture } from "../assets/types";
+import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverrides, MapSoundAsset, MapWaterOverrides,
+  ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "../engine/renderva";
 import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
@@ -29,6 +30,8 @@ import { resolveMapLighting } from "./MapLighting";
 import { animateEntityModels, loadMapModels, type EntityModelAnimation, type MapModelResources } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
+import { animatedWaterSurfaceHeight, resolveMapWater, underwaterFogBlend, type MapWaterMaterial } from "./MapWater";
+import { loadWaterQuality, type WaterQuality } from "./WaterSettings";
 import { installSauerFogDistance } from "./SauerFogShader";
 import { BrowserFreeCameraInput, BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics";
@@ -54,6 +57,7 @@ import { lineCylinderIntersection } from "../fpsgame/weapon/HitscanSystem";
 import type { Damageable } from "../fpsgame/weapon/DamageSystem";
 import { magnitude, normalize, subtract } from "../engine/physics/vector";
 import { AiStateType, AiTargetType, BotManager, type AiInterest, type BotActor } from "../fpsgame/ai";
+import { MATF_INDEX, MATF_VOLUME, MAT_WATER } from "../engine/material";
 import { GameModeFlag, gameModeHas } from "../fpsgame/game";
 import { SIGHTMIN } from "../fpsgame/waypoint";
 import { RendererPerformanceOverlay, type RendererDiagnosticState, type RendererResourceCounters,
@@ -151,7 +155,16 @@ export class MapScene {
   private wireframe = false;
   private materialDebug = false;
   private readonly volumeMeshes: Mesh[] = [];
-  private readonly volumeMaterials = new Map<MaterialRenderKind, StandardMaterial>();
+  private readonly volumeMaterials = new Map<string, Material>();
+  private readonly waterMaterials = new Map<number, ShaderMaterial>();
+  private waterNormalTexture?: Texture;
+  private waterDistortionTexture?: Texture;
+  private waterReflectionTexture?: CubeTexture;
+  private waterParameters: MapWaterMaterial[] = [];
+  private mapFog?: MapFog;
+  private waterQuality: WaterQuality = loadWaterQuality();
+  private fogWaterIndex = -2;
+  private fogWaterBlend = -1;
   private entityDebug = false;
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
@@ -280,6 +293,7 @@ export class MapScene {
     this.engine.runRenderLoop(() => {
       const frameStartedAt = performance.now();
       this.updatePhysics(frameStartedAt);
+      this.updateCameraFog(frameStartedAt / 1000);
       this.gameAudio.update(this.physics.player.position, this.physics.player.yaw);
       const gameLogicFinishedAt = performance.now();
       this.scene.render();
@@ -294,10 +308,12 @@ export class MapScene {
 
   async loadMap(map: SauerMap, textures: ResolvedTexture[], skyOverrides?: MapSkyOverrides,
                 lightingOverrides?: MapLightingOverrides, fogOverrides?: MapFogOverrides,
+                waterOverrides?: MapWaterOverrides,
                 mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset, mapSounds: MapSoundAsset[] = [],
                 pickupModels: MapModelAsset[] = []): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
     this.currentMap = map;
+    this.waterParameters = resolveMapWater(map, waterOverrides);
     const lighting = resolveMapLighting(map, lightingOverrides);
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
@@ -308,6 +324,12 @@ export class MapScene {
     this.volumeMeshes.length = 0;
     this.volumeMaterials.forEach((material) => material.dispose(true, true));
     this.volumeMaterials.clear();
+    this.waterMaterials.clear();
+    this.waterNormalTexture?.dispose();
+    this.waterNormalTexture = undefined;
+    this.waterDistortionTexture?.dispose();
+    this.waterDistortionTexture = undefined;
+    this.waterReflectionTexture = undefined;
     this.entityMeshes.length = 0;
     this.entityMaterials.forEach((material) => material.dispose());
     this.entityMaterials.clear();
@@ -333,7 +355,7 @@ export class MapScene {
     this.gameAudio.setMap(map.entityRegistry, mapSounds);
     await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
     const batches = generateGeometry(map, textures);
-    const materialBatches = generateMaterialGeometry(map);
+    const materialBatches = generateMaterialGeometry(map, this.waterQuality);
     let faces = 0;
     let triangles = 0;
     let vertices = 0;
@@ -391,6 +413,7 @@ export class MapScene {
     vertices += loadedMapModels.vertices;
     this.materialCache.setWireframe(this.wireframe);
     const fog = resolveMapFog(map, fogOverrides);
+    this.mapFog = fog;
     this.applyFog(fog);
     this.setMapFarPlane(map);
     await this.createSkybox(map, resolveMapSky(map, skyOverrides), generation);
@@ -733,17 +756,24 @@ export class MapScene {
     VertexData.ComputeNormals(batch.positions, batch.indices, normals);
     vertexData.normals = normals;
     vertexData.applyToMesh(mesh, true);
-    mesh.material = this.getMaterialVolumeMaterial(batch.kind);
-    mesh.metadata = { debugOnly: batch.debugOnly, materialKind: batch.kind };
+    mesh.setVerticesData("waveData", batch.waveData, false, 2);
+    mesh.material = this.getMaterialVolumeMaterial(batch.kind, batch.materialIndex);
+    mesh.metadata = { debugOnly: batch.debugOnly, materialKind: batch.kind, materialIndex: batch.materialIndex };
     mesh.isPickable = false;
     mesh.alwaysSelectAsActiveMesh = true;
     mesh.freezeWorldMatrix();
     return mesh;
   }
 
-  private getMaterialVolumeMaterial(kind: MaterialRenderKind): StandardMaterial {
-    const cached = this.volumeMaterials.get(kind);
+  private getMaterialVolumeMaterial(kind: MaterialRenderKind, materialIndex: number): Material {
+    const key = `${kind}:${materialIndex}`;
+    const cached = this.volumeMaterials.get(key);
     if (cached) return cached;
+    if (kind === "water") {
+      const material = this.createWaterMaterial(materialIndex);
+      this.volumeMaterials.set(key, material);
+      return material;
+    }
     const colors: Record<MaterialRenderKind, Color3> = {
       water: new Color3(0.05, 0.35, 0.55),
       lava: new Color3(1, 0.28, 0.03),
@@ -761,7 +791,7 @@ export class MapScene {
     material.disableLighting = true;
     material.backFaceCulling = false;
     material.wireframe = this.wireframe;
-    material.alpha = kind === "lava" ? 1 : kind === "water" ? 0.52 : kind === "glass" ? 0.3 : 0.24;
+    material.alpha = kind === "lava" ? 1 : kind === "glass" ? 0.3 : 0.24;
     if (kind !== "lava") {
       material.transparencyMode = Material.MATERIAL_ALPHABLEND;
       material.needDepthPrePass = true;
@@ -777,8 +807,139 @@ export class MapScene {
         material.emissiveTexture = texture;
       }
     }
-    this.volumeMaterials.set(kind, material);
+    this.volumeMaterials.set(key, material);
     return material;
+  }
+
+  // Original: src/engine/water.cpp and data/glsl.cfg water shaders. The WebGL port keeps the native two scrolling normal fields,
+  // Fresnel blend, map-controlled tint/specularity, and cheap environment reflection without adding a second world render pass.
+  private createWaterMaterial(materialIndex: number): ShaderMaterial {
+    const quality = this.waterQuality;
+    const parameters = this.waterParameters[materialIndex] ?? this.waterParameters[0];
+    const material = new ShaderMaterial(`material-volume-water-${materialIndex}`, this.scene, {
+      vertexSource: `
+        precision highp float;
+        #define WATER_QUALITY ${quality}
+        attribute vec3 position;
+        attribute vec3 normal;
+        attribute vec2 uv;
+        attribute vec2 waveData;
+        uniform mat4 world;
+        uniform mat4 worldViewProjection;
+        uniform float time;
+        varying vec3 worldPosition;
+        varying vec3 worldNormal;
+        varying vec2 surfaceUv;
+
+        void main(void) {
+          vec3 animatedPosition = position;
+          float waterHeight = -1.1;
+          #if WATER_QUALITY >= 1
+            float waveSize = max(waveData.x, 1.0);
+            vec2 nativePosition = mod(position.xz, waveSize);
+            float angle = nativePosition.x * nativePosition.y * (59.0 / 23.0) / (2.0 * 3.14159265);
+            float phase = fract(angle + time / (1.2 * 3.14159265)) - 0.5;
+            phase *= 8.0 - abs(phase) * 16.0;
+            waterHeight += 0.4 * phase;
+          #endif
+          animatedPosition.y += waterHeight * waveData.y;
+          vec4 worldVertex = world * vec4(animatedPosition, 1.0);
+          worldPosition = worldVertex.xyz;
+          worldNormal = normalize(mat3(world) * normal);
+          surfaceUv = uv;
+          gl_Position = worldViewProjection * vec4(animatedPosition, 1.0);
+        }
+      `,
+      fragmentSource: `
+        precision highp float;
+        #define WATER_QUALITY ${quality}
+        varying vec3 worldPosition;
+        varying vec3 worldNormal;
+        varying vec2 surfaceUv;
+        uniform vec3 cameraPosition;
+        uniform vec3 waterColor;
+        uniform vec3 waterfallColor;
+        uniform float waterSpecular;
+        uniform float time;
+        uniform float hasReflection;
+        uniform sampler2D normalSampler;
+        uniform sampler2D distortionSampler;
+        uniform samplerCube reflectionSampler;
+
+        void main(void) {
+          vec3 viewDirection = normalize(cameraPosition - worldPosition);
+          vec3 surfaceNormal = normalize(worldNormal);
+          #if WATER_QUALITY >= 1
+            float vertical = 1.0 - abs(worldNormal.y);
+            vec2 baseUv = surfaceUv * 0.16;
+            vec2 firstScroll = mix(vec2(time * 0.05), vec2(0.0, -time * 0.05), vertical);
+            vec2 distortion = texture2D(distortionSampler, baseUv + firstScroll).rg * 2.0 - 1.0;
+            vec3 firstWave = texture2D(normalSampler, baseUv - vec2(time * 0.03) + distortion * 0.025).rgb * 2.0 - 1.0;
+            #if WATER_QUALITY >= 3
+              vec3 secondWave = texture2D(normalSampler, baseUv * 1.73 + vec2(time * 0.021, -time * 0.017)).rgb * 2.0 - 1.0;
+              firstWave = normalize(firstWave + secondWave * 0.55);
+            #endif
+            vec3 waveNormal = normalize(vec3(firstWave.x, abs(firstWave.z) + 0.35, firstWave.y));
+            vec3 rippledNormal = normalize(surfaceNormal + firstWave * 0.2);
+            surfaceNormal = normalize(mix(rippledNormal, waveNormal, abs(worldNormal.y) * 0.72));
+          #endif
+          float facing = clamp(dot(viewDirection, surfaceNormal), 0.0, 1.0);
+          float fresnel = pow(1.0 - facing, 3.0);
+          vec3 baseColor = mix(waterfallColor, waterColor, abs(worldNormal.y));
+          vec3 color = baseColor * mix(0.72, 1.08, facing);
+          #if WATER_QUALITY >= 2
+            if (hasReflection > 0.5) {
+              vec3 reflected = textureCube(reflectionSampler, reflect(-viewDirection, surfaceNormal)).rgb;
+              color = mix(color, reflected, mix(0.22, 0.72, fresnel));
+            }
+          #endif
+          #if WATER_QUALITY >= 1
+            vec3 halfVector = normalize(viewDirection + normalize(vec3(0.35, 0.85, 0.25)));
+            float specular = pow(max(dot(surfaceNormal, halfVector), 0.0), 96.0) * waterSpecular;
+            color += vec3(specular);
+          #endif
+          float alpha = mix(0.46, 0.78, fresnel);
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
+    }, {
+      attributes: ["position", "normal", "uv", "waveData"],
+      uniforms: ["world", "worldViewProjection", "cameraPosition", "waterColor", "waterfallColor", "waterSpecular", "time", "hasReflection"],
+      samplers: ["normalSampler", "distortionSampler", "reflectionSampler"],
+      needAlphaBlending: true,
+    });
+    material.backFaceCulling = false;
+    material.alphaMode = Engine.ALPHA_COMBINE;
+    material.needDepthPrePass = true;
+    material.wireframe = this.wireframe;
+    material.setColor3("waterColor", new Color3(...parameters.color));
+    material.setColor3("waterfallColor", new Color3(...parameters.waterfallColor));
+    material.setFloat("waterSpecular", parameters.specular / 150);
+    material.setFloat("hasReflection", 0);
+    if (quality >= 1) {
+      this.waterNormalTexture ??= this.createRepeatingWaterTexture("textures/watern.jpg");
+      this.waterDistortionTexture ??= this.createRepeatingWaterTexture("textures/waterdudv.jpg");
+      material.setTexture("normalSampler", this.waterNormalTexture);
+      material.setTexture("distortionSampler", this.waterDistortionTexture);
+    }
+    if (quality >= 2 && this.waterReflectionTexture) {
+      material.setTexture("reflectionSampler", this.waterReflectionTexture);
+      material.setFloat("hasReflection", 1);
+    }
+    material.onBind = () => {
+      material.setVector3("cameraPosition", this.scene.activeCamera?.globalPosition ?? Vector3.Zero());
+      material.setFloat("time", performance.now() / 1000);
+    };
+    this.waterMaterials.set(materialIndex, material);
+    return material;
+  }
+
+  private createRepeatingWaterTexture(path: string): Texture {
+    const texture = new Texture(packageAssetUrl(path) ?? "", this.scene);
+    texture.wrapU = Texture.WRAP_ADDRESSMODE;
+    texture.wrapV = Texture.WRAP_ADDRESSMODE;
+    texture.anisotropicFilteringLevel = this.waterQuality >= 3 ? 4 : 1;
+    return texture;
   }
 
   private createFallbackMaterial(): StandardMaterial {
@@ -827,6 +988,11 @@ export class MapScene {
     material.disableDepthWrite = true;
     material.fogEnabled = false;
     this.skyboxMaterial = material;
+    this.waterReflectionTexture = cubeTexture;
+    if (this.waterQuality >= 2) this.waterMaterials.forEach((waterMaterial) => {
+      waterMaterial.setTexture("reflectionSampler", cubeTexture);
+      waterMaterial.setFloat("hasReflection", 1);
+    });
     const mesh = MeshBuilder.CreateBox("map-skybox", { size: map.header.worldSize * 4 }, this.scene);
     mesh.material = material;
     mesh.infiniteDistance = true;
@@ -841,12 +1007,64 @@ export class MapScene {
   }
 
   private applyFog(fog: MapFog): void {
+    this.fogWaterIndex = -2;
+    this.fogWaterBlend = -1;
     this.scene.fogEnabled = true;
     this.scene.fogMode = Scene.FOGMODE_LINEAR;
     this.scene.fogStart = fog.start;
     this.scene.fogEnd = fog.distance;
     this.scene.fogColor = new Color3(...fog.color);
     this.scene.clearColor = new Color4(...fog.color, 1);
+  }
+
+  private updateCameraFog(time: number): void {
+    const fog = this.mapFog;
+    const camera = this.scene.activeCamera;
+    if (!fog || !camera) return;
+    const position = camera.globalPosition;
+    const sauerPosition = { x: position.x, y: position.z, z: position.y };
+    const waterVolume = this.waterVolumeAtCamera(sauerPosition);
+    const surfaceHeight = waterVolume ? animatedWaterSurfaceHeight(waterVolume.surfaceZ, sauerPosition.x, sauerPosition.y,
+      waterVolume.size, time, this.waterQuality >= 1) : Number.NEGATIVE_INFINITY;
+    const waterBlend = waterVolume ? underwaterFogBlend(surfaceHeight, sauerPosition.z) : 0;
+    const waterIndex = waterVolume && waterBlend > 0 ? waterVolume.material & MATF_INDEX : -1;
+    if (waterIndex === this.fogWaterIndex && Math.abs(waterBlend - this.fogWaterBlend) < 1e-3) return;
+    this.fogWaterIndex = waterIndex;
+    this.fogWaterBlend = waterBlend;
+    const water = waterIndex >= 0 ? this.waterParameters[waterIndex] ?? this.waterParameters[0] : undefined;
+    if (water) {
+      const logBlend = Math.log(1 + 255 * waterBlend) / Math.log(256);
+      const waterFogEnd = Math.min(fog.distance, Math.max(water.fogDistance * 4, 32));
+      this.scene.fogEnabled = true;
+      this.scene.fogMode = Scene.FOGMODE_LINEAR;
+      this.scene.fogStart = fog.start * (1 - logBlend);
+      this.scene.fogEnd = waterFogEnd * logBlend + fog.distance * (1 - logBlend);
+      this.scene.fogColor.copyFromFloats(
+        fog.color[0] + (water.color[0] - fog.color[0]) * waterBlend,
+        fog.color[1] + (water.color[1] - fog.color[1]) * waterBlend,
+        fog.color[2] + (water.color[2] - fog.color[2]) * waterBlend,
+      );
+      this.scene.clearColor.copyFromFloats(this.scene.fogColor.r, this.scene.fogColor.g, this.scene.fogColor.b, 1);
+      return;
+    }
+    this.scene.fogEnabled = true;
+    this.scene.fogMode = Scene.FOGMODE_LINEAR;
+    this.scene.fogStart = fog.start;
+    this.scene.fogEnd = fog.distance;
+    this.scene.fogColor = new Color3(...fog.color);
+    this.scene.clearColor = new Color4(...fog.color, 1);
+  }
+
+  private waterVolumeAtCamera(position: RegisteredMapEntity["position"]): { material: number; surfaceZ: number; size: number } | undefined {
+    const initial = this.physics.lookupMaterialCube(position);
+    if (!initial || (initial.material & MATF_VOLUME) !== MAT_WATER) return undefined;
+    let top = initial;
+    for (;;) {
+      const next = this.physics.lookupMaterialCube({ x: position.x, y: position.y, z: top.origin.z + top.size });
+      if (!next || (next.material & MATF_VOLUME) !== MAT_WATER || next.origin.z + next.size <= top.origin.z + top.size) break;
+      top = next;
+    }
+    return { material: initial.material, surfaceZ: top.origin.z + top.size, size: top.size };
   }
 
   private setMapFarPlane(map: SauerMap): void {
