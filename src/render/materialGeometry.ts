@@ -1,5 +1,6 @@
 import type { MaterialVolume, SauerMap } from "../engine/octa";
-import { collectWorldFaceOccluders, type WorldFaceOccluder } from "../engine/renderva";
+import { worldFaceOccluder } from "../engine/renderva";
+import { cubeSolidFaceMask, materialVolumeType } from "../engine/material";
 
 export type MaterialRenderKind = "water" | "lava" | "glass" | "clip" | "noclip" | "gameclip" | "death" | "alpha";
 
@@ -33,24 +34,34 @@ interface FaceRectangle {
   v1: number;
 }
 
-type FaceAdjacency = Map<string, MaterialVolume[]>;
-type WorldFaceAdjacency = Map<string, FaceRectangle[]>;
-
-export function generateMaterialGeometry(map: SauerMap, waterQuality = 0): MaterialGeometryBatch[] {
+export function generateMaterialGeometry(map: SauerMap, waterQuality = 0, includeDebug = false): MaterialGeometryBatch[] {
   const batches = new Map<string, MaterialGeometryBatch>();
-  const adjacency = buildFaceAdjacency(map.materialVolumes);
-  const worldAdjacency = buildWorldFaceAdjacency(collectWorldFaceOccluders(map));
+  const coveredFaces = new WeakMap<MaterialVolume, number>();
+  for (const volume of map.materialVolumes) {
+    if (volume.volume === "air") continue;
+    let mask = 0;
+    for (let orientation = 0; orientation < FACE_CORNERS.length; orientation++) {
+      if ((volume.solidFaceMask ?? 0) & (1 << orientation)) {
+        mask |= 1 << orientation;
+        continue;
+      }
+      if (faceFullyCoveredByNeighbor(map, volume, orientation)) mask |= 1 << orientation;
+    }
+    coveredFaces.set(volume, mask);
+  }
   map.materialVolumes.forEach((volume) => {
-    if (volume.volume !== "air") appendVolume(batches, volume, volume.volume, false, adjacency, worldAdjacency, waterQuality);
-    if (volume.clip !== "none") appendVolume(batches, volume, volume.clip, true);
-    if (volume.death) appendVolume(batches, volume, "death", true);
-    if (volume.alpha) appendVolume(batches, volume, "alpha", true);
+    if (volume.volume !== "air") {
+      appendVolume(batches, volume, volume.volume, false, waterQuality, map, coveredFaces.get(volume) ?? 0);
+    }
+    if (includeDebug && volume.clip !== "none") appendVolume(batches, volume, volume.clip, true);
+    if (includeDebug && volume.death) appendVolume(batches, volume, "death", true);
+    if (includeDebug && volume.alpha) appendVolume(batches, volume, "alpha", true);
   });
   return [...batches.values()].filter((batch) => batch.indices.length > 0);
 }
 
 function appendVolume(batches: Map<string, MaterialGeometryBatch>, volume: MaterialVolume, kind: MaterialRenderKind,
-                      debugOnly: boolean, adjacency?: FaceAdjacency, worldAdjacency?: WorldFaceAdjacency, waterQuality = 0): void {
+                      debugOnly: boolean, waterQuality = 0, map?: SauerMap, coveredFaceMask = 0): void {
   const materialIndex = kind === "water" || kind === "lava" ? volume.volumeIndex : 0;
   const key = `${kind}:${materialIndex}`;
   let batch = batches.get(key);
@@ -61,15 +72,48 @@ function appendVolume(batches: Map<string, MaterialGeometryBatch>, volume: Mater
   }
   for (let orientation = 0; orientation < FACE_CORNERS.length; orientation++) {
     if (kind === "water" && orientation === 4) continue;
-    if ((kind === "water" || kind === "lava") && ((volume.solidFaceMask ?? 0) & (1 << orientation))) continue;
-    const rectangles = adjacency && worldAdjacency && !debugOnly
-      ? exposedFaceRectangles(volume, orientation, adjacency, worldAdjacency)
+    if (!debugOnly && (volume.solidFaceMask ?? 0) & (1 << orientation)) continue;
+    if (!debugOnly && coveredFaceMask & (1 << orientation)) continue;
+    const rectangles = map && !debugOnly
+      ? exposedFaceRectangles(volume, orientation, map)
       : [wholeFace(volume, orientation)];
     for (const rectangle of rectangles) {
       if (kind === "water" && orientation === 5) appendWaterTopFace(batch, volume, rectangle, waterQuality);
       else appendFace(batch, volume, orientation, rectangle, kind === "water");
     }
   }
+}
+
+function faceFullyCoveredByNeighbor(map: SauerMap, volume: MaterialVolume, orientation: number): boolean {
+  const axis = Math.floor(orientation / 2);
+  const side = orientation & 1;
+  const [uAxis, vAxis] = faceAxes(axis);
+  const coordinates = [volume.origin.x, volume.origin.y, volume.origin.z];
+  coordinates[axis] += side ? volume.size + 0.001 : -0.001;
+  coordinates[uAxis] += volume.size / 2;
+  coordinates[vAxis] += volume.size / 2;
+  const neighbor = findLeafAt(map.world, coordinates[0], coordinates[1], coordinates[2]);
+  if (!neighbor || neighbor.size < volume.size) return false;
+  if (materialVolumeType(neighbor.material) === volume.volume) return true;
+  return (cubeSolidFaceMask(neighbor) & (1 << (orientation ^ 1))) !== 0;
+}
+
+function findLeafAt(cubes: SauerMap["world"], x: number, y: number, z: number): SauerMap["world"][number] | undefined {
+  if (cubes.length === 8 && cubes.every((cube) => cube.size === cubes[0].size)) {
+    const origin = cubes[0].origin;
+    const size = cubes[0].size;
+    if (x < origin.x || y < origin.y || z < origin.z || x >= origin.x + size * 2 || y >= origin.y + size * 2 ||
+        z >= origin.z + size * 2) return undefined;
+    const index = (x >= origin.x + size ? 1 : 0) | (y >= origin.y + size ? 2 : 0) | (z >= origin.z + size ? 4 : 0);
+    const cube = cubes[index];
+    return cube.children ? findLeafAt(cube.children, x, y, z) : cube;
+  }
+  for (const cube of cubes) {
+    if (x < cube.origin.x || y < cube.origin.y || z < cube.origin.z || x >= cube.origin.x + cube.size || y >= cube.origin.y + cube.size ||
+        z >= cube.origin.z + cube.size) continue;
+    return cube.children ? findLeafAt(cube.children, x, y, z) : cube;
+  }
+  return undefined;
 }
 
 function appendFace(batch: MaterialGeometryBatch, volume: MaterialVolume, orientation: number, rectangle: FaceRectangle,
@@ -121,54 +165,57 @@ function appendWaterTopFace(batch: MaterialGeometryBatch, volume: MaterialVolume
   batch.faceCount++;
 }
 
-function buildFaceAdjacency(volumes: MaterialVolume[]): FaceAdjacency {
-  const adjacency: FaceAdjacency = new Map();
-  for (const volume of volumes) {
-    if (volume.volume === "air") continue;
-    for (let axis = 0; axis < 3; axis++) {
-      addAdjacentFace(adjacency, volume, axis, 0, volume.origin[coordinate(axis)]);
-      addAdjacentFace(adjacency, volume, axis, 1, volume.origin[coordinate(axis)] + volume.size);
-    }
-  }
-  return adjacency;
-}
-
-function addAdjacentFace(adjacency: FaceAdjacency, volume: MaterialVolume, axis: number, side: number, plane: number): void {
-  const key = faceKey(volume.volume, axis, side, plane);
-  const faces = adjacency.get(key) ?? [];
-  faces.push(volume);
-  adjacency.set(key, faces);
-}
-
-function buildWorldFaceAdjacency(occluders: WorldFaceOccluder[]): WorldFaceAdjacency {
-  const adjacency: WorldFaceAdjacency = new Map();
-  for (const occluder of occluders) {
-    const key = worldFaceKey(occluder.axis, occluder.plane);
-    const rectangles = adjacency.get(key) ?? [];
-    rectangles.push(occluder);
-    adjacency.set(key, rectangles);
-  }
-  return adjacency;
-}
-
-function exposedFaceRectangles(volume: MaterialVolume, orientation: number, adjacency: FaceAdjacency,
-                               worldAdjacency: WorldFaceAdjacency): FaceRectangle[] {
-  const axis = Math.floor(orientation / 2);
-  const side = orientation & 1;
-  const plane = volume.origin[coordinate(axis)] + (side ? volume.size : 0);
-  const candidates = adjacency.get(faceKey(volume.volume, axis, side ^ 1, plane)) ?? [];
-  let rectangles = [wholeFace(volume, orientation)];
-  for (const candidate of candidates) {
-    const cover = wholeFace(candidate, orientation);
-    rectangles = rectangles.flatMap((rectangle) => subtractRectangle(rectangle, cover));
-    if (!rectangles.length) break;
-  }
-  const worldCovers = worldAdjacency.get(worldFaceKey(axis, plane)) ?? [];
-  for (const cover of worldCovers) {
+function exposedFaceRectangles(volume: MaterialVolume, orientation: number, map: SauerMap): FaceRectangle[] {
+  const face = wholeFace(volume, orientation);
+  const candidates = collectAdjacentFaceCovers(map.world, volume, orientation, face);
+  let rectangles = [face];
+  for (const cover of candidates) {
     rectangles = rectangles.flatMap((rectangle) => subtractRectangle(rectangle, cover));
     if (!rectangles.length) break;
   }
   return rectangles;
+}
+
+function collectAdjacentFaceCovers(cubes: SauerMap["world"], volume: MaterialVolume, orientation: number,
+                                   face: FaceRectangle): FaceRectangle[] {
+  const axis = Math.floor(orientation / 2);
+  const [uAxis, vAxis] = faceAxes(axis);
+  const plane = volume.origin[coordinate(axis)] + (orientation & 1 ? volume.size : 0);
+  const covers: FaceRectangle[] = [];
+  visitAdjacentLeaves(cubes, axis, uAxis, vAxis, plane, orientation, face, (cube) => {
+    if (materialVolumeType(cube.material) === volume.volume) covers.push(volumeRectangle(cube, axis));
+    const occluder = worldFaceOccluder(cube, orientation ^ 1);
+    if (occluder) covers.push(occluder);
+  });
+  return covers;
+}
+
+function visitAdjacentLeaves(cubes: SauerMap["world"], axis: number, uAxis: number, vAxis: number, plane: number, orientation: number,
+                             face: FaceRectangle, callback: (cube: SauerMap["world"][number]) => void): void {
+  for (const cube of cubes) {
+    const origin = [cube.origin.x, cube.origin.y, cube.origin.z];
+    if (origin[uAxis] >= face.u1 || origin[uAxis] + cube.size <= face.u0 || origin[vAxis] >= face.v1 ||
+        origin[vAxis] + cube.size <= face.v0) continue;
+    const crossesPlane = orientation & 1 ? origin[axis] <= plane && origin[axis] + cube.size > plane : origin[axis] < plane &&
+      origin[axis] + cube.size >= plane;
+    if (!crossesPlane) continue;
+    if (cube.children) {
+      visitAdjacentLeaves(cube.children, axis, uAxis, vAxis, plane, orientation, face, callback);
+      continue;
+    }
+    const touchesPlane = orientation & 1 ? origin[axis] === plane : origin[axis] + cube.size === plane;
+    if (touchesPlane) callback(cube);
+  }
+}
+
+function volumeRectangle(volume: Pick<MaterialVolume, "origin" | "size">, axis: number): FaceRectangle {
+  const [uAxis, vAxis] = faceAxes(axis);
+  return {
+    u0: volume.origin[coordinate(uAxis)],
+    u1: volume.origin[coordinate(uAxis)] + volume.size,
+    v0: volume.origin[coordinate(vAxis)],
+    v1: volume.origin[coordinate(vAxis)] + volume.size,
+  };
 }
 
 function wholeFace(volume: MaterialVolume, orientation: number): FaceRectangle {
@@ -212,12 +259,4 @@ function faceAxes(axis: number): [number, number] {
 
 function coordinate(axis: number): "x" | "y" | "z" {
   return (["x", "y", "z"] as const)[axis];
-}
-
-function faceKey(kind: string, axis: number, side: number, plane: number): string {
-  return `${kind}:${axis}:${side}:${plane}`;
-}
-
-function worldFaceKey(axis: number, plane: number): string {
-  return `${axis}:${plane}`;
 }

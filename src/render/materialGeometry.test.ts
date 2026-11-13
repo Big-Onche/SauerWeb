@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MaterialVolume, OctreeCube, SauerMap } from "../engine/octa";
+import { MAT_GLASS, MAT_LAVA, MAT_WATER } from "../engine/material";
 import { generateMaterialGeometry } from "./materialGeometry";
 
 describe("generateMaterialGeometry", () => {
@@ -9,7 +10,7 @@ describe("generateMaterialGeometry", () => {
       volume({ volume: "lava", clip: "clip", death: true }),
       volume({ volume: "glass", alpha: true }),
       volume({ clip: "noclip" }),
-    ]));
+    ]), 0, true);
 
     expect(batches.find((batch) => batch.kind === "water")?.debugOnly).toBe(false);
     expect(batches.find((batch) => batch.kind === "lava")?.debugOnly).toBe(false);
@@ -18,6 +19,12 @@ describe("generateMaterialGeometry", () => {
     expect(batches.find((batch) => batch.kind === "noclip")?.debugOnly).toBe(true);
     expect(batches.find((batch) => batch.kind === "death")?.debugOnly).toBe(true);
     expect(batches.find((batch) => batch.kind === "alpha")?.debugOnly).toBe(true);
+  });
+
+  it("omits debug-only geometry unless requested", () => {
+    const batches = generateMaterialGeometry(mapWith([volume({ clip: "clip", death: true, alpha: true })]));
+
+    expect(batches).toEqual([]);
   });
 
   it("renders water surfaces without submerged bottom faces or shared faces", () => {
@@ -167,10 +174,24 @@ function mapWith(materialVolumes: MaterialVolume[], world: OctreeCube[] = []): S
     entities: [],
     entityRegistry: [],
     vslots: [],
-    world,
+    world: [...materialVolumes.filter((volume) => volume.volume !== "air").map(materialCube), ...world],
     materialVolumes,
     lightmaps: [],
     bytesConsumedThroughOctree: 0,
     bytesConsumed: 0,
+  };
+}
+
+function materialCube(volume: MaterialVolume): OctreeCube {
+  const material = volume.volume === "water" ? MAT_WATER : volume.volume === "lava" ? MAT_LAVA : MAT_GLASS;
+  return {
+    origin: { ...volume.origin },
+    size: volume.size,
+    kind: "empty",
+    edges: new Uint8Array(12),
+    textures: [0, 0, 0, 0, 0, 0],
+    material,
+    merged: 0,
+    surfaces: new Array(6),
   };
 }

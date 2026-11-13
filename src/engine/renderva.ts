@@ -25,6 +25,18 @@ export interface WorldFaceOccluder {
   v1: number;
 }
 
+export function worldFaceOccluder(cube: OctreeCube, orientation: number): WorldFaceOccluder | undefined {
+  if (cube.material & MAT_ALPHA || cube.textures[orientation] === DEFAULT_SKY) return undefined;
+  if (cubeSolidFaceMask(cube) & (1 << orientation)) return solidCubeFaceRectangle(cube, orientation);
+  const surface = cube.surfaces[orientation];
+  const layerCount = surface ? surface.vertexCount & 0x0f : 4;
+  if (cube.merged & (1 << orientation) && (!surface || layerCount === 0)) return undefined;
+  const source = surface && layerCount > 0
+    ? surface.vertices.slice(0, layerCount)
+    : FACE_CORNERS[orientation].map((corner) => generatedVertex(cube, corner));
+  return axisAlignedFaceRectangle(source.map((vertex) => decodeVertex(cube, vertex)), Math.floor(orientation / 2));
+}
+
 const FACE_CORNERS: Array<Array<[number, number, number]>> = [
   [[0, 1, 1], [0, 1, 0], [0, 0, 0], [0, 0, 1]],
   [[1, 1, 1], [1, 0, 1], [1, 0, 0], [1, 1, 0]],
@@ -70,11 +82,13 @@ export function collectWorldFaceOccluders(map: SauerMap): WorldFaceOccluder[] {
     // ("normal") cube. This mirrors visibleface() rather than relying on cube.kind.
     const solidFaceMask = cubeSolidFaceMask(cube);
     for (let orientation = 0; orientation < FACE_CORNERS.length; orientation++) {
-      if (solidFaceMask & (1 << orientation)) occluders.push(solidCubeFaceRectangle(cube, orientation));
+      if (solidFaceMask & (1 << orientation)) {
+        occluders.push(solidCubeFaceRectangle(cube, orientation));
+      }
     }
     const coincidentMask = coincidentFaces.get(cube) ?? 0;
     for (let orientation = 0; orientation < FACE_CORNERS.length; orientation++) {
-      if (coincidentMask & (1 << orientation) || cube.textures[orientation] === DEFAULT_SKY) continue;
+      if (solidFaceMask & (1 << orientation) || coincidentMask & (1 << orientation) || cube.textures[orientation] === DEFAULT_SKY) continue;
       const surface = cube.surfaces[orientation];
       const layerCount = surface ? surface.vertexCount & 0x0f : 4;
       const merged = (cube.merged & (1 << orientation)) !== 0;
@@ -234,7 +248,28 @@ function isFaceVisible(map: SauerMap, cube: OctreeCube, orientation: number): bo
   if (point.x < 0 || point.y < 0 || point.z < 0 || point.x >= map.header.worldSize || point.y >= map.header.worldSize ||
       point.z >= map.header.worldSize) return true;
   if (cube.kind !== "solid") return true;
+  const neighbor = findLeafAt(map.world, point);
+  if (neighbor?.kind === "solid" && neighbor.size >= cube.size) return false;
   return solidNeighborCoverage(map.world, cube, orientation) < cube.size * cube.size;
+}
+
+function findLeafAt(cubes: OctreeCube[], point: Vec3): OctreeCube | undefined {
+  if (cubes.length === 8 && cubes.every((cube) => cube.size === cubes[0].size)) {
+    const origin = cubes[0].origin;
+    const size = cubes[0].size;
+    if (point.x < origin.x || point.y < origin.y || point.z < origin.z || point.x >= origin.x + size * 2 ||
+        point.y >= origin.y + size * 2 || point.z >= origin.z + size * 2) return undefined;
+    const index = (point.x >= origin.x + size ? 1 : 0) | (point.y >= origin.y + size ? 2 : 0) |
+      (point.z >= origin.z + size ? 4 : 0);
+    const cube = cubes[index];
+    return cube.children ? findLeafAt(cube.children, point) : cube;
+  }
+  for (const cube of cubes) {
+    if (point.x < cube.origin.x || point.y < cube.origin.y || point.z < cube.origin.z || point.x >= cube.origin.x + cube.size ||
+        point.y >= cube.origin.y + cube.size || point.z >= cube.origin.z + cube.size) continue;
+    return cube.children ? findLeafAt(cube.children, point) : cube;
+  }
+  return undefined;
 }
 
 function solidNeighborCoverage(cubes: OctreeCube[], source: OctreeCube, orientation: number): number {

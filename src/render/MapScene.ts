@@ -355,7 +355,7 @@ export class MapScene {
     this.gameAudio.setMap(map.entityRegistry, mapSounds);
     await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
     const batches = generateGeometry(map, textures);
-    const materialBatches = generateMaterialGeometry(map, this.waterQuality);
+    const materialBatches = generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug");
     let faces = 0;
     let triangles = 0;
     let vertices = 0;
