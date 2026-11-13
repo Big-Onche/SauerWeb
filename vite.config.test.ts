@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeSauerbratenGzip } from "./sauerbratenGzip";
 import { DEFAULT_SAUERBRATEN_DIR, loadSauerbratenDirectory, resolveSauerbratenDirectory,
   validateSauerbratenDirectory } from "./sauerbratenDirectory";
 
@@ -72,5 +74,16 @@ describe("SAUERBRATEN_DIR", () => {
     createSauerbratenTree(assetRoot);
 
     expect(() => validateSauerbratenDirectory(assetRoot)).not.toThrow();
+  });
+});
+
+describe("legacy Sauerbraten gzip streams", () => {
+  it("normalizes castle_trap's invalid checksum without changing its OCTA payload", () => {
+    const compressed = fs.readFileSync(path.join(DEFAULT_SAUERBRATEN_DIR, "packages", "base", "castle_trap.ogz"));
+
+    expect(() => zlib.gunzipSync(compressed)).toThrow();
+    const map = zlib.gunzipSync(normalizeSauerbratenGzip(compressed));
+    expect(map.subarray(0, 4).toString("ascii")).toBe("OCTA");
+    expect(map.readInt32LE(4)).toBe(27);
   });
 });

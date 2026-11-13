@@ -6,11 +6,46 @@ import { loadSauerbratenDirectory } from "../../sauerbratenDirectory";
 import { generateGeometry } from "./renderva";
 import { createInputState } from "./physics/input";
 import { PhysicsSimulation } from "./physics";
+import { isSupportedMapVersion } from "./mapversion";
 import { SauerMapParser } from "./worldio";
 
 const sauerbratenDirectory = loadSauerbratenDirectory("test");
 
 describe("SauerMapParser", () => {
+  it("keeps the map index and parser support range aligned", () => {
+    expect([26, 27, 28, 33, 34, null].map(isSupportedMapVersion)).toEqual([false, true, true, true, false, false]);
+  });
+
+  it.each([27, 28])("decodes the v%d compatibility header and its embedded map settings", (version) => {
+    const map = new SauerMapParser().parse(createCompatMap(version), `compat-v${version}`);
+
+    expect(map.header).toMatchObject({
+      version, headerSize: 196, worldSize: 8, entityCount: 0, lightmapCount: 0, hasBlendmap: true, variableCount: 0, vslotCount: 0,
+    });
+    expect(map.variables).toEqual([
+      { name: "lightprecision", type: "integer", value: 32 },
+      { name: "lighterror", type: "integer", value: 8 },
+      { name: "bumperror", type: "integer", value: 3 },
+      { name: "lightlod", type: "integer", value: 2 },
+      { name: "ambient", type: "integer", value: 0x19 },
+      { name: "skylight", type: "integer", value: 0x102030 },
+      { name: "watercolour", type: "integer", value: 0x204060 },
+      { name: "waterfallcolour", type: "integer", value: 0x123456 },
+      { name: "lavacolour", type: "integer", value: 0x804020 },
+      { name: "fullbright", type: "integer", value: 0 },
+      { name: "lerpangle", type: "integer", value: 44 },
+      { name: "lerpsubdiv", type: "integer", value: 3 },
+      { name: "lerpsubdivsize", type: "integer", value: 4 },
+      { name: "maptitle", type: "string", value: "Compatibility test" },
+    ]);
+    expect(map.gameType).toBe("fps");
+    expect(map.textureMru).toEqual([]);
+    expect(map.vslots).toEqual([]);
+    expect(map.world).toHaveLength(8);
+    expect(map.world.every((cube) => cube.kind === "empty")).toBe(true);
+    expect(map.bytesConsumed).toBe(createCompatMap(version).byteLength);
+  });
+
   it.each(["akroseum", "campo", "deathtek", "industry", "injustice", "kffa", "kmap5", "osiris", "shindou", "stemple", "wdcd"])(
     "decodes bundled v29 map %s without serialized VSlots", (mapName) => {
       const filePath = path.join(sauerbratenDirectory, "packages", "base", `${mapName}.ogz`);
@@ -168,4 +203,33 @@ function collectSurfaces(cubes: import("./octa").OctreeCube[]): import("./octa")
 
 function arrayBuffer(bytes: Buffer): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function createCompatMap(version: number): ArrayBuffer {
+  const bytes = Buffer.alloc(196 + 9 + 2 + 8 * 14);
+  bytes.write("OCTA", 0, "ascii");
+  bytes.writeInt32LE(version, 4);
+  bytes.writeInt32LE(196, 8);
+  bytes.writeInt32LE(8, 12);
+  bytes.writeInt32LE(0, 16);
+  bytes.writeInt32LE(0, 20);
+  bytes.writeInt32LE(0, 24);
+  bytes.writeInt32LE(32, 28);
+  bytes.writeInt32LE(8, 32);
+  bytes.writeInt32LE(2, 36);
+  bytes[40] = 0x19;
+  bytes.set([0x20, 0x40, 0x60, 1, 44, 3, 4, 3, 0x10, 0x20, 0x30, 0x80, 0x40, 0x20, 0x12, 0x34, 0x56], 41);
+  bytes.write("Compatibility test", 68, "ascii");
+
+  let offset = 196;
+  bytes.set([3, 0x66, 0x70, 0x73, 0, 0, 0, 0, 0], offset);
+  offset += 9;
+  bytes.writeUInt16LE(0, offset);
+  offset += 2;
+  for (let index = 0; index < 8; index++) {
+    bytes[offset++] = 1;
+    offset += 12;
+    bytes[offset++] = 0;
+  }
+  return arrayBuffer(bytes);
 }

@@ -3,7 +3,9 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
 import { attachPresence, attachSauerRelay, configuredServers, serverListMiddleware } from "./relay/relay.mjs";
+import { normalizeSauerbratenGzip } from "./sauerbratenGzip";
 import { loadSauerbratenDirectory, validateSauerbratenDirectory } from "./sauerbratenDirectory";
+import { isSupportedMapVersion } from "./src/engine/mapversion";
 
 let sauerRoot = "";
 let mapsDirectory = "";
@@ -815,7 +817,7 @@ function sauerMapsPlugin(): Plugin {
               const version = readMapVersion(filePath);
               return {
                 name: path.basename(entry.name, ".ogz"), size: fs.statSync(filePath).size, version,
-                supported: version !== null && version >= 29 && version <= 33,
+                supported: isSupportedMapVersion(version),
               };
             })
             .sort((left, right) => left.name.localeCompare(right.name));
@@ -844,10 +846,13 @@ function sauerMapsPlugin(): Plugin {
           next();
           return;
         }
+        const version = readMapVersion(filePath);
+        const mapData = version !== null && version <= 28 ? normalizeSauerbratenGzip(fs.readFileSync(filePath)) : undefined;
         response.setHeader("Content-Type", "application/gzip");
-        response.setHeader("Content-Length", fs.statSync(filePath).size);
+        response.setHeader("Content-Length", mapData?.length ?? fs.statSync(filePath).size);
         response.setHeader("Cache-Control", "no-cache");
-        fs.createReadStream(filePath).pipe(response);
+        if (mapData) response.end(mapData);
+        else fs.createReadStream(filePath).pipe(response);
       });
     },
   };

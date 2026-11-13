@@ -1,10 +1,10 @@
 import { BinaryReader } from "./binaryreader";
 import { collectMaterialVolumes, MATF_CLIP_SHIFT, MATF_FLAG_SHIFT, MATF_VOLUME_SHIFT } from "./material";
 import { createFpsEntityRegistry } from "../fpsgame/entities";
+import { isSupportedMapVersion, MAPVERSION, MINIMUM_MAP_VERSION } from "./mapversion";
 import type { Lightmap, MapEntity, MapHeader, MapVariable, OctreeCube, SauerMap, Surface, SurfaceVertex, Vec3, VSlot } from "./octa";
 
-const CURRENT_MAP_VERSION = 33;
-const MINIMUM_MAP_VERSION = 29;
+const COMPAT_HEADER_SIZE = 196;
 const OCTSAV_CHILDREN = 0;
 const OCTSAV_EMPTY = 1;
 const OCTSAV_SOLID = 2;
@@ -51,8 +51,30 @@ interface GameData {
   entityExtraSize: number;
 }
 
+interface HeaderData {
+  header: MapHeader;
+  variables: MapVariable[];
+}
+
+interface CompatHeader {
+  lightprecision: number;
+  lighterror: number;
+  lightlod: number;
+  ambient: number;
+  watercolour: number;
+  blendmap: number;
+  lerpangle: number;
+  lerpsubdiv: number;
+  lerpsubdivsize: number;
+  bumperror: number;
+  skylight: number;
+  lavacolour: number;
+  waterfallcolour: number;
+  maptitle: string;
+}
+
 export class SauerMapParser {
-  private mapversion = CURRENT_MAP_VERSION;
+  private mapversion = MAPVERSION;
 
   parse(buffer: ArrayBuffer, name = "map"): SauerMap {
     return this.load_world(buffer, name);
@@ -63,9 +85,9 @@ export class SauerMapParser {
   // Sauerbraten reference: SVN r6488
   load_world(buffer: ArrayBuffer, name = "map"): SauerMap {
     const reader = new BinaryReader(buffer);
-    const header = this.readHeader(reader);
+    const { header, variables: compatVariables } = this.readHeader(reader);
     this.mapversion = header.version;
-    const variables = this.readVariables(reader, header.variableCount);
+    const variables = header.version <= 28 ? compatVariables : this.readVariables(reader, header.variableCount);
     const { gameType, entityExtraSize } = this.readGameData(reader);
     const textureMru = this.readTextureMru(reader);
     const entities = this.readEntities(reader, header.entityCount, gameType, entityExtraSize);
@@ -96,7 +118,7 @@ export class SauerMapParser {
     });
   }
 
-  private readHeader(reader: BinaryReader): MapHeader {
+  private readHeader(reader: BinaryReader): HeaderData {
     const magic = reader.text(4, "map magic");
     const version = reader.int32("map version");
     const headerSize = reader.int32("header size");
@@ -106,35 +128,98 @@ export class SauerMapParser {
     const lightmapCount = reader.int32("lightmap count");
 
     if (magic !== "OCTA") throw new Error(`Not a Sauerbraten map: expected OCTA header, found ${JSON.stringify(magic)}.`);
-    if (version < MINIMUM_MAP_VERSION || version > CURRENT_MAP_VERSION) {
+    if (!isSupportedMapVersion(version)) {
       throw new Error(
-        `Map format ${version} is not supported yet. This viewer currently supports formats ${MINIMUM_MAP_VERSION}–${CURRENT_MAP_VERSION}.`,
+        `Map format ${version} is not supported yet. This viewer currently supports formats ${MINIMUM_MAP_VERSION}–${MAPVERSION}.`,
       );
     }
-    const expectedHeaderSize = version <= 29 ? 36 : 40;
+    const expectedHeaderSize = version <= 28 ? COMPAT_HEADER_SIZE : version <= 29 ? 36 : 40;
     if (headerSize !== expectedHeaderSize) {
       throw new Error(`Invalid v${version} header size ${headerSize}; expected ${expectedHeaderSize} bytes.`);
     }
     if (worldSize <= 0 || (worldSize & (worldSize - 1)) !== 0) throw new Error(`Invalid world size ${worldSize}; expected a positive power of two.`);
     if (entityCount < 0 || entityCount > 1_000_000) throw new Error(`Invalid entity count ${entityCount}.`);
 
-    const blendmap = reader.int32("blendmap flag");
-    const variableCount = reader.int32("map variable count");
-    const vslotCount = version <= 29 ? 0 : reader.int32("VSlot count");
+    let blendmap: number;
+    let variableCount: number;
+    let vslotCount: number;
+    let variables: MapVariable[] = [];
+    if (version <= 28) {
+      const chdr = this.readCompatHeader(reader);
+      blendmap = chdr.blendmap;
+      variableCount = 0;
+      vslotCount = 0;
+      variables = this.compatHeaderVariables(chdr);
+    } else {
+      blendmap = reader.int32("blendmap flag");
+      variableCount = reader.int32("map variable count");
+      vslotCount = version <= 29 ? 0 : reader.int32("VSlot count");
+    }
     if (variableCount < 0 || variableCount > 1_000_000) throw new Error(`Invalid map variable count ${variableCount}.`);
     if (vslotCount < 0 || vslotCount > 1_000_000) throw new Error(`Invalid VSlot count ${vslotCount}.`);
 
     return {
-      version,
-      headerSize,
-      worldSize,
-      entityCount,
-      pvsCount,
-      lightmapCount,
-      hasBlendmap: blendmap !== 0,
-      variableCount,
-      vslotCount,
+      header: {
+        version,
+        headerSize,
+        worldSize,
+        entityCount,
+        pvsCount,
+        lightmapCount,
+        hasBlendmap: blendmap !== 0,
+        variableCount,
+        vslotCount,
+      },
+      variables,
     };
+  }
+
+  private readCompatHeader(reader: BinaryReader): CompatHeader {
+    const chdr: Omit<CompatHeader, "maptitle"> = {
+      lightprecision: reader.int32("legacy light precision"),
+      lighterror: reader.int32("legacy light error"),
+      lightlod: reader.int32("legacy light LOD"),
+      ambient: reader.uint8("legacy ambient light"),
+      watercolour: this.readCompatColor(reader, "water colour"),
+      blendmap: reader.uint8("legacy blendmap flag"),
+      lerpangle: reader.uint8("legacy lerp angle"),
+      lerpsubdiv: reader.uint8("legacy lerp subdivision"),
+      lerpsubdivsize: reader.uint8("legacy lerp subdivision size"),
+      bumperror: reader.uint8("legacy bump error"),
+      skylight: this.readCompatColor(reader, "sky light"),
+      lavacolour: this.readCompatColor(reader, "lava colour"),
+      waterfallcolour: this.readCompatColor(reader, "waterfall colour"),
+    };
+    reader.skip(10, "legacy header reserved bytes");
+    const maptitle = reader.text(128, "legacy map title").replace(/\0.*$/s, "");
+    return { ...chdr, maptitle };
+  }
+
+  private compatHeaderVariables(chdr: CompatHeader): MapVariable[] {
+    const variables: MapVariable[] = [];
+    const addInteger = (name: string, value: number) => variables.push({ name, type: "integer", value });
+    if (chdr.lightprecision) addInteger("lightprecision", chdr.lightprecision);
+    if (chdr.lighterror) addInteger("lighterror", chdr.lighterror);
+    if (chdr.bumperror) addInteger("bumperror", chdr.bumperror);
+    addInteger("lightlod", chdr.lightlod);
+    if (chdr.ambient) addInteger("ambient", chdr.ambient);
+    addInteger("skylight", chdr.skylight);
+    addInteger("watercolour", chdr.watercolour);
+    addInteger("waterfallcolour", chdr.waterfallcolour);
+    addInteger("lavacolour", chdr.lavacolour);
+    addInteger("fullbright", 0);
+    if (chdr.lerpsubdivsize || chdr.lerpangle) addInteger("lerpangle", chdr.lerpangle);
+    if (chdr.lerpsubdivsize) {
+      addInteger("lerpsubdiv", chdr.lerpsubdiv);
+      addInteger("lerpsubdivsize", chdr.lerpsubdivsize);
+    }
+    variables.push({ name: "maptitle", type: "string", value: chdr.maptitle });
+    return variables;
+  }
+
+  private readCompatColor(reader: BinaryReader, context: string): number {
+    return (reader.uint8(`legacy ${context} red`) << 16) | (reader.uint8(`legacy ${context} green`) << 8) |
+      reader.uint8(`legacy ${context} blue`);
   }
 
   private readVariables(reader: BinaryReader, count: number): MapVariable[] {
