@@ -137,7 +137,11 @@ export class MultiplayerClient extends EventTarget {
   private protectionTarget = "";
   private protectionDisconnecting = false;
   private relayAuth?: { name: string; domain: string };
-  private relayAuthConfirmed = false;
+  private relayAuthPrivilegeObserved = false;
+  private relayAuthAnswerSent = false;
+  private relayAuthAccessConfirmed = false;
+  private relayUnspectateRequested = false;
+  private relayAuthMessageCount = 0;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem,
               teamkillProtection = browserTeamkillProtection(), chatModeration = new ChatModeration()) {
@@ -161,7 +165,11 @@ export class MultiplayerClient extends EventTarget {
     this.disconnect();
     this.protectionDisconnecting = false;
     this.relayAuth = undefined;
-    this.relayAuthConfirmed = false;
+    this.relayAuthPrivilegeObserved = false;
+    this.relayAuthAnswerSent = false;
+    this.relayAuthAccessConfirmed = false;
+    this.relayUnspectateRequested = false;
+    this.relayAuthMessageCount = 0;
     this.weapons.controller.serverAuthoritative = true;
     this.endpoint = { ...endpoint, playerName: endpoint.playerName.slice(0, 15) || "unnamed" };
     this.protectionTarget = `${endpoint.host}:${endpoint.port}`;
@@ -681,10 +689,15 @@ export class MultiplayerClient extends EventTarget {
         this.emit({ type: "server-capacity", message: event.data.message });
       } else if (event.data.type === "auth-config") {
         this.relayAuth = { name: event.data.name, domain: event.data.domain };
+        this.authDiagnostic(`received relay identity '${event.data.name}' for domain '${event.data.domain}'`, "config-received");
       } else if (event.data.type === "auth-answer" && event.data.domain === this.relayAuth?.domain) {
+        this.authDiagnostic(`received backend response for request ${event.data.id}`, "answer-received");
         this.transport.send(1, new PacketWriter().putInt(NetworkMessage.AuthAnswer).putString(event.data.domain)
           .putInt(event.data.id).putString(event.data.answer).finish(), true);
         this.transport.flush();
+        this.relayAuthAnswerSent = true;
+        this.authDiagnostic(`sent reliable N_AUTHANS for request ${event.data.id}`, "answer-sent");
+        this.requestAuthenticatedUnspectate();
       }
       return;
     }
@@ -772,6 +785,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Welcome:
           this.connected = true;
           this.emit({ type: "status", status: this.serverDescription || "connected" });
+          this.requestAuthenticatedUnspectate();
           if (!this.mapName && this.endpoint?.map && this.endpoint.mode !== undefined) {
             this.transport.send(1, new PacketWriter().putInt(NetworkMessage.MapVote).putString(this.endpoint.map)
               .putInt(this.endpoint.mode).finish(), true);
@@ -860,9 +874,9 @@ export class MultiplayerClient extends EventTarget {
           packet.getInt();
           for (let clientNumber = packet.getInt(); clientNumber >= 0; clientNumber = packet.getInt()) {
             const privilege = packet.getInt();
-            if (clientNumber === this.clientNumber && privilege > 0 && this.relayAuth && !this.relayAuthConfirmed) {
-              this.relayAuthConfirmed = true;
-              this.transport.reportAuthSuccess();
+            if (clientNumber === this.clientNumber && privilege > 0 && this.relayAuth && !this.relayAuthPrivilegeObserved) {
+              this.relayAuthPrivilegeObserved = true;
+              this.authDiagnostic(`server reported privilege ${privilege}; waiting for access state`, "privilege-observed");
             }
           }
           break;
@@ -879,7 +893,14 @@ export class MultiplayerClient extends EventTarget {
           if (this.timeLeftSeconds <= 0) this.logIntermission();
           break;
         }
-        case NetworkMessage.ServerMessage: this.console(packet.getString()); break;
+        case NetworkMessage.ServerMessage: {
+          const message = packet.getString();
+          this.console(message);
+          if (this.relayAuthAnswerSent && !this.relayAuthAccessConfirmed && this.relayAuthMessageCount++ < 10) {
+            this.authDiagnostic("received N_SERVMSG while authentication is pending", "server-message", message);
+          }
+          break;
+        }
         case NetworkMessage.Sound: {
           const sound = packet.getInt() as GameSound, player = this.players.get(sender);
           this.emit({ type: "playsound", sound, position: sender === this.clientNumber ? undefined : player?.position });
@@ -941,20 +962,38 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.GameSpeed: packet.getInt(); packet.getInt(); break;
         case NetworkMessage.RequestAuth: {
           const domain = packet.getString();
+          if (!this.relayAuth) break;
+          this.authDiagnostic(`received N_REQAUTH for domain '${domain}'`, "request-received");
           if (domain === this.relayAuth?.domain) {
             this.transport.send(1, new PacketWriter().putInt(NetworkMessage.AuthTry).putString(domain)
               .putString(this.relayAuth.name).finish(), true);
             this.transport.flush();
+            this.authDiagnostic(`sent reliable N_AUTHTRY as '${this.relayAuth.name}'`, "auth-try-sent");
+          } else {
+            this.authDiagnostic("ignored N_REQAUTH because its domain does not match the relay configuration", "domain-mismatch");
           }
           break;
         }
         case NetworkMessage.AuthChallenge: {
           const domain = packet.getString(), id = packet.getInt(), challenge = packet.getString();
+          if (!this.relayAuth) break;
+          this.authDiagnostic(`received N_AUTHCHAL request ${id >>> 0} for domain '${domain}'`, "challenge-received");
           if (domain === this.relayAuth?.domain) this.transport.requestAuthAnswer(domain, id >>> 0, challenge);
+          else this.authDiagnostic("ignored N_AUTHCHAL because its domain does not match the relay configuration", "domain-mismatch");
           break;
         }
         case NetworkMessage.Spectator: {
-          this.setSpectatorState(packet.getInt(), packet.getInt() !== 0);
+          const clientNumber = packet.getInt(), spectating = packet.getInt() !== 0;
+          this.setSpectatorState(clientNumber, spectating);
+          if (clientNumber === this.clientNumber && this.relayAuth) {
+            this.authDiagnostic(`server set local spectator state to ${spectating ? "on" : "off"}`,
+              spectating ? "spectator-on" : "access-granted");
+            if (spectating) this.requestAuthenticatedUnspectate();
+            else if (this.relayAuthAnswerSent && !this.relayAuthAccessConfirmed) {
+              this.relayAuthAccessConfirmed = true;
+              this.transport.reportAuthSuccess();
+            }
+          }
           break;
         }
         case NetworkMessage.EditEntity:
@@ -977,12 +1016,37 @@ export class MultiplayerClient extends EventTarget {
     this.sessionId = packet.getInt();
     const passwordProtected = packet.getInt() > 0;
     this.serverDescription = packet.getString();
-    packet.getString();
+    const serverAuthDomain = packet.getString();
+    if (this.relayAuth) {
+      this.authDiagnostic(`server advertised auth domain '${serverAuthDomain || "(none)"}'`, "server-domain-received");
+      if (serverAuthDomain && serverAuthDomain !== this.relayAuth.domain) {
+        this.authDiagnostic(`configured domain '${this.relayAuth.domain}' does not match the server-advertised domain`,
+          "server-domain-mismatch");
+      }
+    }
     if (passwordProtected) throw new Error("Password-protected servers are not supported yet.");
     const intro = new PacketWriter().putInt(NetworkMessage.Connect).putString(this.endpoint?.playerName ?? "unnamed")
       .putInt(this.endpoint?.playerModel ?? 0).putString("").putString(this.relayAuth?.domain ?? "").putString(this.relayAuth?.name ?? "");
     this.transport.send(1, intro.finish(), true);
     this.transport.flush();
+    if (this.relayAuth) {
+      this.authDiagnostic(`sent reliable N_CONNECT as '${this.relayAuth.name}' for domain '${this.relayAuth.domain}'`, "connect-sent");
+    }
+  }
+
+  private requestAuthenticatedUnspectate(): void {
+    if (!this.relayAuthAnswerSent || this.relayAuthAccessConfirmed || this.relayUnspectateRequested || !this.connected ||
+        this.clientNumber < 0 || !this.isSpectator) return;
+    this.relayUnspectateRequested = true;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Spectator).putInt(this.clientNumber).putInt(0).finish(), true);
+    this.transport.flush();
+    this.authDiagnostic("sent one reliable N_SPECTATOR unspectate request after N_AUTHANS", "unspectate-requested");
+  }
+
+  private authDiagnostic(message: string, stage: string, serverMessage?: string): void {
+    console.info(`[SauerWeb auth] ${message}`);
+    this.console(`[auth] ${message}`);
+    this.transport.reportAuthStage(stage, serverMessage?.slice(0, 300));
   }
 
   private parseInitClient(packet: PacketReader): void {

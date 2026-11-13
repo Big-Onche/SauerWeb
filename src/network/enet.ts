@@ -97,6 +97,11 @@ export class EnetClient extends EventTarget {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: "auth-success" }));
   }
 
+  reportAuthStage(stage: string, message?: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: "auth-stage", stage, ...(message === undefined ? {} : { message }) }));
+  }
+
   close(): void {
     if (this.serviceTimer) clearInterval(this.serviceTimer);
     this.serviceTimer = undefined;

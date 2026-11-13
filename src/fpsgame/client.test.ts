@@ -252,6 +252,8 @@ describe("native server message framing", () => {
     Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(serverInfo)]);
 
     const connect = new PacketReader(send.mock.calls[0][1]);
+    expect(send.mock.calls[0][0]).toBe(1);
+    expect(send.mock.calls[0][2]).toBe(true);
     expect([connect.getInt(), connect.getString(), connect.getInt(), connect.getString(), connect.getString(), connect.getString()])
       .toEqual([NetworkMessage.Connect, "web-player", 2, "", "example-domain", "relay-user"]);
     const challenge = new PacketWriter().putInt(NetworkMessage.AuthChallenge).putString("example-domain").putInt(17)
@@ -263,8 +265,38 @@ describe("native server message framing", () => {
       type: "control", data: { type: "auth-answer", domain: "example-domain", id: 17, answer: "abcd" },
     }]);
     const answer = new PacketReader(send.mock.calls[1][1]);
+    expect(send.mock.calls[1][0]).toBe(1);
+    expect(send.mock.calls[1][2]).toBe(true);
     expect([answer.getInt(), answer.getString(), answer.getInt(), answer.getString()])
       .toEqual([NetworkMessage.AuthAnswer, "example-domain", 17, "abcd"]);
+  });
+
+  it("requests unspectate once after N_AUTHANS and confirms access from N_SPECTATOR rather than N_CURRENTMASTER", () => {
+    const client = createClient().multiplayer;
+    client.connected = true;
+    client.clientNumber = 4;
+    Reflect.set(client, "relayAuth", { name: "relay-user", domain: "example-domain" });
+    Reflect.set(client, "relayAuthAnswerSent", true);
+    const player = Reflect.apply(Reflect.get(client, "playerFor"), client, [4]) as NetworkPlayer;
+    player.state = ClientState.Spectator;
+    const send = vi.spyOn(client.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.transport, "flush").mockImplementation(() => undefined);
+    const success = vi.spyOn(client.transport, "reportAuthSuccess").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    const spectatorOn = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(1).finish();
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOn)]);
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOn)]);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toBe(1);
+    expect(send.mock.calls[0][2]).toBe(true);
+    const unspectate = new PacketReader(send.mock.calls[0][1]);
+    expect([unspectate.getInt(), unspectate.getInt(), unspectate.getInt()]).toEqual([NetworkMessage.Spectator, 4, 0]);
+    expect(success).not.toHaveBeenCalled();
+    const spectatorOff = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(0).finish();
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOff)]);
+    expect(success).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces a relay cooldown before the native server welcome completes", () => {

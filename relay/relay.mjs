@@ -143,7 +143,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     let windowStarted = Date.now();
     let packets = 0;
     let bytes = 0;
-    const authState = { attempted: false, succeeded: false };
+    const authState = { attempted: false, succeeded: false, lastStage: "configured", timeout: undefined };
     const protectedConnections = connectionsByProtectionKey.get(protectionKey) ?? new Set();
     protectedConnections.add(webSocket);
     connectionsByProtectionKey.set(protectionKey, protectedConnections);
@@ -159,8 +159,10 @@ export function attachSauerRelay(httpServer, options = {}) {
         slot.release();
         console.info(`[server-config] Released relay slot for ${target.host}:${target.port}.`);
       }
+      if (authState.timeout) clearTimeout(authState.timeout);
       if (authState.attempted && !authState.succeeded) {
-        console.warn(`[server-config] Authentication did not complete for ${target.host}:${target.port}.`);
+        console.warn(`[server-config] Authentication ended without confirmed access for ${target.host}:${target.port}; ` +
+          `last stage: ${authState.lastStage}.`);
       }
     };
     udp.on("message", (datagram) => {
@@ -193,6 +195,8 @@ export function attachSauerRelay(httpServer, options = {}) {
     if (serverConfig?.authWarning) console.warn(`[server-config] ${target.host}:${target.port}: ${serverConfig.authWarning}.`);
     if (serverConfig?.autoauth) {
       webSocket.send(JSON.stringify({ type: "auth-config", name: serverConfig.name, domain: serverConfig.domain, autoauth: true }));
+      console.info(`[server-config] Sent auth configuration for ${target.host}:${target.port} ` +
+        `(identity='${serverConfig.name}', domain='${serverConfig.domain}').`);
     }
     const cooldownRemaining = (cooldownsByProtectionKey.get(protectionKey) ?? 0) - Date.now();
     if (cooldownRemaining > 0) {
@@ -247,7 +251,28 @@ export function attachSauerRelay(httpServer, options = {}) {
     if (request?.type === "auth-success") {
       if (config?.autoauth && state.attempted && !state.succeeded) {
         state.succeeded = true;
-        console.info(`[server-config] Native authentication succeeded for ${target.host}:${target.port}.`);
+        state.lastStage = "access-granted";
+        if (state.timeout) clearTimeout(state.timeout);
+        console.info(`[server-config] Server confirmed post-auth access for ${target.host}:${target.port}.`);
+      }
+      return true;
+    }
+    if (request?.type === "auth-stage") {
+      const stages = new Set(["config-received", "connect-sent", "request-received", "auth-try-sent", "challenge-received",
+        "answer-received", "answer-sent", "spectator-on", "unspectate-requested", "access-granted", "privilege-observed",
+        "domain-mismatch", "server-domain-received", "server-domain-mismatch", "server-message"]);
+      if (!config?.autoauth || !stages.has(request.stage)) return true;
+      state.lastStage = request.stage;
+      const detail = request.stage === "server-message" && typeof request.message === "string"
+        ? `: ${request.message.replace(/[\x00-\x1F\x7F]/g, " ").slice(0, 300)}` : "";
+      console.info(`[server-config] Auth stage for ${target.host}:${target.port}: ${request.stage}${detail}.`);
+      if (request.stage === "answer-sent") {
+        if (state.timeout) clearTimeout(state.timeout);
+        state.timeout = setTimeout(() => {
+          if (!state.succeeded) console.warn(`[server-config] No post-auth access confirmation for ${target.host}:${target.port}; ` +
+            `last stage: ${state.lastStage}.`);
+        }, 5_000);
+        state.timeout.unref();
       }
       return true;
     }
@@ -259,10 +284,12 @@ export function attachSauerRelay(httpServer, options = {}) {
     }
     try {
       state.attempted = true;
+      state.lastStage = "challenge-calculated";
       const answer = answerChallenge(config.privateKey, request.challenge);
       if (webSocket.readyState === WebSocket.OPEN) {
         webSocket.send(JSON.stringify({ type: "auth-answer", domain: config.domain, id: request.id, answer }));
-        console.info(`[server-config] Answered native authentication challenge for ${target.host}:${target.port}.`);
+        console.info(`[server-config] Calculated and returned native challenge response for ${target.host}:${target.port} ` +
+          `(request ${request.id}; challenge and response omitted).`);
       }
     } catch (error) {
       console.warn(`[server-config] Authentication failed for ${target.host}:${target.port}: ` +

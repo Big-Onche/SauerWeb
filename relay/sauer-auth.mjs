@@ -1,6 +1,7 @@
 const P = 0xfffffffffffffffffffffffffffffffeffffffffffffffffn;
 const B = 0x64210519e59c80e70fa7e9ab72243049feb8deecc146b9b1n;
 
+// Original: .Sauerbraten/src/shared/crypto.cpp, answerchallenge(). Sauerbraten serializes bigint values in padded 16-bit limbs.
 export function answerChallenge(privateKey, challenge) {
   if (!/^[0-9a-fA-F]{1,48}$/.test(privateKey) || BigInt(`0x${privateKey}`) === 0n) throw new Error("Invalid private key");
   const match = /^([+-])([0-9a-fA-F]{1,48})$/.exec(challenge);
@@ -14,7 +15,8 @@ export function answerChallenge(privateKey, challenge) {
   if (odd !== (match[1] === "-")) y = P - y;
   const answer = multiply({ x, y }, BigInt(`0x${privateKey}`));
   if (!answer) throw new Error("Invalid Sauerbraten authentication result");
-  return answer.x.toString(16);
+  const digits = answer.x.toString(16);
+  return digits.padStart(Math.ceil(digits.length / 4) * 4, "0");
 }
 
 function multiply(point, scalar) {
