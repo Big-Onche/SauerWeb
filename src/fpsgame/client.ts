@@ -17,6 +17,7 @@ import { canpickup, FpsEntities, I_BOOST, I_CARTRIDGES, I_QUAD, pickup, type Ent
 import { GameSound } from "./sound";
 import { MATF_CLIP, MAT_GAMECLIP } from "../engine/material";
 import { browserTeamkillProtection, TEAMKILL_PROTECTION_MESSAGE, TeamkillProtection } from "./teamkillProtection";
+import { ChatModeration } from "./chatModeration";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -87,13 +88,14 @@ export type MultiplayerEvent =
   | { type: "teamkill-protection"; message: string; cooldownMilliseconds: number }
   | { type: "bot-init"; player: NetworkPlayer };
 
-export function createClient(physics = new PhysicsSimulation(), teamkillProtection = browserTeamkillProtection()): FpsClient {
+export function createClient(physics = new PhysicsSimulation(), teamkillProtection = browserTeamkillProtection(),
+                             chatModeration = new ChatModeration()): FpsClient {
   const weapons = new WeaponSystem({
     raycast: (origin, direction, distance, radius, skipFirst) => physics.raycast(origin, direction, distance, radius, skipFirst),
     lookupMaterial: (position) => physics.lookupMaterial(position),
     collideBouncer: (position, radius, direction) => physics.collideBouncer(position, radius, direction),
   }, physics.player);
-  return { physics, weapons, multiplayer: new MultiplayerClient(physics, weapons, teamkillProtection) };
+  return { physics, weapons, multiplayer: new MultiplayerClient(physics, weapons, teamkillProtection, chatModeration) };
 }
 
 // Original: src/fpsgame/client.cpp
@@ -129,13 +131,15 @@ export class MultiplayerClient extends EventTarget {
   private quadWasActive = false;
   private lastQuadUpdate = 0;
   private readonly teamkillProtection: TeamkillProtection;
+  private readonly chatModeration: ChatModeration;
   private protectionTarget = "";
   private protectionDisconnecting = false;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem,
-              teamkillProtection = browserTeamkillProtection()) {
+              teamkillProtection = browserTeamkillProtection(), chatModeration = new ChatModeration()) {
     super();
     this.teamkillProtection = teamkillProtection;
+    this.chatModeration = chatModeration;
     this.collectMode = new CollectClientMode((origin, yaw) => this.moveCollectToken(origin, yaw));
     this.entities = new FpsEntities(physics, {
       effect: (effect, local) => this.emit({ type: "entity-effect", effect, local }),
@@ -367,14 +371,21 @@ export class MultiplayerClient extends EventTarget {
     return this.teamScores.get(team) ?? 0;
   }
 
-  sendChat(text: string, team = false): void {
-    const message = text.trim();
-    if ((!this.connected && !this.localGame) || !message) return;
+  sendChat(text: string, team = false): boolean {
+    if (!this.connected && !this.localGame) return false;
+    const target = this.localGame ? "local" : `${this.endpoint?.host ?? "unknown"}:${this.endpoint?.port ?? 0}`;
+    const validation = this.chatModeration.validate(text, target);
+    if (!validation.accepted) {
+      this.console(validation.feedback, "error");
+      return false;
+    }
+    const message = validation.message;
     const player = this.players.get(this.clientNumber);
     this.console(`${team ? "[team] " : ""}${this.displayName(player)}: ${message}`, team ? "team-chat" : "chat");
-    if (this.localGame) return;
+    if (this.localGame) return true;
     this.transport.send(1, new PacketWriter().putInt(team ? NetworkMessage.SayTeam : NetworkMessage.Text).putString(message).finish(), true);
     this.transport.flush();
+    return true;
   }
 
   // Native bot administration messages from ai.cpp.

@@ -9,6 +9,7 @@ import { createFpsEntityRegistry } from "./entities";
 import { ClientState } from "../engine/physics/types";
 import { GameSound } from "./sound";
 import { TEAMKILL_PROTECTION_MESSAGE, TeamkillProtection } from "./teamkillProtection";
+import { ChatModeration } from "./chatModeration";
 
 describe("Sauerbraten rifle protocol", () => {
   it("serializes the exact native N_SHOOT fields and hit record", () => {
@@ -168,6 +169,48 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.getInt()).toBe(type);
     expect(packet.getString()).toBe("hello team");
     expect(packet.remaining).toBe(0);
+  });
+
+  it.each([
+    { text: "   ", feedback: "Message not sent: empty message." },
+    { text: "H1TLER", feedback: "Message not sent: prohibited language." },
+  ])("rejects invalid chat before local echo or transmission: $feedback", ({ text, feedback }) => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    const flush = vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+    const lines: Array<{ text: string; consoleType: string }> = [];
+    client.multiplayer.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "console") lines.push(detail);
+    });
+
+    expect(client.multiplayer.sendChat(text)).toBe(false);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(flush).not.toHaveBeenCalled();
+    expect(lines).toEqual([{ text: feedback, consoleType: "error", type: "console" }]);
+  });
+
+  it("rate-limits public and team messages through the same pre-serialization validator", () => {
+    let now = 1_000;
+    const moderation = new ChatModeration({ maxMessages: 1, windowMilliseconds: 5_000, bannedWords: [] }, () => now);
+    const client = createClient(undefined, undefined, moderation);
+    client.multiplayer.connected = true;
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.multiplayer.transport, "flush").mockImplementation(() => undefined);
+    const lines: string[] = [];
+    client.multiplayer.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "console") lines.push(detail.text);
+    });
+
+    expect(client.multiplayer.sendChat("public", false)).toBe(true);
+    now += 100;
+    expect(client.multiplayer.sendChat("team", true)).toBe(false);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(lines.at(-1)).toBe("Message not sent: chat rate limit exceeded. Try again in 5s.");
   });
 });
 
