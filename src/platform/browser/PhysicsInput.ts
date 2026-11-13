@@ -139,7 +139,7 @@ export class BrowserPhysicsInput {
   };
 
   private readonly onDeviceOrientation = (event: DeviceOrientationEvent): void => {
-    const gyroActive = this.fullGyroContext ? this.settings.fullGyroEnabled : this.settings.gyroEnabled;
+    const gyroActive = this.settings.gyroEnabled || this.fullGyroContext && this.settings.fullGyroEnabled;
     if (!this.enabled || !touchControlsWanted(this.settings) || !gyroActive ||
         event.alpha === null || event.beta === null || event.gamma === null) return;
     const current = this.stabilizedViewAngles(event.alpha, event.beta, event.gamma);
@@ -147,7 +147,7 @@ export class BrowserPhysicsInput {
     this.previousGyro = current;
     if (!previous) return;
     const smoothing = this.settings.gyroSmoothing / 100;
-    const scale = this.settings.gyroSensitivity / 100 * (this.fullGyroContext ? 2.2 : 1);
+    const scale = this.settings.gyroSensitivity / 100 * (this.fullGyroContext && this.settings.fullGyroEnabled ? 2.2 : 1);
     const yaw = shortestAngle(current.yaw - previous.yaw) * scale * (this.settings.gyroInvertHorizontal ? -1 : 1);
     // PhysicsInputState pitch deltas use mouse-screen direction, opposite to camera pitch.
     const pitch = -(current.pitch - previous.pitch) * scale * (this.settings.gyroInvertVertical ? -1 : 1);

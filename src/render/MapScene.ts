@@ -162,6 +162,8 @@ export class MapScene {
   private localDeadAt = 0;
   private following = -1;
   private followDirection = 0;
+  private spectatorYawOffset = 0;
+  private spectatorPitchOffset = 0;
   private lastBotNetworkUpdate = 0;
   private readonly resizeObserver: ResizeObserver;
   private readonly performanceOverlay: RendererPerformanceOverlay;
@@ -958,7 +960,11 @@ export class MapScene {
     else if (!dead && wasDead) this.localDeadAt = 0;
     this.physicsInput.setFullGyroContext(this.isLocalPlayerSpectator());
     const input = this.physicsInput.sample();
-    const followed = this.followedPlayer();
+    let followed = this.followedPlayer();
+    if (followed && (input.forward || input.backward || input.left || input.right)) {
+      this.stopFollowing();
+      followed = undefined;
+    }
     let renderPosition: RegisteredMapEntity["position"];
     if (followed) {
       interpolateNetworkEntity(followed, nowMilliseconds);
@@ -966,10 +972,10 @@ export class MapScene {
       player.position = { ...followed.position };
       player.previousPosition = { ...followed.position };
       player.falling = { x: 0, y: 0, z: 0 };
-      player.yaw = followed.yaw;
-      player.pitch = followed.state === ClientState.Dead ? 0 : followed.pitch;
-      player.yaw = (player.yaw + input.yawDelta * 0.1 + 360) % 360;
-      player.pitch = Math.min(90, Math.max(-90, player.pitch - input.pitchDelta * 0.1));
+      this.spectatorYawOffset = (this.spectatorYawOffset + input.yawDelta * 0.1 + 360) % 360;
+      this.spectatorPitchOffset = Math.min(90, Math.max(-90, this.spectatorPitchOffset - input.pitchDelta * 0.1));
+      player.yaw = (followed.yaw + this.spectatorYawOffset) % 360;
+      player.pitch = Math.min(90, Math.max(-90, (followed.state === ClientState.Dead ? 0 : followed.pitch) + this.spectatorPitchOffset));
       player.roll = followed.roll;
       player.move = player.strafe = 0;
       player.physicsState = PhysicsState.Float;
@@ -1423,6 +1429,7 @@ export class MapScene {
       if (!candidate || candidate.clientNumber === multiplayer.clientNumber || candidate.state === ClientState.Spectator) continue;
       this.following = candidate.clientNumber;
       this.followDirection = step;
+      this.spectatorYawOffset = this.spectatorPitchOffset = 0;
       this.physics.player.velocity = { x: 0, y: 0, z: 0 };
       this.physics.player.falling = { x: 0, y: 0, z: 0 };
       this.physics.scheduler.reset(performance.now());
@@ -1436,6 +1443,7 @@ export class MapScene {
     if (this.following < 0) return;
     this.following = -1;
     this.followDirection = 0;
+    this.spectatorYawOffset = this.spectatorPitchOffset = 0;
     this.physics.scheduler.reset(performance.now());
     this.syncPlayerView();
   }
@@ -1485,7 +1493,8 @@ export class MapScene {
     const followed = this.followedPlayer();
     this.physicsInput.enabled = this.runtimeMode === "game";
     this.weaponInput.enabled = this.runtimeMode === "game" && !dead && !spectator;
-    this.touchControls.setGameplayEnabled(this.runtimeMode === "game" && !dead && !spectator);
+    this.touchControls.setSpectatorMode(spectator);
+    this.touchControls.setGameplayEnabled(this.runtimeMode === "game" && !dead);
     // Native gameplayhud remains active while dead and while freely spectating (health 0, clock/scores, and spectator text still render).
     this.weaponHUD.setVisible(this.runtimeMode === "game");
     this.crosshairHUD.setVisible(this.runtimeMode === "game" && !dead && (!spectator || followed?.state !== ClientState.Dead && Boolean(followed)));

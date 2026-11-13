@@ -17,6 +17,7 @@ export class TouchControls {
   private gameplayEnabled = true;
   private externallyBlocked = false;
   private portraitBlocked = false;
+  private spectatorMode = false;
 
   constructor(parent: HTMLElement, private readonly physics: BrowserPhysicsInput, private readonly weapons: BrowserWeaponInput) {
     this.root = document.createElement("div");
@@ -57,6 +58,12 @@ export class TouchControls {
 
   setGameplayEnabled(enabled: boolean): void { this.gameplayEnabled = enabled; this.syncVisibility(); }
   setBlocked(blocked: boolean): void { this.externallyBlocked = blocked; this.syncVisibility(); }
+  setSpectatorMode(enabled: boolean): void {
+    if (enabled === this.spectatorMode) return;
+    this.spectatorMode = enabled;
+    this.clear();
+    this.root.classList.toggle("spectator", enabled);
+  }
 
   dispose(): void {
     this.clear();

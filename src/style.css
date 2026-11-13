@@ -150,6 +150,7 @@ button { color: inherit; }
 .touch-jump { left: calc(env(safe-area-inset-left) + clamp(62px, 13vw, 148px)); }
 .touch-fire { right: calc(env(safe-area-inset-right) + clamp(62px, 13vw, 148px)); }
 .touch-action.pressed, .touch-corner.pressed { border-color: #ffc77fcc; background: #9b5725cc; transform: scale(.94); }
+.touch-controls.spectator .touch-action { display: none; }
 .touch-corner { position: absolute; top: calc(env(safe-area-inset-top) + 8px); display: grid; place-items: center; width: 48px; height: 42px;
   padding: 0; border: 1px solid #fff5; border-radius: 8px; background: #111a17a6; color: #fff; font: 700 13px "DM Mono", monospace;
   pointer-events: auto; touch-action: none; }
