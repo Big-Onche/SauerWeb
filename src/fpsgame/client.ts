@@ -99,6 +99,18 @@ export function createClient(physics = new PhysicsSimulation(), teamkillProtecti
   return { physics, weapons, multiplayer: new MultiplayerClient(physics, weapons, teamkillProtection, chatModeration) };
 }
 
+const AUTH_UNSPECTATE_INITIAL_DELAY_MILLISECONDS = 250;
+const AUTH_UNSPECTATE_FOLLOW_UP_DELAY_MILLISECONDS = 500;
+const AUTH_UNSPECTATE_FINAL_TIMEOUT_MILLISECONDS = 1_000;
+
+type AuthUnspectatePhase = "configured" | "waiting-server-state" | "initial-requested" | "follow-up-requested" | "granted"
+  | "stopped";
+
+interface AuthUnspectateState {
+  phase: AuthUnspectatePhase;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 // Original: src/fpsgame/client.cpp
 // Functions: parsepacketclient(), parsepositions(), parsemessages(), c2sinfo()
 // Sauerbraten reference: SVN r6488
@@ -138,9 +150,7 @@ export class MultiplayerClient extends EventTarget {
   private protectionDisconnecting = false;
   private relayAuth?: { name: string; domain: string };
   private relayAuthPrivilegeObserved = false;
-  private relayAuthAnswerSent = false;
-  private relayAuthAccessConfirmed = false;
-  private relayUnspectateRequested = false;
+  private relayAuthUnspectate?: AuthUnspectateState;
   private relayAuthMessageCount = 0;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem,
@@ -164,12 +174,6 @@ export class MultiplayerClient extends EventTarget {
   async connect(endpoint: ServerEndpoint): Promise<void> {
     this.disconnect();
     this.protectionDisconnecting = false;
-    this.relayAuth = undefined;
-    this.relayAuthPrivilegeObserved = false;
-    this.relayAuthAnswerSent = false;
-    this.relayAuthAccessConfirmed = false;
-    this.relayUnspectateRequested = false;
-    this.relayAuthMessageCount = 0;
     this.weapons.controller.serverAuthoritative = true;
     this.endpoint = { ...endpoint, playerName: endpoint.playerName.slice(0, 15) || "unnamed" };
     this.protectionTarget = `${endpoint.host}:${endpoint.port}`;
@@ -214,6 +218,7 @@ export class MultiplayerClient extends EventTarget {
   }
 
   disconnect(): void {
+    this.resetRelayAuthSession();
     this.transport.close();
     this.connected = false;
     this.localGame = false;
@@ -647,6 +652,7 @@ export class MultiplayerClient extends EventTarget {
       return true;
     }
     if (!this.connected || this.clientNumber < 0 || this.isSpectator === spectating) return false;
+    this.stopAuthenticatedUnspectate("manual spectator control took over", false);
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Spectator).putInt(this.clientNumber).putInt(spectating ? 1 : 0).finish(), true);
     this.transport.flush();
     return true;
@@ -673,6 +679,7 @@ export class MultiplayerClient extends EventTarget {
       return;
     }
     if (event.type === "disconnect") {
+      this.stopAuthenticatedUnspectate("connection ended", false);
       this.connected = false;
       this.weapons.controller.serverAuthoritative = false;
       this.console(`server network error, disconnecting (${event.data})`, "error");
@@ -689,15 +696,15 @@ export class MultiplayerClient extends EventTarget {
         this.emit({ type: "server-capacity", message: event.data.message });
       } else if (event.data.type === "auth-config") {
         this.relayAuth = { name: event.data.name, domain: event.data.domain };
+        this.relayAuthUnspectate = { phase: "configured" };
         this.authDiagnostic(`received relay identity '${event.data.name}' for domain '${event.data.domain}'`, "config-received");
       } else if (event.data.type === "auth-answer" && event.data.domain === this.relayAuth?.domain) {
         this.authDiagnostic(`received backend response for request ${event.data.id}`, "answer-received");
         this.transport.send(1, new PacketWriter().putInt(NetworkMessage.AuthAnswer).putString(event.data.domain)
           .putInt(event.data.id).putString(event.data.answer).finish(), true);
         this.transport.flush();
-        this.relayAuthAnswerSent = true;
+        this.beginAuthenticatedUnspectate();
         this.authDiagnostic(`sent reliable N_AUTHANS for request ${event.data.id}`, "answer-sent");
-        this.requestAuthenticatedUnspectate();
       }
       return;
     }
@@ -785,7 +792,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Welcome:
           this.connected = true;
           this.emit({ type: "status", status: this.serverDescription || "connected" });
-          this.requestAuthenticatedUnspectate();
+          this.scheduleAuthenticatedUnspectate(AUTH_UNSPECTATE_INITIAL_DELAY_MILLISECONDS);
           if (!this.mapName && this.endpoint?.map && this.endpoint.mode !== undefined) {
             this.transport.send(1, new PacketWriter().putInt(NetworkMessage.MapVote).putString(this.endpoint.map)
               .putInt(this.endpoint.mode).finish(), true);
@@ -896,7 +903,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.ServerMessage: {
           const message = packet.getString();
           this.console(message);
-          if (this.relayAuthAnswerSent && !this.relayAuthAccessConfirmed && this.relayAuthMessageCount++ < 10) {
+          if (this.authUnspectatePending && this.relayAuthMessageCount++ < 10) {
             this.authDiagnostic("received N_SERVMSG while authentication is pending", "server-message", message);
           }
           break;
@@ -985,15 +992,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.Spectator: {
           const clientNumber = packet.getInt(), spectating = packet.getInt() !== 0;
           this.setSpectatorState(clientNumber, spectating);
-          if (clientNumber === this.clientNumber && this.relayAuth) {
-            this.authDiagnostic(`server set local spectator state to ${spectating ? "on" : "off"}`,
-              spectating ? "spectator-on" : "access-granted");
-            if (spectating) this.requestAuthenticatedUnspectate();
-            else if (this.relayAuthAnswerSent && !this.relayAuthAccessConfirmed) {
-              this.relayAuthAccessConfirmed = true;
-              this.transport.reportAuthSuccess();
-            }
-          }
+          if (clientNumber === this.clientNumber && this.relayAuth) this.handleAuthenticatedSpectatorState(spectating);
           break;
         }
         case NetworkMessage.EditEntity:
@@ -1034,13 +1033,93 @@ export class MultiplayerClient extends EventTarget {
     }
   }
 
-  private requestAuthenticatedUnspectate(): void {
-    if (!this.relayAuthAnswerSent || this.relayAuthAccessConfirmed || this.relayUnspectateRequested || !this.connected ||
-        this.clientNumber < 0 || !this.isSpectator) return;
-    this.relayUnspectateRequested = true;
+  private get authUnspectatePending(): boolean {
+    const phase = this.relayAuthUnspectate?.phase;
+    return phase === "waiting-server-state" || phase === "initial-requested" || phase === "follow-up-requested";
+  }
+
+  private beginAuthenticatedUnspectate(): void {
+    this.clearAuthenticatedUnspectateTimer();
+    this.relayAuthUnspectate = { phase: "waiting-server-state" };
+    if (this.connected) this.scheduleAuthenticatedUnspectate(AUTH_UNSPECTATE_INITIAL_DELAY_MILLISECONDS);
+  }
+
+  private handleAuthenticatedSpectatorState(spectating: boolean): void {
+    const state = this.relayAuthUnspectate;
+    this.authDiagnostic(`server set local spectator state to ${spectating ? "on" : "off"}`,
+      spectating ? "spectator-on" : "access-granted");
+    if (!state || state.phase === "configured" || state.phase === "granted" || state.phase === "stopped") return;
+    if (!spectating) {
+      state.phase = "granted";
+      this.clearAuthenticatedUnspectateTimer();
+      this.transport.reportAuthSuccess();
+      return;
+    }
+    if (state.phase === "waiting-server-state") {
+      this.authDiagnostic("server spectator enforcement observed after authentication", "spectator-enforcement-observed");
+      this.sendAuthenticatedUnspectate(false);
+    } else if (state.phase === "initial-requested") {
+      this.authDiagnostic("server spectator enforcement superseded the initial unspectate request", "spectator-enforcement-observed");
+      this.sendAuthenticatedUnspectate(true);
+    } else if (state.phase === "follow-up-requested") {
+      this.stopAuthenticatedUnspectate("server kept the player in spectator mode after the bounded follow-up", true);
+    }
+  }
+
+  private sendAuthenticatedUnspectate(followUp: boolean): void {
+    const state = this.relayAuthUnspectate;
+    if (!state || !this.connected || this.clientNumber < 0 || !this.isSpectator) return;
+    if (followUp ? state.phase !== "initial-requested" : state.phase !== "waiting-server-state") return;
+    this.clearAuthenticatedUnspectateTimer();
+    state.phase = followUp ? "follow-up-requested" : "initial-requested";
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Spectator).putInt(this.clientNumber).putInt(0).finish(), true);
     this.transport.flush();
-    this.authDiagnostic("sent one reliable N_SPECTATOR unspectate request after N_AUTHANS", "unspectate-requested");
+    this.authDiagnostic(followUp ? "sent bounded follow-up N_SPECTATOR unspectate request" :
+      "sent initial N_SPECTATOR unspectate request", followUp ? "follow-up-unspectate-requested" : "initial-unspectate-requested");
+    this.scheduleAuthenticatedUnspectate(followUp ? AUTH_UNSPECTATE_FINAL_TIMEOUT_MILLISECONDS :
+      AUTH_UNSPECTATE_FOLLOW_UP_DELAY_MILLISECONDS);
+  }
+
+  private scheduleAuthenticatedUnspectate(delay: number): void {
+    const state = this.relayAuthUnspectate;
+    if (!state || state.timer || !this.authUnspectatePending) return;
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      if (state.phase === "waiting-server-state") {
+        if (!this.connected || !this.players.has(this.clientNumber)) {
+          this.stopAuthenticatedUnspectate("timed out waiting for the server's authenticated player state", true);
+        } else if (this.isSpectator) this.sendAuthenticatedUnspectate(false);
+        else this.handleAuthenticatedSpectatorState(false);
+      } else if (state.phase === "initial-requested") {
+        if (this.isSpectator) this.sendAuthenticatedUnspectate(true);
+        else this.handleAuthenticatedSpectatorState(false);
+      } else if (state.phase === "follow-up-requested") {
+        if (this.isSpectator) this.stopAuthenticatedUnspectate("still spectator after the bounded follow-up timeout", true);
+        else this.handleAuthenticatedSpectatorState(false);
+      }
+    }, delay);
+  }
+
+  private stopAuthenticatedUnspectate(reason: string, report: boolean): void {
+    const state = this.relayAuthUnspectate;
+    if (!state || state.phase === "granted" || state.phase === "stopped") return;
+    state.phase = "stopped";
+    this.clearAuthenticatedUnspectateTimer();
+    if (report) this.authDiagnostic(reason, "still-spectator");
+  }
+
+  private clearAuthenticatedUnspectateTimer(): void {
+    const timer = this.relayAuthUnspectate?.timer;
+    if (timer) clearTimeout(timer);
+    if (this.relayAuthUnspectate) this.relayAuthUnspectate.timer = undefined;
+  }
+
+  private resetRelayAuthSession(): void {
+    this.clearAuthenticatedUnspectateTimer();
+    this.relayAuth = undefined;
+    this.relayAuthPrivilegeObserved = false;
+    this.relayAuthUnspectate = undefined;
+    this.relayAuthMessageCount = 0;
   }
 
   private authDiagnostic(message: string, stage: string, serverMessage?: string): void {
@@ -1409,6 +1488,7 @@ export class MultiplayerClient extends EventTarget {
   private disconnectForTeamkills(cooldownMilliseconds: number): void {
     if (this.protectionDisconnecting) return;
     this.protectionDisconnecting = true;
+    this.stopAuthenticatedUnspectate("teamkill protection disconnected the session", false);
     this.connected = false;
     this.weapons.controller.serverAuthoritative = false;
     this.console(TEAMKILL_PROTECTION_MESSAGE, "error");

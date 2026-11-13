@@ -259,8 +259,9 @@ export function attachSauerRelay(httpServer, options = {}) {
     }
     if (request?.type === "auth-stage") {
       const stages = new Set(["config-received", "connect-sent", "request-received", "auth-try-sent", "challenge-received",
-        "answer-received", "answer-sent", "spectator-on", "unspectate-requested", "access-granted", "privilege-observed",
-        "domain-mismatch", "server-domain-received", "server-domain-mismatch", "server-message"]);
+        "answer-received", "answer-sent", "spectator-on", "spectator-enforcement-observed", "initial-unspectate-requested",
+        "follow-up-unspectate-requested", "access-granted", "still-spectator", "privilege-observed", "domain-mismatch",
+        "server-domain-received", "server-domain-mismatch", "server-message"]);
       if (!config?.autoauth || !stages.has(request.stage)) return true;
       state.lastStage = request.stage;
       const detail = request.stage === "server-message" && typeof request.message === "string"
@@ -273,6 +274,10 @@ export function attachSauerRelay(httpServer, options = {}) {
             `last stage: ${state.lastStage}.`);
         }, 5_000);
         state.timeout.unref();
+      } else if (request.stage === "still-spectator") {
+        if (state.timeout) clearTimeout(state.timeout);
+        state.timeout = undefined;
+        console.warn(`[server-config] Authenticated unspectate handling stopped for ${target.host}:${target.port}; player is still spectator.`);
       }
       return true;
     }

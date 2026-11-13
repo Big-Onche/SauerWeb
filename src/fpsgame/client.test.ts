@@ -271,32 +271,100 @@ describe("native server message framing", () => {
       .toEqual([NetworkMessage.AuthAnswer, "example-domain", 17, "abcd"]);
   });
 
-  it("requests unspectate once after N_AUTHANS and confirms access from N_SPECTATOR rather than N_CURRENTMASTER", () => {
-    const client = createClient().multiplayer;
-    client.connected = true;
-    client.clientNumber = 4;
-    Reflect.set(client, "relayAuth", { name: "relay-user", domain: "example-domain" });
-    Reflect.set(client, "relayAuthAnswerSent", true);
-    const player = Reflect.apply(Reflect.get(client, "playerFor"), client, [4]) as NetworkPlayer;
-    player.state = ClientState.Spectator;
-    const send = vi.spyOn(client.transport, "send").mockImplementation(() => undefined);
-    vi.spyOn(client.transport, "flush").mockImplementation(() => undefined);
-    const success = vi.spyOn(client.transport, "reportAuthSuccess").mockImplementation(() => undefined);
-    vi.spyOn(console, "info").mockImplementation(() => undefined);
+  it("follows up once when post-auth proxy enforcement supersedes the initial unspectate request", () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient().multiplayer;
+      client.connected = true;
+      client.clientNumber = 4;
+      Reflect.set(client, "relayAuth", { name: "relay-user", domain: "example-domain" });
+      const player = Reflect.apply(Reflect.get(client, "playerFor"), client, [4]) as NetworkPlayer;
+      player.state = ClientState.Spectator;
+      const send = vi.spyOn(client.transport, "send").mockImplementation(() => undefined);
+      vi.spyOn(client.transport, "flush").mockImplementation(() => undefined);
+      const stages = vi.spyOn(client.transport, "reportAuthStage").mockImplementation(() => undefined);
+      const success = vi.spyOn(client.transport, "reportAuthSuccess").mockImplementation(() => undefined);
+      vi.spyOn(console, "info").mockImplementation(() => undefined);
 
-    const spectatorOn = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(1).finish();
-    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOn)]);
-    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOn)]);
+      Reflect.apply(Reflect.get(client, "beginAuthenticatedUnspectate"), client, []);
+      vi.advanceTimersByTime(250);
+      const proxyNotice = new PacketWriter().putInt(NetworkMessage.ServerMessage)
+        .putString("Server policy kept this client spectating.").finish();
+      Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(proxyNotice)]);
+      const spectatorOn = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(1).finish();
+      Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOn)]);
 
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][0]).toBe(1);
-    expect(send.mock.calls[0][2]).toBe(true);
-    const unspectate = new PacketReader(send.mock.calls[0][1]);
-    expect([unspectate.getInt(), unspectate.getInt(), unspectate.getInt()]).toEqual([NetworkMessage.Spectator, 4, 0]);
-    expect(success).not.toHaveBeenCalled();
-    const spectatorOff = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(0).finish();
-    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOff)]);
-    expect(success).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send.mock.calls[0][0]).toBe(1);
+      expect(send.mock.calls[0][2]).toBe(true);
+      for (const call of send.mock.calls) {
+        const unspectate = new PacketReader(call[1]);
+        expect([unspectate.getInt(), unspectate.getInt(), unspectate.getInt()]).toEqual([NetworkMessage.Spectator, 4, 0]);
+      }
+      expect(stages).toHaveBeenCalledWith("initial-unspectate-requested", undefined);
+      expect(stages).toHaveBeenCalledWith("server-message", "Server policy kept this client spectating.");
+      expect(stages).toHaveBeenCalledWith("spectator-enforcement-observed", undefined);
+      expect(stages).toHaveBeenCalledWith("follow-up-unspectate-requested", undefined);
+      expect(success).not.toHaveBeenCalled();
+      const spectatorOff = new PacketWriter().putInt(NetworkMessage.Spectator).putInt(4).putInt(0).finish();
+      Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(spectatorOff)]);
+      expect(success).toHaveBeenCalledTimes(1);
+      expect(stages).toHaveBeenCalledWith("access-granted", undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses only two bounded unspectate attempts when no server state transition arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient().multiplayer;
+      client.connected = true;
+      client.clientNumber = 4;
+      Reflect.set(client, "relayAuth", { name: "relay-user", domain: "example-domain" });
+      const player = Reflect.apply(Reflect.get(client, "playerFor"), client, [4]) as NetworkPlayer;
+      player.state = ClientState.Spectator;
+      const send = vi.spyOn(client.transport, "send").mockImplementation(() => undefined);
+      vi.spyOn(client.transport, "flush").mockImplementation(() => undefined);
+      vi.spyOn(client.transport, "reportAuthStage").mockImplementation(() => undefined);
+      vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+      Reflect.apply(Reflect.get(client, "beginAuthenticatedUnspectate"), client, []);
+      vi.advanceTimersByTime(250);
+      expect(send).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(500);
+      expect(send).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(10_000);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(Reflect.get(client, "relayAuthUnspectate")).toMatchObject({ phase: "stopped" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears pending authenticated unspectate work when reconnecting", () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient().multiplayer;
+      client.connected = true;
+      client.clientNumber = 4;
+      Reflect.set(client, "relayAuth", { name: "relay-user", domain: "example-domain" });
+      const player = Reflect.apply(Reflect.get(client, "playerFor"), client, [4]) as NetworkPlayer;
+      player.state = ClientState.Spectator;
+      const send = vi.spyOn(client.transport, "send").mockImplementation(() => undefined);
+      vi.spyOn(client.transport, "flush").mockImplementation(() => undefined);
+      vi.spyOn(client.transport, "close").mockImplementation(() => undefined);
+
+      Reflect.apply(Reflect.get(client, "beginAuthenticatedUnspectate"), client, []);
+      client.disconnect();
+      vi.advanceTimersByTime(10_000);
+
+      expect(send).not.toHaveBeenCalled();
+      expect(Reflect.get(client, "relayAuthUnspectate")).toBeUndefined();
+      expect(Reflect.get(client, "relayAuth")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces a relay cooldown before the native server welcome completes", () => {
