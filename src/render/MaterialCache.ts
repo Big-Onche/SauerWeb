@@ -9,6 +9,7 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { ResolvedTexture } from "../assets/types";
 import type { Lightmap } from "../engine/octa";
 import { DEFAULT_MAP_LIGHTING, sauerColorBytes } from "./MapLighting";
+import { CAUSTIC_SHADER_DEFINITIONS, StandardMaterialCaustics, type MapCausticResources } from "./MapCaustics";
 
 export type SauerSurfaceMode = "opaque" | "alpha-test" | "transparent" | "special";
 export type SauerLightmapMode = "ambient" | "bright" | "dark" | "atlas";
@@ -82,7 +83,7 @@ export class MaterialCache {
   private neutralDirectionTexture?: RawTexture;
 
   constructor(private readonly scene: Scene, private readonly lightmaps: Lightmap[] = [],
-              private readonly ambient = DEFAULT_MAP_LIGHTING.ambient) {}
+              private readonly ambient = DEFAULT_MAP_LIGHTING.ambient, private readonly caustics?: MapCausticResources) {}
 
   get(descriptor: SauerMaterialDescriptor): StandardMaterial | ShaderMaterial {
     const key = stableKey(descriptor);
@@ -118,6 +119,7 @@ export class MaterialCache {
     material.backFaceCulling = false;
     material.disableLighting = true;
     material.alpha = descriptor.alpha;
+    if (this.caustics) new StandardMaterialCaustics(material, this.caustics);
 
     const lightmap = this.getLightmapTexture(descriptor.lightmapId);
     if (lightmap) {
@@ -167,15 +169,20 @@ export class MaterialCache {
   }
 
   private createBumpMaterial(descriptor: SauerMaterialDescriptor, index: number): ShaderMaterial {
+    const fragmentSource = this.caustics
+      ? SAUER_BUMP_FRAGMENT_SHADER.replace("precision highp float;", `precision highp float;\n${CAUSTIC_SHADER_DEFINITIONS}`)
+        .replace("color *= bakedLight;", "color *= bakedLight;\n    color *= mapCausticMultiplier(vWorldPosition);")
+      : SAUER_BUMP_FRAGMENT_SHADER;
     const material = new ShaderMaterial(`map-bump-material-${index}`, this.scene, {
       vertexSource: SAUER_BUMP_VERTEX_SHADER,
-      fragmentSource: SAUER_BUMP_FRAGMENT_SHADER,
+      fragmentSource,
     }, {
       attributes: ["position", "normal", "tangent", "uv", "uv2", "color"],
       uniforms: ["world", "worldViewProjection", "cameraPosition", "ambientColor", "specularScale", "textureScale", "textureOffset",
         "glowScale", "alpha", "hasNormalMap", "hasSpecular", "hasSpecularMap", "hasGlowMap", "hasOpacityMap", "alphaCutoff", "fogColor",
-        "fogStart", "fogEnd"],
-      samplers: ["diffuseSampler", "normalSampler", "specularSampler", "lightmapSampler", "directionSampler", "glowSampler", "opacitySampler"],
+        "fogStart", "fogEnd", ...(this.caustics ? ["causticLookupInfo", "causticFrameInfo"] : [])],
+      samplers: ["diffuseSampler", "normalSampler", "specularSampler", "lightmapSampler", "directionSampler", "glowSampler", "opacitySampler",
+        ...(this.caustics ? ["waterLookupSampler", "firstCausticSampler", "secondCausticSampler"] : [])],
       needAlphaBlending: descriptor.surfaceMode === "transparent" || descriptor.useLightmapAlpha,
       needAlphaTesting: descriptor.surfaceMode === "alpha-test",
     });
@@ -223,6 +230,8 @@ export class MaterialCache {
       material.setColor3("fogColor", this.scene.fogColor);
       material.setFloat("fogStart", this.scene.fogEnabled ? this.scene.fogStart : Number.MAX_VALUE);
       material.setFloat("fogEnd", this.scene.fogEnabled ? this.scene.fogEnd : Number.MAX_VALUE);
+      const effect = material.getEffect();
+      if (effect && this.caustics) this.caustics.bind(effect);
     });
     if (descriptor.surfaceMode === "transparent" || descriptor.useLightmapAlpha) material.needDepthPrePass = true;
     return material;
@@ -331,6 +340,7 @@ const SAUER_BUMP_VERTEX_SHADER = `
   varying vec3 vCameraDirection;
   varying vec4 vColor;
   varying float vFogDistance;
+  varying vec3 vWorldPosition;
 
   void main(void) {
     vec4 worldPosition = world * vec4(position, 1.0);
@@ -343,6 +353,7 @@ const SAUER_BUMP_VERTEX_SHADER = `
     vLightmapUV = uv2;
     vColor = color;
     vFogDistance = length(cameraVector);
+    vWorldPosition = worldPosition.xyz;
     gl_Position = worldViewProjection * vec4(position, 1.0);
   }
 `;
@@ -374,6 +385,7 @@ const SAUER_BUMP_FRAGMENT_SHADER = `
   varying vec3 vCameraDirection;
   varying vec4 vColor;
   varying float vFogDistance;
+  varying vec3 vWorldPosition;
 
   void main(void) {
     vec4 diffuse = texture2D(diffuseSampler, vTextureUV) * vColor;

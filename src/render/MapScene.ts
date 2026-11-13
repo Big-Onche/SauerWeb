@@ -32,6 +32,7 @@ import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSk
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { animatedWaterSurfaceHeight, resolveMapWater, underwaterFogBlend, type MapWaterMaterial } from "./MapWater";
 import { loadWaterQuality, type WaterQuality } from "./WaterSettings";
+import { createMapCausticResources, shouldUseCaustics, StandardMaterialCaustics, type MapCausticResources } from "./MapCaustics";
 import { installSauerFogDistance } from "./SauerFogShader";
 import { BrowserFreeCameraInput, BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics";
@@ -160,6 +161,7 @@ export class MapScene {
   private waterNormalTexture?: Texture;
   private waterDistortionTexture?: Texture;
   private waterReflectionTexture?: CubeTexture;
+  private mapCaustics?: MapCausticResources;
   private waterParameters: MapWaterMaterial[] = [];
   private mapFog?: MapFog;
   private waterQuality: WaterQuality = loadWaterQuality();
@@ -337,7 +339,9 @@ export class MapScene {
     this.waypointMeshes.length = 0;
     this.entityModelAnimations.length = 0;
     this.materialCache.dispose();
-    this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient);
+    this.mapCaustics?.dispose();
+    this.mapCaustics = shouldUseCaustics(this.waterQuality) ? createMapCausticResources(this.scene, map) : undefined;
+    this.materialCache = new MaterialCache(this.scene, map.lightmaps, lighting.ambient, this.mapCaustics);
     this.fallbackMaterial?.dispose(true, true);
     this.fallbackMaterial = undefined;
     this.skyboxMaterial?.dispose(true, true);
@@ -949,6 +953,7 @@ export class MapScene {
     material.emissiveColor = Color3.White();
     material.disableLighting = true;
     material.wireframe = this.wireframe;
+    if (this.mapCaustics) new StandardMaterialCaustics(material, this.mapCaustics);
     this.fallbackMaterial = material;
     return this.fallbackMaterial;
   }
