@@ -473,6 +473,23 @@ describe("native server message framing", () => {
     expect(consoleLines).toEqual(["aligned"]);
   });
 
+  it("consumes native auth requests and server commands without losing packet alignment", () => {
+    const client = createClient().multiplayer;
+    const consoleLines: string[] = [];
+    client.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "console") consoleLines.push(detail.text);
+    });
+    const packet = new PacketWriter()
+      .putInt(NetworkMessage.RequestAuth).putString("auth-domain")
+      .putInt(NetworkMessage.ServerCommand).putString("server-command")
+      .putInt(NetworkMessage.ServerMessage).putString("aligned")
+      .finish();
+
+    expect(() => Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(packet)])).not.toThrow();
+    expect(consoleLines).toEqual(["aligned"]);
+  });
+
   it("emits playsound events for native sound and explosion messages without losing packet alignment", () => {
     const client = createClient().multiplayer, sounds: number[] = [], lines: string[] = [];
     client.addEventListener("multiplayer", (event) => {

@@ -907,6 +907,7 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.PauseGame: packet.getInt(); packet.getInt(); break;
         case NetworkMessage.GameSpeed: packet.getInt(); packet.getInt(); break;
+        case NetworkMessage.RequestAuth: packet.getString(); break;
         case NetworkMessage.Spectator: {
           this.setSpectatorState(packet.getInt(), packet.getInt() !== 0);
           break;
@@ -914,6 +915,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.EditEntity:
           for (let field = 0; field < 10; field++) packet.getInt();
           break;
+        case NetworkMessage.ServerCommand: packet.getString(); break;
         case NetworkMessage.DemoPacket: break;
         default: throw new Error(`Unsupported server message ${type} on protocol 260.`);
       }
