@@ -9,10 +9,11 @@ export class ExplosionSystem {
   constructor(private readonly damage: DamageSystem, private readonly events: WeaponEvents) {}
 
   explode(gun: Gun, owner: Damageable, position: Vec3, baseDamage: number, targets: readonly Damageable[], safe?: Damageable,
-          applyDamage = true): WeaponHit[] {
+          applyDamage = true, normal?: Vec3): WeaponHit[] {
     const definition = WEAPONS[gun];
     const hits: WeaponHit[] = [];
-    this.events.emit({ type: "explosion", gun, position: { ...position }, radius: definition.explosionRadius });
+    this.events.emit({ type: "explosion", gun, position: { ...position }, radius: definition.explosionRadius,
+      normal: normal ? { ...normal } : undefined });
     for (const target of targets) {
       if (!target.alive || target === safe) continue;
       const middle = { ...target.position, z: target.position.z + (target.aboveEye - target.eyeHeight) / 2 };

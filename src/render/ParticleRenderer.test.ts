@@ -4,7 +4,7 @@ import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
 import { explosionTexgenBasis, ParticleRenderer, sauerParticleColor, sauerParticleDiameter, sauerParticleOffset,
@@ -113,5 +113,43 @@ describe("Sauerbraten particle entity helpers", () => {
     expect(Vector3.Dot(basis.right, basis.up)).toBeCloseTo(0);
     expect(basis.right.length()).toBeCloseTo(1);
     expect(basis.up.length()).toBeCloseTo(1);
+  });
+
+  it("renders rockets as keyed 3D model instances and disposes only the exact projectile", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/bouncers") return new Response(JSON.stringify([{
+        index: 12, name: "projectiles/rocket", status: "ready", format: "OBJ", geometryPath: "rocket.obj", skins: [],
+        scale: 1, reason: "",
+      }]));
+      if (url.includes("rocket.obj")) return new Response("v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n");
+      return new Response("not found", { status: 404 });
+    });
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+    const spawn = (key: string, y: number): void => events.emit({
+      type: "projectile-spawned", key, gun: Gun.Rocket, id: 42, ownerId: key, local: false,
+      position: { x: 0, y, z: 0 }, destination: { x: 64, y, z: 0 }, direction: { x: 1, y: 0, z: 0 },
+      offset: { x: 0, y: 0, z: 0 }, offsetMillis: 0,
+    });
+
+    try {
+      spawn("first:3:42", 0);
+      spawn("second:3:42", 10);
+      await vi.waitFor(() => expect(scene.meshes.filter((mesh) => mesh.name.startsWith("weapon-projectile-")).length).toBe(2));
+      const first = scene.meshes.find((mesh) => mesh.name.startsWith("weapon-projectile-first:3:42"));
+      expect(first?.billboardMode).toBe(0);
+      expect(first?.position.asArray()).toEqual([3, 0, 0]);
+
+      events.emit({ type: "explosion", gun: Gun.Rocket, position: { x: 0, y: 10, z: 0 }, radius: 40 });
+      expect(scene.meshes.filter((mesh) => mesh.name.startsWith("weapon-projectile-")).length).toBe(2);
+      events.emit({ type: "projectile-removed", key: "second:3:42" });
+      expect(scene.meshes.filter((mesh) => mesh.name.startsWith("weapon-projectile-")).length).toBe(1);
+    } finally {
+      renderer.clear();
+      engine.dispose();
+      fetchMock.mockRestore();
+    }
   });
 });

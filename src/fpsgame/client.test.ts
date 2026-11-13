@@ -384,7 +384,8 @@ describe("native server message framing", () => {
 
     Reflect.apply(Reflect.get(client, "parseMessages"), client, [7, new PacketReader(packet)]);
 
-    expect(sounds).toEqual([GameSound.Jump, GameSound.RocketHit]);
+    // Native explodeeffects() only plays the impact sound after matching an active owner + gun + projectile id.
+    expect(sounds).toEqual([GameSound.Jump]);
     expect(lines).toEqual(["aligned"]);
   });
 });

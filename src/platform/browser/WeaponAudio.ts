@@ -65,7 +65,8 @@ export class GameAudio {
       this.playsound(SHOT_SOUNDS[event.gun], event.from);
     } else if (event.type === "selected") this.playsound(GameSound.WeaponLoad);
     else if (event.type === "no-ammo") this.playsound(GameSound.NoAmmo);
-    else if (event.type === "explosion") this.playsound(event.gun === Gun.Grenade ? GameSound.FireballExplode : GameSound.RocketHit, event.position);
+    else if (event.type === "explosion") this.playsound(event.gun === Gun.Rocket ? GameSound.RocketHit : GameSound.FireballExplode,
+      event.position);
     else if (event.type === "damage" && event.target.health > 0) {
       const local = event.target === this.localPlayer;
       this.playsound(local ? GameSound.Pain6 : GameSound.Pain1 + Math.floor(Math.random() * 5), local ? undefined : event.target.position);

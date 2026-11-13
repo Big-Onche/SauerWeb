@@ -22,6 +22,7 @@ import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
 import { parseIqm, parseMd2, parseMd3, parseMd5, parseObj, type ModelGeometry } from "../engine/rendermodel";
 import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
+import { projectileRenderPose, projectileVisualPosition } from "../fpsgame/weapon/ProjectileSystem";
 import { toBabylonDirection, toBabylonPosition } from "./coordinates";
 import { selectModelSkin } from "./modelSkin";
 
@@ -52,7 +53,12 @@ interface PooledParticleSystem {
 interface ProjectileEffect {
   gun: Gun;
   position: Vec3;
-  mesh?: Mesh;
+  destination: Vec3;
+  direction: Vec3;
+  offset: Vec3;
+  offsetMillis: number;
+  meshes: Mesh[];
+  light?: PointLight;
 }
 
 interface BouncerEffect {
@@ -158,9 +164,10 @@ export class ParticleRenderer {
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly persistentMeshes = new Set<Mesh>();
   private readonly effects: SpriteEffect[] = [];
-  private readonly projectiles = new Map<number, ProjectileEffect>();
+  private readonly projectiles = new Map<string, ProjectileEffect>();
   private readonly bouncers = new Map<string, BouncerEffect>();
   private bouncerTemplates?: Promise<Map<number, Mesh[]>>;
+  private templateGeneration = 0;
   private renderingEnabled = true;
 
   constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera,
@@ -180,7 +187,10 @@ export class ParticleRenderer {
     this.systemPool.forEach(({ system }) => { system.layerMask = enabled ? PARTICLE_LAYER_MASK : 0; });
     this.persistentMeshes.forEach((mesh) => { mesh.isVisible = enabled; });
     this.effects.forEach((effect) => { effect.mesh.isVisible = enabled; });
-    this.projectiles.forEach((projectile) => { if (projectile.mesh) projectile.mesh.isVisible = enabled; });
+    this.projectiles.forEach((projectile) => {
+      projectile.meshes.forEach((mesh) => { mesh.isVisible = enabled; });
+      projectile.light?.setEnabled(enabled);
+    });
     this.bouncers.forEach((bouncer) => bouncer.meshes.forEach((mesh) => { mesh.isVisible = enabled; }));
   }
 
@@ -222,11 +232,15 @@ export class ParticleRenderer {
     this.effects.length = 0;
     this.persistentMeshes.forEach((mesh) => this.disposeMesh(mesh));
     this.persistentMeshes.clear();
-    this.projectiles.forEach((projectile) => projectile.mesh && this.disposeMesh(projectile.mesh));
+    this.projectiles.forEach((projectile) => {
+      projectile.meshes.forEach((mesh) => this.disposeMesh(mesh));
+      projectile.light?.dispose();
+    });
     this.projectiles.clear();
     this.bouncers.forEach((bouncer) => bouncer.meshes.forEach((mesh) => mesh.dispose(false, false)));
     this.bouncers.clear();
     this.bouncerTemplates = undefined;
+    this.templateGeneration++;
     this.systemPool.forEach(({ system }) => system.dispose(false));
     this.systemPool.length = 0;
     this.spritePool.forEach((mesh) => mesh.dispose());
@@ -341,14 +355,15 @@ export class ParticleRenderer {
   private handleWeaponEvent(event: WeaponEvent): void {
     if (event.type === "shot" || event.type === "shot-effect") this.shot(event.gun, event.from, event.to, event.rays,
       () => this.taggedMuzzle(event));
-    else if (event.type === "projectile-spawned") this.spawnProjectile(event.id, event.gun, event.position);
-    else if (event.type === "projectile-moved") this.moveProjectile(event.id, event.position);
+    else if (event.type === "projectile-spawned") void this.spawnProjectile(event);
+    else if (event.type === "projectile-moved") this.moveProjectile(event);
+    else if (event.type === "projectile-removed") this.removeProjectile(event.key);
     else if (event.type === "bouncer-spawned") void this.spawnBouncer(event.key, event.bouncerType, event.variant, event.position);
     else if (event.type === "bouncer-moved") this.moveBouncer(event.key, event.position, event.yaw, event.roll, event.smoke, event.fade);
     else if (event.type === "bouncer-removed") this.removeBouncer(event.key);
     else if (event.type === "bouncer-impact") this.decal(event.position, event.normal, "blood.png", 0x60ffff,
       2.96 / event.bounces);
-    else if (event.type === "explosion") this.explosion(event.gun, event.position, event.radius);
+    else if (event.type === "explosion") this.explosion(event.gun, event.position, event.radius, event.normal);
   }
 
   // Original: src/fpsgame/weapon.cpp
@@ -376,29 +391,79 @@ export class ParticleRenderer {
     else if (gun === Gun.Grenade) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 1.5, 200, 20, taggedMuzzle);
   }
 
-  private spawnProjectile(id: number, gun: Gun, position: Vec3): void {
-    const projectile: ProjectileEffect = { gun, position: { ...position } };
+  private async spawnProjectile(event: Extract<WeaponEvent, { type: "projectile-spawned" }>): Promise<void> {
+    if (this.projectiles.has(event.key)) return;
+    const { gun } = event;
+    const projectile: ProjectileEffect = {
+      gun, position: { ...event.position }, destination: { ...event.destination }, direction: { ...event.direction },
+      offset: { ...event.offset }, offsetMillis: event.offsetMillis, meshes: [],
+    };
+    this.projectiles.set(event.key, projectile);
+    if (gun === Gun.Rocket) {
+      const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates(this.templateGeneration));
+      if (this.projectiles.get(event.key) !== projectile) return;
+      projectile.meshes = (templates.get(12) ?? []).map((template) => {
+        const mesh = template.clone(`weapon-projectile-${event.key}-${template.name}`, null, false)!;
+        mesh.setEnabled(true);
+        mesh.isVisible = this.renderingEnabled;
+        mesh.isPickable = false;
+        return mesh;
+      });
+      const light = new PointLight(`weapon-projectile-light-${event.key}`, Vector3.Zero(), this.scene);
+      light.diffuse = new Color3(1, 0.75, 0.5);
+      light.intensity = 1;
+      light.range = 20;
+      projectile.light = light;
+      this.positionProjectile(projectile);
+      return;
+    }
     const texture = gun === Gun.Iceball ? "ball2.png" : gun === Gun.Slimeball ? "ball3.png" : "ball1.png";
-    const color = gun === Gun.Iceball ? 0x80ffff : gun === Gun.Slimeball ? 0x80ff80 : gun === Gun.Grenade ? 0x80ffff : 0xffc8c8;
-    const material = this.spriteMaterial(`projectile-${id}`, texture, color, true);
-    const nativeSize = gun === Gun.Rocket ? 2.5 : 4.8;
-    const mesh = MeshBuilder.CreatePlane(`weapon-projectile-${id}`, { size: sauerParticleDiameter(nativeSize) }, this.scene);
-    mesh.isVisible = this.renderingEnabled;
-    mesh.position.copyFrom(toBabylonPosition(position));
-    mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
-    mesh.isPickable = false;
-    mesh.material = material;
-    projectile.mesh = mesh;
-    this.projectiles.set(id, projectile);
+    const color = gun === Gun.Iceball ? 0xffffff : gun === Gun.Slimeball ? 0xffffff : 0xffc8c8;
+    this.positionProjectile(projectile);
+    const visualPosition = projectileVisualPosition({ o: projectile.position, offset: projectile.offset,
+      offsetmillis: projectile.offsetMillis });
+    this.splash(visualPosition, texture, color, 4.8, 1, 1, 150, 20);
   }
 
-  private moveProjectile(id: number, position: Vec3): void {
-    const projectile = this.projectiles.get(id);
+  private moveProjectile(event: Extract<WeaponEvent, { type: "projectile-moved" }>): void {
+    const projectile = this.projectiles.get(event.key);
     if (!projectile) return;
-    projectile.position = { ...position };
-    projectile.mesh?.position.copyFrom(toBabylonPosition(position));
+    projectile.position = { ...event.position };
+    projectile.destination = { ...event.destination };
+    projectile.direction = { ...event.direction };
+    projectile.offset = { ...event.offset };
+    projectile.offsetMillis = event.offsetMillis;
+    this.positionProjectile(projectile);
+    const visualPosition = projectileVisualPosition({ o: projectile.position, offset: projectile.offset,
+      offsetmillis: projectile.offsetMillis });
     const magic = projectile.gun === Gun.Fireball || projectile.gun === Gun.Iceball || projectile.gun === Gun.Slimeball;
-    this.splash(position, "smoke.png", 0x404040, magic ? 0.6 : 2.4, 2, 300, magic ? 150 : 50, -20);
+    this.splash(visualPosition, "smoke.png", 0x404040, magic ? 0.6 : 2.4, 2, 300, magic ? 150 : 50, -20);
+    if (magic) {
+      const texture = projectile.gun === Gun.Iceball ? "ball2.png" : projectile.gun === Gun.Slimeball ? "ball3.png" : "ball1.png";
+      this.splash(visualPosition, texture, projectile.gun === Gun.Fireball ? 0xffc8c8 : 0xffffff, 4.8, 1, 1, 150, 20);
+    }
+  }
+
+  private positionProjectile(projectile: ProjectileEffect): ReturnType<typeof projectileRenderPose> {
+    const pose = projectileRenderPose({ o: projectile.position, to: projectile.destination, dir: projectile.direction,
+      offset: projectile.offset, offsetmillis: projectile.offsetMillis });
+    const rotation = Quaternion.RotationYawPitchRoll(-pose.yaw * Math.PI / 180, -pose.pitch * Math.PI / 180, 0);
+    projectile.meshes.forEach((mesh) => {
+      mesh.position.copyFrom(toBabylonPosition(projectile.gun === Gun.Rocket ? pose.modelPosition : pose.position));
+      if (projectile.gun === Gun.Rocket) mesh.rotationQuaternion = rotation;
+    });
+    const lightPosition = projectileVisualPosition({ o: projectile.position, offset: projectile.offset,
+      offsetmillis: projectile.offsetMillis });
+    projectile.light?.position.copyFrom(toBabylonPosition(lightPosition));
+    return pose;
+  }
+
+  private removeProjectile(key: string): void {
+    const projectile = this.projectiles.get(key);
+    if (!projectile) return;
+    projectile.meshes.forEach((mesh) => this.disposeMesh(mesh));
+    projectile.light?.dispose();
+    this.projectiles.delete(key);
   }
 
   // Original: src/fpsgame/weapon.cpp renderbouncers()/preloadbouncers().
@@ -407,7 +472,7 @@ export class ParticleRenderer {
     if (this.bouncers.has(key)) return;
     const effect: BouncerEffect = { meshes: [], position: { ...position } };
     this.bouncers.set(key, effect);
-    const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates());
+    const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates(this.templateGeneration));
     if (this.bouncers.get(key) !== effect) return;
     const meshes = (templates.get(modelIndex) ?? []).map((template) => {
       const mesh = template.clone(`bouncer-${key}-${template.name}`, null, false)!;
@@ -439,14 +504,15 @@ export class ParticleRenderer {
     this.bouncers.delete(key);
   }
 
-  private async loadBouncerTemplates(): Promise<Map<number, Mesh[]>> {
+  private async loadBouncerTemplates(generation: number): Promise<Map<number, Mesh[]>> {
     const response = await fetch("/api/bouncers", { cache: "no-store" });
     if (!response.ok) throw new Error(`Bouncer manifest request failed (${response.status}).`);
     const assets = await response.json() as MapModelAsset[];
     const result = new Map<number, Mesh[]>();
     await Promise.all(assets.map(async (asset) => {
-      if (asset.status !== "ready" || !asset.geometryPath) return;
+      if (generation !== this.templateGeneration || asset.status !== "ready" || !asset.geometryPath) return;
       const geometry = await this.fetchBouncerGeometry(asset);
+      if (generation !== this.templateGeneration) return;
       const meshes = geometry.meshes.map((source) => {
         const mesh = new Mesh(`bouncer-template-${asset.index}-${source.name}`, this.scene);
         const data = new VertexData();
@@ -517,22 +583,11 @@ export class ParticleRenderer {
     throw new Error(`${asset.format ?? "Unknown"} bouncer model format is unsupported.`);
   }
 
-  private explosion(gun: Gun, position: Vec3, radius: number): void {
-    let closest: [number, ProjectileEffect] | undefined;
-    this.projectiles.forEach((projectile, id) => {
-      const distance = Math.hypot(projectile.position.x - position.x, projectile.position.y - position.y, projectile.position.z - position.z);
-      if (projectile.gun === gun && (!closest || distance < Math.hypot(closest[1].position.x - position.x, closest[1].position.y - position.y,
-        closest[1].position.z - position.z))) closest = [id, projectile];
-    });
-    if (closest) {
-      const [id, projectile] = closest;
-      if (projectile.mesh) this.disposeMesh(projectile.mesh);
-      this.projectiles.delete(id);
-    }
+  private explosion(gun: Gun, position: Vec3, radius: number, normal?: Vec3): void {
     const magic = gun === Gun.Fireball || gun === Gun.Iceball || gun === Gun.Slimeball;
     this.sparks(position, magic ? 100 : 200, magic ? 200 : 300);
     if (magic) return;
-    this.decal(position, { x: 0, y: 0, z: 1 }, "scorch.png", 0xffffff, radius / 2);
+    this.decal(position, normal ?? { x: 0, y: 0, z: 1 }, "scorch.png", 0xffffff, radius / 2);
     const blue = gun === Gun.Grenade;
     const duration = Math.max(1, (radius - 4) * (blue ? 15 : 20));
     const effect = this.fireball(position, radius, duration, blue);

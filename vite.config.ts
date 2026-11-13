@@ -766,7 +766,7 @@ function sauerMapsPlugin(): Plugin {
         response.end(JSON.stringify(resolveMapModels([
           "projectiles/grenade", "gibs/gib01", "gibs/gib02", "gibs/gib03", "debris/debris01", "debris/debris02",
           "debris/debris03", "debris/debris04", "barreldebris/debris01", "barreldebris/debris02", "barreldebris/debris03",
-          "barreldebris/debris04",
+          "barreldebris/debris04", "projectiles/rocket",
         ])));
       });
       server.middlewares.use("/api/playermodels", (_request, response) => {

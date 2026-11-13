@@ -381,14 +381,36 @@ export class MultiplayerClient extends EventTarget {
   }
 
   sendOwnedBotEvent(clientNumber: number, event: WeaponEvent): void {
-    if (!this.connected || event.type !== "shot") return;
+    if (!this.connected) return;
     const local = this.players.get(this.clientNumber);
-    const normalized = { ...event, hits: event.hits.map((hit) => hit.target === this.physics.player && local
-      ? { ...hit, target: Object.assign({ ...this.physics.player }, { id: `client:${this.clientNumber}`, clientNumber: this.clientNumber,
-        lifeSequence: local.lifeSequence }) as unknown as NetworkPlayer }
-      : hit) };
-    const packet = new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber)
-      .putBytes(serializeShoot(normalized, Math.trunc(event.millis - this.mapStarted)));
+    if (event.type === "shot") {
+      const normalized = { ...event, hits: event.hits.map((hit) => hit.target === this.physics.player && local
+        ? { ...hit, target: Object.assign({ ...this.physics.player }, { id: `client:${this.clientNumber}`, clientNumber: this.clientNumber,
+          lifeSequence: local.lifeSequence }) as unknown as NetworkPlayer }
+        : hit) };
+      const packet = new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber)
+        .putBytes(serializeShoot(normalized, Math.trunc(event.millis - this.mapStarted)));
+      this.transport.send(1, packet.finish(), true);
+      return;
+    }
+    const exploded = event.type === "projectile-exploded" && event.local && event.gun === Gun.Rocket ? event
+      : event.type === "bouncer-exploded" && event.local ? event : undefined;
+    if (!exploded) return;
+    const gun = exploded.type === "projectile-exploded" ? exploded.gun : Gun.Grenade;
+    const packet = new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber).putInt(NetworkMessage.Explode)
+      .putInt(Math.trunc(performance.now() - this.mapStarted)).putInt(gun).putInt(Math.trunc(exploded.id - this.mapStarted));
+    const hits = exploded.hits.map((hit): WeaponHit & { target: NetworkPlayer } | undefined => {
+      if (hit.target === this.physics.player && local) return { ...hit, target: Object.assign({ ...this.physics.player }, {
+        id: `client:${this.clientNumber}`, clientNumber: this.clientNumber, lifeSequence: local.lifeSequence,
+      }) as unknown as NetworkPlayer };
+      return "clientNumber" in hit.target && "lifeSequence" in hit.target ? hit as WeaponHit & { target: NetworkPlayer } : undefined;
+    }).filter((hit): hit is WeaponHit & { target: NetworkPlayer } => Boolean(hit));
+    packet.putInt(hits.length);
+    for (const hit of hits) {
+      const direction = hit.target.clientNumber === clientNumber ? { x: 0, y: 0, z: 0 } : hit.direction;
+      packet.putInt(hit.target.clientNumber).putInt(hit.target.lifeSequence).putInt(Math.trunc(hit.distance * DMF)).putInt(1)
+        .putInt(Math.trunc(direction.x * DNF)).putInt(Math.trunc(direction.y * DNF)).putInt(Math.trunc(direction.z * DNF));
+    }
     this.transport.send(1, packet.finish(), true);
   }
 
@@ -650,7 +672,10 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.ClientDisconnect: {
           const clientNumber = packet.getInt(), player = this.players.get(clientNumber);
           if (player) this.console(`leave: ${this.displayName(player)}`);
-          if (player) this.weapons.projectiles.bouncers.removebouncers(player);
+          if (player) {
+            this.weapons.projectiles.bouncers.removebouncers(player);
+            this.weapons.projectiles.removeprojectiles(player);
+          }
           this.players.delete(clientNumber);
           this.syncTargets();
           this.emit({ type: "players", disconnectedClientNumber: clientNumber });
@@ -675,9 +700,7 @@ export class MultiplayerClient extends EventTarget {
           const clientNumber = packet.getInt(), gun = packet.getInt() as Gun;
           const id = packet.getInt();
           const player = this.players.get(clientNumber);
-          if (player && gun === Gun.Grenade) this.weapons.projectiles.bouncers.explodeeffects(player, id);
-          if (gun !== Gun.Grenade) this.emit({ type: "playsound", sound: GameSound.RocketHit,
-            position: clientNumber === this.clientNumber ? undefined : player?.position });
+          if (player) this.weapons.projectiles.explodeeffects(gun, player, id);
           break;
         }
         case NetworkMessage.Damage: this.parseDamage(packet); break;
@@ -859,8 +882,8 @@ export class MultiplayerClient extends EventTarget {
     const to = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
     const player = this.players.get(clientNumber);
     if (player) this.applyShotEffects(player, gun);
-    if (player && gun === Gun.Grenade) this.weapons.projectiles.bouncers.spawnGrenadeShot(player, from, to,
-      player.quadMillis > 0 ? 4 : 1, { local: false, id });
+    if (player && WEAPONS[gun]?.projectileSpeed) this.weapons.projectiles.spawn(gun, player, from, to,
+      player.quadMillis > 0 ? 4 : 1, undefined, undefined, false, { local: false, id });
     this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [], clientNumber });
     this.emit({ type: "remote-shot", clientNumber, gun, from, to });
   }
@@ -880,7 +903,7 @@ export class MultiplayerClient extends EventTarget {
   // Function: parsepacket(), N_SHOOT
   // Sauerbraten reference: SVN r6488
   private parseShoot(sender: number, packet: PacketReader): void {
-    packet.getInt();
+    const id = packet.getInt();
     const gun = packet.getInt() as Gun;
     const from = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
     const to = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
@@ -888,6 +911,8 @@ export class MultiplayerClient extends EventTarget {
     for (let hit = 0; hit < hitCount; hit++) for (let field = 0; field < 7; field++) packet.getInt();
     const player = this.players.get(sender);
     if (player) this.applyShotEffects(player, gun);
+    if (player && WEAPONS[gun]?.projectileSpeed) this.weapons.projectiles.spawn(gun, player, from, to,
+      player.quadMillis > 0 ? 4 : 1, undefined, undefined, false, { local: false, id });
     this.weapons.events.emit({ type: "shot-effect", gun, from, to, rays: [], clientNumber: sender });
     this.emit({ type: "remote-shot", clientNumber: sender, gun, from, to });
   }
@@ -1279,6 +1304,24 @@ export class MultiplayerClient extends EventTarget {
     if (event.type === "bouncer-exploded" && event.local) {
       const packet = new PacketWriter().putInt(NetworkMessage.Explode)
         .putInt(Math.trunc(performance.now() - this.mapStarted)).putInt(Gun.Grenade)
+        .putInt(Math.trunc(event.id - this.mapStarted));
+      const localPlayer = this.players.get(this.clientNumber);
+      const hits = event.hits.map((hit): WeaponHit & { target: NetworkPlayer } | undefined => {
+        if ("clientNumber" in hit.target && "lifeSequence" in hit.target) return hit as WeaponHit & { target: NetworkPlayer };
+        return hit.target === this.weapons.controller.owner && localPlayer ? { ...hit, target: localPlayer } : undefined;
+      }).filter((hit): hit is WeaponHit & { target: NetworkPlayer } => Boolean(hit));
+      packet.putInt(hits.length);
+      for (const hit of hits) {
+        const direction = hit.target.clientNumber === this.clientNumber ? { x: 0, y: 0, z: 0 } : hit.direction;
+        packet.putInt(hit.target.clientNumber).putInt(hit.target.lifeSequence).putInt(Math.trunc(hit.distance * DMF)).putInt(1)
+          .putInt(Math.trunc(direction.x * DNF)).putInt(Math.trunc(direction.y * DNF)).putInt(Math.trunc(direction.z * DNF));
+      }
+      this.transport.send(1, packet.finish(), true);
+      return;
+    }
+    if (event.type === "projectile-exploded" && event.local && event.gun === Gun.Rocket) {
+      const packet = new PacketWriter().putInt(NetworkMessage.Explode)
+        .putInt(Math.trunc(performance.now() - this.mapStarted)).putInt(event.gun)
         .putInt(Math.trunc(event.id - this.mapStarted));
       const localPlayer = this.players.get(this.clientNumber);
       const hits = event.hits.map((hit): WeaponHit & { target: NetworkPlayer } | undefined => {

@@ -49,7 +49,7 @@ export class WeaponController {
     this.projectiles.serverAuthoritative = this.serverAuthoritative;
     let rays: Vec3[] = [], hits: WeaponHit[] = [];
     if (definition.projectileSpeed) {
-      const visual = gun === Gun.Grenade ? this.projectileVisualOrigin?.(gun, from, to) : undefined;
+      const visual = this.projectileVisualOrigin?.(gun, from, to);
       this.projectiles.spawn(gun, this.owner, from, to, multiplier, nowMilliseconds, visual?.position, visual?.firstPerson);
     }
     else ({ endpoints: rays, hits } = this.hitscan.fire(gun, this.owner, from, to, multiplier, targets, !this.serverAuthoritative));

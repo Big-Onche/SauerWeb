@@ -25,12 +25,11 @@ export class WeaponSystem {
   }
 
   update(nowMilliseconds: number, aimTarget: Vec3): boolean {
-    const elapsed = this.previousUpdate ? Math.min(100, Math.max(0, nowMilliseconds - this.previousUpdate)) : 0;
+    const elapsed = this.previousUpdate ? Math.max(0, nowMilliseconds - this.previousUpdate) : 0;
     this.previousUpdate = nowMilliseconds;
     if (this.controller.quadMilliseconds > 0) this.controller.quadMilliseconds = Math.max(0, this.controller.quadMilliseconds - elapsed);
-    const fired = this.controller.shoot(nowMilliseconds, aimTarget, this.targets);
     if (elapsed > 0) this.projectiles.update(elapsed, this.targets);
-    return fired;
+    return this.controller.shoot(nowMilliseconds, aimTarget, this.targets);
   }
 
   resetClock(nowMilliseconds: number): void {

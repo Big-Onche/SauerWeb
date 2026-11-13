@@ -11,6 +11,8 @@ export enum ArmourType {
 
 export interface Damageable {
   readonly id: string;
+  /** Native ENT_AI monsters halve projectile speed and deal one quarter weapon damage. Multiplayer bots leave this false. */
+  monster?: boolean;
   position: Vec3;
   velocity: Vec3;
   radius: number;

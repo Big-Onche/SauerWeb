@@ -311,7 +311,7 @@ export class BouncerSystem {
     this.bouncers.splice(index, 1);
   }
 
-  private spawndebris(position: Vec3, owner: Damageable): void {
+  spawndebris(position: Vec3, owner: Damageable): void {
     const count = this.rnd(20) + 5; // maxdebris defaults to 25: rnd(maxdebris - 5) + 5.
     for (let index = 0; index < count; index++) this.spawnbouncer(position, owner, BouncerType.BNC_DEBRIS);
   }
