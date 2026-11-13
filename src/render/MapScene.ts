@@ -888,13 +888,14 @@ export class MapScene {
             surfaceNormal = normalize(mix(rippledNormal, waveNormal, abs(worldNormal.y) * 0.72));
           #endif
           float facing = clamp(dot(viewDirection, surfaceNormal), 0.0, 1.0);
-          float fresnel = pow(1.0 - facing, 3.0);
+          float tintWeight = facing * 0.5 + 0.5;
+          float waterDepth = 0.6;
           vec3 baseColor = mix(waterfallColor, waterColor, abs(worldNormal.y));
-          vec3 color = baseColor * mix(0.72, 1.08, facing);
+          vec3 color = baseColor * waterDepth * mix(0.6, 1.0, tintWeight);
           #if WATER_QUALITY >= 2
             if (hasReflection > 0.5) {
               vec3 reflected = textureCube(reflectionSampler, reflect(-viewDirection, surfaceNormal)).rgb;
-              color = mix(color, reflected, mix(0.22, 0.72, fresnel));
+              color = mix(reflected, baseColor * waterDepth, tintWeight);
             }
           #endif
           #if WATER_QUALITY >= 1
@@ -902,8 +903,11 @@ export class MapScene {
             float specular = pow(max(dot(surfaceNormal, halfVector), 0.0), 96.0) * waterSpecular;
             color += vec3(specular);
           #endif
-          float alpha = mix(0.46, 0.78, fresnel);
-          gl_FragColor = vec4(color, alpha);
+          // Native Sauer uses glBlendFunc(GL_ONE, GL_SRC_ALPHA), producing color + background * sourceAlpha.
+          // Express the same result through Babylon's standard source-alpha blend mode.
+          float nativeSourceAlpha = facing * (1.0 - waterDepth);
+          float blendAlpha = 1.0 - nativeSourceAlpha;
+          gl_FragColor = vec4(color / blendAlpha, blendAlpha);
         }
       `,
     }, {

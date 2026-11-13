@@ -11,8 +11,8 @@ describe("resolveMapWater", () => {
 
     const water = resolveMapWater(map);
 
-    expect(water[0]).toMatchObject({ color: [20 / 255, 70 / 255, 80 / 255], fogDistance: 150, specular: 150 });
-    expect(water[1]).toMatchObject({ color: [32 / 255, 64 / 255, 96 / 255], fogDistance: 35, specular: 200 });
+    expect(water[0]).toMatchObject({ color: [linearByte(20), linearByte(70), linearByte(80)], fogDistance: 150, specular: 150 });
+    expect(water[1]).toMatchObject({ color: [linearByte(32), linearByte(64), linearByte(96)], fogDistance: 35, specular: 200 });
   });
 
   it("lets map CFG values override values stored in the OGZ", () => {
@@ -21,7 +21,7 @@ describe("resolveMapWater", () => {
     map.variables.push({ name: "waterfog", type: "integer", value: 20 });
 
     expect(resolveMapWater(map, { materials: [{ color: 0xa0b0c0, fogDistance: 80 }] })[0]).toMatchObject({
-      color: [160 / 255, 176 / 255, 192 / 255],
+      color: [linearByte(160), linearByte(176), linearByte(192)],
       fogDistance: 80,
     });
   });
@@ -43,6 +43,11 @@ describe("resolveMapWater", () => {
     }
   });
 });
+
+function linearByte(value: number): number {
+  const component = value / 255;
+  return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+}
 
 function emptyMap(): SauerMap {
   return {

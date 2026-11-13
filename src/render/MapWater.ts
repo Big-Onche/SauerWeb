@@ -55,7 +55,11 @@ function resetDefaultColor(value: number): number {
 }
 
 function normalizedColor(value: number): [number, number, number] {
-  return sauerColorBytes(expandSauerColor(value)).map((component) => component / 255) as [number, number, number];
+  return sauerColorBytes(expandSauerColor(value)).map((component) => srgbToLinear(component / 255)) as [number, number, number];
+}
+
+function srgbToLinear(component: number): number {
+  return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
 }
 
 function numericVariable(map: SauerMap, name: string): number | undefined {
