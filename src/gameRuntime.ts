@@ -11,6 +11,7 @@ import { musicPlayer } from "./platform/browser/MusicPlayer";
 import { MapScene } from "./render/MapScene";
 import { bindCrosshairSettings, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./platform/browser/TouchSettings";
+import { releaseMobileOrientation, TOUCH_ESCAPE_REQUESTED } from "./platform/browser/TouchControls";
 
 const app = required<HTMLDivElement>("#app");
 const parameters = new URLSearchParams(location.search);
@@ -53,6 +54,7 @@ app.innerHTML = `
               <span>crosshair..</span></button>
             <button type="button" data-action="touch-settings"><img src="/api/packages/icons/menu.jpg" alt="" />
               <span>controls..</span></button>
+            <button type="button" data-action="scoreboard"><img src="/api/packages/icons/menu.jpg" alt="" /><span>scoreboard</span></button>
             <button type="button" data-action="menu"><img src="/api/packages/icons/exit.jpg" alt="" /><span>main menu</span></button>
           </div>
         </div>
@@ -113,12 +115,20 @@ spectatorButton.addEventListener("click", () => {
 });
 const crosshairDialog = required<HTMLDialogElement>("#crosshair-dialog");
 bindCrosshairSettings(crosshairDialog);
-required<HTMLButtonElement>("[data-action='crosshair']").addEventListener("click", () => crosshairDialog.showModal());
+required<HTMLButtonElement>("[data-action='crosshair']").addEventListener("click", () => { crosshairDialog.showModal(); syncTouchControls(); });
 required<HTMLButtonElement>("[data-action='close-crosshair']").addEventListener("click", () => crosshairDialog.close());
 const touchSettingsDialog = required<HTMLDialogElement>("#touch-settings-dialog");
 bindTouchSettings(touchSettingsDialog);
-required<HTMLButtonElement>("[data-action='touch-settings']").addEventListener("click", () => touchSettingsDialog.showModal());
+required<HTMLButtonElement>("[data-action='touch-settings']").addEventListener("click", () => {
+  touchSettingsDialog.showModal();
+  syncTouchControls();
+});
+required<HTMLButtonElement>("[data-action='scoreboard']").addEventListener("click", () => scene.showTouchScoreboard());
 required<HTMLButtonElement>("[data-action='close-touch-settings']").addEventListener("click", () => touchSettingsDialog.close());
+crosshairDialog.addEventListener("close", syncTouchControls);
+touchSettingsDialog.addEventListener("close", syncTouchControls);
+crosshairDialog.addEventListener("cancel", syncTouchControls);
+touchSettingsDialog.addEventListener("cancel", syncTouchControls);
 required<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => location.assign("/"));
 chat.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -128,6 +138,7 @@ chat.addEventListener("submit", (event) => {
   canvas.focus();
 });
 window.addEventListener("keydown", onKeyDown, { capture: true });
+window.addEventListener(TOUCH_ESCAPE_REQUESTED, onTouchEscape);
 window.addEventListener("popstate", leaveGame);
 window.addEventListener("pagehide", dispose, { once: true });
 void start();
@@ -258,18 +269,28 @@ function setPaused(paused: boolean): void {
   }
 }
 
+function onTouchEscape(): void {
+  if (!chat.hidden) { chat.hidden = true; canvas.focus(); }
+  else if (gameConsole.isFull) gameConsole.toggle();
+  else setPaused(pauseMenu.hidden);
+  syncTouchControls();
+}
+
 function syncTouchControls(): void {
-  scene.setTouchControlsBlocked(!pauseMenu.hidden || !deathMenu.hidden || !chat.hidden || gameConsole.isFull || !loading.hidden || !error.hidden);
+  scene.setTouchControlsBlocked(!pauseMenu.hidden || !deathMenu.hidden || !chat.hidden || gameConsole.isFull || crosshairDialog.open ||
+    touchSettingsDialog.open || !loading.hidden || !error.hidden);
 }
 
 function dispose(): void {
   if (disposed) return;
   disposed = true;
   window.removeEventListener("keydown", onKeyDown, { capture: true });
+  window.removeEventListener(TOUCH_ESCAPE_REQUESTED, onTouchEscape);
   window.removeEventListener("popstate", leaveGame);
   scene.dispose();
   gameConsole.dispose();
   fpsHud.dispose();
+  void releaseMobileOrientation();
 }
 
 function leaveGame(): void {

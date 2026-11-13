@@ -11,6 +11,7 @@ export class MultiplayerHUD {
   private readonly scoreboard: HTMLDivElement;
   private visible = false;
   private connectionStatus = "not connected";
+  private scoreboardModal = false;
 
   constructor(viewport: HTMLElement, private readonly client: MultiplayerClient) {
     this.root = document.createElement("div");
@@ -23,19 +24,30 @@ export class MultiplayerHUD {
     client.addEventListener("multiplayer", this.onMultiplayer);
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
+    this.root.addEventListener("click", this.onClick);
   }
 
   dispose(): void {
     this.client.removeEventListener("multiplayer", this.onMultiplayer);
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
+    this.root.removeEventListener("click", this.onClick);
     this.root.remove();
   }
 
   setVisible(visible: boolean): void {
     this.visible = visible;
+    if (!visible) { this.scoreboardModal = false; this.root.classList.remove("scoreboard-modal"); this.scoreboard.hidden = true; }
     this.root.hidden = !visible;
     if (visible) this.render();
+  }
+
+  showTouchScoreboard(): void {
+    if (!this.visible) return;
+    this.scoreboardModal = true;
+    this.root.classList.add("scoreboard-modal");
+    this.scoreboard.hidden = false;
+    this.render();
   }
 
   render(): void {
@@ -64,7 +76,8 @@ export class MultiplayerHUD {
     const title = escapeHtml(this.client.serverDescription || "scoreboard");
     const details = `${escapeHtml(gameModeName(this.client.gameMode))}  ${escapeHtml(this.client.mapName)}  ` +
       formatTime(this.client.timeLeftSeconds);
-    return `${guiSkinMarkup()}<header><span>${title}</span>` +
+    const close = this.scoreboardModal ? `<button class="scoreboard-close" type="button" aria-label="Close scoreboard">×</button>` : "";
+    return `${close}${guiSkinMarkup()}<header><span>${title}</span>` +
       `<small>${details}</small></header><div class="score-groups ${teamMode ? "team-groups" : ""}">${groupMarkup}</div>` +
       (spectators.length ? `<div class="score-spectators"><strong>spectators</strong>${spectators.map((entry) =>
         `<span>${escapeHtml(entry.name)} <small>${entry.ping} ping · cn ${entry.clientNumber}</small></span>`).join("")}</div>` : "");
@@ -105,7 +118,14 @@ export class MultiplayerHUD {
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
-    if (event.code === "Tab") this.scoreboard.hidden = true;
+    if (event.code === "Tab" && !this.scoreboardModal) this.scoreboard.hidden = true;
+  };
+
+  private readonly onClick = (event: Event): void => {
+    if (!(event.target instanceof Element) || !event.target.closest(".scoreboard-close")) return;
+    this.scoreboardModal = false;
+    this.root.classList.remove("scoreboard-modal");
+    this.scoreboard.hidden = true;
   };
 
   private required(selector: string): HTMLDivElement {

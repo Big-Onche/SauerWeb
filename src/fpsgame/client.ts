@@ -74,6 +74,7 @@ export type MultiplayerEvent =
   | { type: "players"; disconnectedClientNumber?: number }
   | { type: "spawn"; clientNumber?: number }
   | { type: "console"; text: string; consoleType: ConsoleLineType }
+  | { type: "frag"; killer: string; victim: string; gun?: Gun; suicide: boolean; teamkill: boolean; killerTeam?: string; victimTeam?: string }
   | { type: "remote-shot"; clientNumber: number; gun: Gun; from: Vec3; to: Vec3 }
   | { type: "entity-effect"; effect: EntityEffect; local: boolean }
   | { type: "playsound"; sound: GameSound; position?: Vec3 }
@@ -359,6 +360,8 @@ export class MultiplayerClient extends EventTarget {
     this.emit({ type: "playsound", sound: GameSound.Die1 + Math.floor(Math.random() * 2),
       position: victimNumber === this.clientNumber ? undefined : victim.position });
     const victimName = this.displayName(victim, "you"), actorName = this.displayName(actor, "you");
+    this.emit({ type: "frag", killer: actorName, victim: victimName, gun: actor.lastAttackGun as Gun, suicide: actor === victim,
+      teamkill: actor !== victim && Boolean(actor.team && actor.team === victim.team), killerTeam: actor.team, victimTeam: victim.team });
     this.console(actor === victim ? `${victimName} suicided!` : `${actorName} fragged ${victimName}`,
       victimNumber === this.clientNumber || actorNumber === this.clientNumber ? "frag-self" : "frag-other");
     if (victimNumber === this.clientNumber) {
@@ -1105,6 +1108,10 @@ export class MultiplayerClient extends EventTarget {
     if (actor.team) this.teamScores.set(actor.team, teamFrags);
     const victimName = this.displayName(victim, "you"), actorName = this.displayName(actor, "you");
     const involved = victimNumber === this.clientNumber || actor.clientNumber === this.clientNumber;
+    this.emit({ type: "frag", killer: actorName, victim: victimName, gun: actor.lastAttackGun as Gun,
+      suicide: victimNumber === actor.clientNumber,
+      teamkill: victimNumber !== actor.clientNumber && Boolean(victim.team && victim.team === actor.team),
+      killerTeam: actor.team, victimTeam: victim.team });
     if (victimNumber === actor.clientNumber) this.console(`${victimName} suicided${victimNumber === this.clientNumber ? "!" : ""}`,
       involved ? "frag-self" : "frag-other");
     else if (victim.team && victim.team === actor.team) {

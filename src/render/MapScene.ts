@@ -58,6 +58,7 @@ import { RendererPerformanceOverlay, type RendererDiagnosticState, type Renderer
   type RendererResourceOwner } from "../platform/browser/RendererPerformanceOverlay";
 import { FrameProfiler } from "../platform/browser/FrameProfiler";
 import { TouchControls } from "../platform/browser/TouchControls";
+import { KillFeed } from "../platform/browser/KillFeed";
 
 export type CameraMode = "free" | "player";
 
@@ -128,6 +129,7 @@ export class MapScene {
   private readonly particleRenderer: ParticleRenderer;
   private readonly multiplayerHUD: MultiplayerHUD;
   private readonly spectatorHUD: SpectatorHUD;
+  private readonly killFeed: KillFeed;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
   private readonly gameAudio: WeaponAudio;
@@ -205,6 +207,7 @@ export class MapScene {
     this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
     this.spectatorHUD = new SpectatorHUD(viewport);
+    this.killFeed = new KillFeed(viewport, this.fpsClient.multiplayer);
     this.playerRenderer = new PlayerRenderer(this.scene, (from, to, radius) => {
       const direction = { x: to.x - from.x, y: to.z - from.z, z: to.y - from.y };
       const distance = Math.hypot(direction.x, direction.y, direction.z);
@@ -453,6 +456,10 @@ export class MapScene {
     this.touchControls.setBlocked(blocked);
   }
 
+  isTouchMode(): boolean { return this.touchControls.preferred; }
+
+  showTouchScoreboard(): void { this.multiplayerHUD.showTouchScoreboard(); }
+
   setThirdPerson(enabled: boolean): void {
     this.thirdperson = enabled;
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !enabled && !this.isLocalPlayerDead());
@@ -565,6 +572,7 @@ export class MapScene {
     this.crosshairHUD.dispose();
     this.multiplayerHUD.dispose();
     this.spectatorHUD.dispose();
+    this.killFeed.dispose();
     this.canvas.removeEventListener("pointerdown", this.onSpectatorPointerDown, { capture: true });
     this.canvas.removeEventListener("contextmenu", this.onSpectatorContextMenu);
     window.removeEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
@@ -948,6 +956,7 @@ export class MapScene {
     const dead = this.isLocalPlayerDead(), wasDead = this.localDeadAt > 0;
     if (dead && !wasDead) this.localDeadAt = nowMilliseconds;
     else if (!dead && wasDead) this.localDeadAt = 0;
+    this.physicsInput.setFullGyroContext(this.isLocalPlayerSpectator());
     const input = this.physicsInput.sample();
     const followed = this.followedPlayer();
     let renderPosition: RegisteredMapEntity["position"];
@@ -959,6 +968,8 @@ export class MapScene {
       player.falling = { x: 0, y: 0, z: 0 };
       player.yaw = followed.yaw;
       player.pitch = followed.state === ClientState.Dead ? 0 : followed.pitch;
+      player.yaw = (player.yaw + input.yawDelta * 0.1 + 360) % 360;
+      player.pitch = Math.min(90, Math.max(-90, player.pitch - input.pitchDelta * 0.1));
       player.roll = followed.roll;
       player.move = player.strafe = 0;
       player.physicsState = PhysicsState.Float;

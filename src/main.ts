@@ -11,6 +11,7 @@ import { loadMusicVolume, musicPlayer } from "./platform/browser/MusicPlayer";
 import { isBindableKey, keyBindingLabel, keyForEvent, loadMovementBindings, MOVEMENT_BINDING_ACTIONS, resetMovementBindings,
   saveMovementBindings, type MovementBindingAction } from "./platform/browser/KeyBindings";
 import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./platform/browser/TouchSettings";
+import { requestMobileLandscapeFullscreen } from "./platform/browser/TouchControls";
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
 import { sauerFormattedMarkup } from "./sauerFormatting";
 
@@ -680,6 +681,7 @@ function launchMap(name: string): void {
 }
 
 function launchGame(url: string): void {
+  void requestMobileLandscapeFullscreen();
   // Keep the launch click's user activation in this document. The game transfers
   // this temporary lock to its canvas once the asynchronous map load completes.
   try {

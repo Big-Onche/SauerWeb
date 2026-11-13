@@ -3,6 +3,7 @@ import type { MultiplayerClient } from "../../fpsgame/client";
 import { GameModeFlag, gameModeHas } from "../../fpsgame/game";
 import type { WeaponController } from "../../fpsgame/weapon/WeaponController";
 import type { WeaponEvent, WeaponEvents } from "../../fpsgame/weapon/WeaponEvents";
+import { loadTouchSettings, TOUCH_SETTINGS_CHANGED, touchControlsWanted, type TouchSettings } from "./TouchSettings";
 
 // Original: src/fpsgame/game.h (HICON_*), fps.cpp (drawhudicons/gameplayhud), scoreboard.cpp (drawhudscore),
 // and src/engine/rendergl.cpp (drawdamagescreen). The native HUD uses a 1800-unit-high coordinate system.
@@ -48,6 +49,7 @@ export class WeaponHUD {
   private lastFrame = "";
   private damageUntil = 0;
   private animationFrame = 0;
+  private settings = loadTouchSettings();
 
   constructor(parent: HTMLElement, private readonly controller: WeaponController, events: WeaponEvents,
               private readonly multiplayer?: MultiplayerClient) {
@@ -60,6 +62,7 @@ export class WeaponHUD {
     parent.append(this.element);
     events.on((event) => this.handle(event));
     window.addEventListener("resize", this.invalidate);
+    window.addEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     document.fonts?.load(`${FONT_HEIGHT}px Sauerbraten`).then(this.invalidate).catch(() => undefined);
     this.render();
   }
@@ -90,6 +93,7 @@ export class WeaponHUD {
   dispose(): void {
     cancelAnimationFrame(this.animationFrame);
     window.removeEventListener("resize", this.invalidate);
+    window.removeEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     this.element.remove();
   }
 
@@ -112,9 +116,11 @@ export class WeaponHUD {
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
     this.drawDamage(context, width, height);
-    const scale = height / HUD_HEIGHT;
+    const mobile = touchControlsWanted(this.settings), hudScale = mobile ? this.settings.mobileHudScale / 100 : 1;
+    const scale = height / HUD_HEIGHT * (mobile ? 0.76 * hudScale : 1);
     context.save();
     context.scale(scale, scale);
+    if (mobile) context.translate(width / scale / 2 - 760, -150);
     if (player.state !== ClientState.Spectator && player.state !== ClientState.Editing) this.drawPlayerHud(context, player);
     context.restore();
     this.drawClock(context, width, height, clockSeconds);
@@ -234,6 +240,8 @@ export class WeaponHUD {
     this.lastFrame = "";
     this.render();
   };
+
+  private readonly onSettingsChanged = (event: CustomEvent<TouchSettings>): void => { this.settings = event.detail; this.invalidate(); };
 }
 
 function loadImage(source: string, loaded: () => void): HTMLImageElement {

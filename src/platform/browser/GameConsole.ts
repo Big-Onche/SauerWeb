@@ -73,9 +73,11 @@ export class GameConsole {
   private render(): void {
     const now = performance.now();
     const end = Math.max(0, this.lines.length - this.skip);
+    const mobile = touchControlsWanted();
+    const hudLines = this.lines.filter((line) => !mobile || line.type !== "frag-self" && line.type !== "frag-other" && line.type !== "teamkill");
     const visible = this.fullConsole
       ? this.lines.slice(0, end)
-      : this.lines.slice(-HUD_LINE_COUNT).filter((line) => now - line.outTime < HUD_FADE_MILLISECONDS);
+      : hudLines.slice(-(mobile ? 3 : HUD_LINE_COUNT)).filter((line) => now - line.outTime < HUD_FADE_MILLISECONDS);
     this.linesElement.replaceChildren(...visible.map((line) => {
       const element = document.createElement("p");
       element.className = `console-line ${line.type}`;
@@ -92,3 +94,4 @@ export class GameConsole {
 export function stripSauerFormatting(text: string): string {
   return text.replace(/\f(?:\[[^\]]*\]|.)/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }
+import { touchControlsWanted } from "./TouchSettings";

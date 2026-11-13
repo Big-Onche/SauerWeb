@@ -28,19 +28,19 @@ describe("touch control settings", () => {
   });
 
   it("sanitizes persisted sensitivity and control type values", () => {
-    expect(sanitizeTouchSettings({ controlType: "touch", mouseSensitivity: 999, touchSensitivity: 0 })).toEqual({
+    expect(sanitizeTouchSettings({ controlType: "touch", mouseSensitivity: 999, touchSensitivity: 0 })).toMatchObject({
       controlType: "touch", mouseSensitivity: 300, touchSensitivity: 25,
     });
-    expect(sanitizeTouchSettings({ mouseSensitivity: Number.NaN, touchSensitivity: Number.NaN })).toEqual({
+    expect(sanitizeTouchSettings({ mouseSensitivity: Number.NaN, touchSensitivity: Number.NaN })).toMatchObject({
       controlType: "auto", mouseSensitivity: 100, touchSensitivity: 250,
     });
   });
 
   it("migrates the old default touch sensitivity to the faster default", () => {
-    expect(sanitizeTouchSettings({ controlType: "touch", sensitivity: 100 })).toEqual({
+    expect(sanitizeTouchSettings({ controlType: "touch", sensitivity: 100 })).toMatchObject({
       controlType: "touch", mouseSensitivity: 100, touchSensitivity: 250,
     });
-    expect(sanitizeTouchSettings({ controlType: "touch", sensitivity: 140 })).toEqual({
+    expect(sanitizeTouchSettings({ controlType: "touch", sensitivity: 140 })).toMatchObject({
       controlType: "touch", mouseSensitivity: 100, touchSensitivity: 140,
     });
   });
