@@ -12,6 +12,8 @@ export async function loadTextureManifest(mapName: string): Promise<TextureManif
 }
 
 export function resolveMapTextures(map: SauerMap, manifest: TextureManifest): ResolvedTexture[] {
+  if (map.vslots.length === 0) return resolveLegacySlots(manifest.slots);
+
   const rootSlotByVSlot = new Map<number, TextureSlot>();
   let slotIndex = 0;
   for (let index = 0; index < map.vslots.length; index++) {
@@ -23,23 +25,36 @@ export function resolveMapTextures(map: SauerMap, manifest: TextureManifest): Re
   const resolved = map.vslots.map((serialized, index) => {
     const rootIndex = findRootVSlot(map.vslots, index);
     const slot = rootSlotByVSlot.get(rootIndex) ?? manifest.slots[rootIndex] ?? manifest.slots[0] ?? emptySlot();
-    const texture: ResolvedTexture = {
-      slot,
-      vslot: mergeVSlot(slot.vslot, serialized),
-      diffuseUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "diffuse")?.path),
-      normalUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "normal")?.path),
-      glowUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "glow")?.path),
-      specularUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "specular")?.path),
-      depthUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "depth")?.path),
-      alphaUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "alpha")?.path),
-      environmentUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "environment")?.path),
-    };
-    return texture;
+    return resolveTexture(slot, mergeVSlot(slot.vslot, serialized));
   });
+  linkLayers(resolved);
+  return resolved;
+}
+
+function resolveLegacySlots(slots: TextureSlot[]): ResolvedTexture[] {
+  const resolved = slots.map((slot) => resolveTexture(slot, slot.vslot));
+  linkLayers(resolved);
+  return resolved;
+}
+
+function resolveTexture(slot: TextureSlot, vslot: VSlot): ResolvedTexture {
+  return {
+    slot,
+    vslot,
+    diffuseUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "diffuse")?.path),
+    normalUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "normal")?.path),
+    glowUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "glow")?.path),
+    specularUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "specular")?.path),
+    depthUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "depth")?.path),
+    alphaUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "alpha")?.path),
+    environmentUrl: packageAssetUrl(slot.textures.find((item) => item.kind === "environment")?.path),
+  };
+}
+
+function linkLayers(resolved: ResolvedTexture[]): void {
   resolved.forEach((texture) => {
     if (texture.vslot.layer > 0 && texture.vslot.layer < resolved.length) texture.layer = resolved[texture.vslot.layer];
   });
-  return resolved;
 }
 
 function findRootVSlot(vslots: VSlot[], index: number): number {

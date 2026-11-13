@@ -177,7 +177,7 @@ Each browser connection receives its own UDP socket.
 **Compatibility target:**
 
 - Sauerbraten protocol **260**
-- Native map format **33**
+- Native map formats **29–33**
 - ENet **1.3.17**
 - Reference: Sauerbraten SVN **r6488**
 - Official Git mirror commit: `c63c9f327e278c6b49b39a8163a2717206d4f46a`
@@ -194,7 +194,7 @@ SauerWeb is playable, but still evolving.
 
 - Native `.ogz` decompression, validation, and map-format decoding.
 - Discovery of all 331 bundled maps, including their format versions.
-- Native v30 to v33 octree geometry, deformed surfaces, merged faces, and material-volume extraction.
+- Native v29 to v33 octree geometry, deformed surfaces, merged faces, and material-volume extraction.
 - Original map textures, VSlots, lightmap atlases, UV transforms, skyboxes, and supported configuration directives.
 - MD2, MD3, MD5, IQM, and OBJ model loading, with native model configuration support.
 - Game entities, mapmodels, player starts, and debugging tools.

@@ -4,7 +4,7 @@ import { createFpsEntityRegistry } from "../fpsgame/entities";
 import type { Lightmap, MapEntity, MapHeader, MapVariable, OctreeCube, SauerMap, Surface, SurfaceVertex, Vec3, VSlot } from "./octa";
 
 const CURRENT_MAP_VERSION = 33;
-const MINIMUM_MAP_VERSION = 31;
+const MINIMUM_MAP_VERSION = 29;
 const OCTSAV_CHILDREN = 0;
 const OCTSAV_EMPTY = 1;
 const OCTSAV_SOLID = 2;
@@ -24,6 +24,7 @@ const LAYER_BOTTOM = 1 << 6;
 const LAYER_DUP = 1 << 7;
 const LAYER_BLEND = LAYER_TOP | LAYER_BOTTOM;
 const ET_MAPMODEL = 2;
+const ET_PLAYERSTART = 3;
 const ET_GAMESPECIFIC = 8;
 
 interface SurfaceCompat {
@@ -110,13 +111,16 @@ export class SauerMapParser {
         `Map format ${version} is not supported yet. This viewer currently supports formats ${MINIMUM_MAP_VERSION}–${CURRENT_MAP_VERSION}.`,
       );
     }
-    if (headerSize !== 40) throw new Error(`Invalid v${version} header size ${headerSize}; expected 40 bytes.`);
+    const expectedHeaderSize = version <= 29 ? 36 : 40;
+    if (headerSize !== expectedHeaderSize) {
+      throw new Error(`Invalid v${version} header size ${headerSize}; expected ${expectedHeaderSize} bytes.`);
+    }
     if (worldSize <= 0 || (worldSize & (worldSize - 1)) !== 0) throw new Error(`Invalid world size ${worldSize}; expected a positive power of two.`);
     if (entityCount < 0 || entityCount > 1_000_000) throw new Error(`Invalid entity count ${entityCount}.`);
 
     const blendmap = reader.int32("blendmap flag");
     const variableCount = reader.int32("map variable count");
-    const vslotCount = reader.int32("VSlot count");
+    const vslotCount = version <= 29 ? 0 : reader.int32("VSlot count");
     if (variableCount < 0 || variableCount > 1_000_000) throw new Error(`Invalid map variable count ${variableCount}.`);
     if (vslotCount < 0 || vslotCount > 1_000_000) throw new Error(`Invalid VSlot count ${vslotCount}.`);
 
@@ -644,6 +648,9 @@ function convertoldmaterial(mat: number): number {
 // Original: src/engine/worldio.cpp
 // Function: fixent()
 function fixent(entity: MapEntity, version: number): void {
+  if (version <= 30 && (entity.type === ET_MAPMODEL || entity.type === ET_PLAYERSTART)) {
+    entity.attributes[0] = (entity.attributes[0] + 180) % 360;
+  }
   if (version <= 31 && entity.type === ET_MAPMODEL) {
     const yaw = (entity.attributes[0] % 360 + 360) % 360 + 7;
     entity.attributes[0] = yaw - yaw % 15;

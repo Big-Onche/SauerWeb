@@ -11,6 +11,45 @@ import { SauerMapParser } from "./worldio";
 const sauerbratenDirectory = loadSauerbratenDirectory("test");
 
 describe("SauerMapParser", () => {
+  it.each(["akroseum", "campo", "deathtek", "industry", "injustice", "kffa", "kmap5", "osiris", "shindou", "stemple", "wdcd"])(
+    "decodes bundled v29 map %s without serialized VSlots", (mapName) => {
+      const filePath = path.join(sauerbratenDirectory, "packages", "base", `${mapName}.ogz`);
+      const bytes = zlib.gunzipSync(fs.readFileSync(filePath));
+      const map = new SauerMapParser().parse(arrayBuffer(bytes), mapName);
+      const surfaces = collectSurfaces(map.world);
+
+      expect(map.header.version).toBe(29);
+      expect(map.header.headerSize).toBe(36);
+      expect(map.header.vslotCount).toBe(0);
+      expect(map.vslots).toHaveLength(0);
+      expect(map.world).toHaveLength(8);
+      expect(map.lightmaps).toHaveLength(map.header.lightmapCount);
+      expect(surfaces.length).toBeGreaterThan(0);
+      expect(surfaces.every((surface) => surface.lightmapIds.every((id) => id < 6 || id - 6 < map.lightmaps.length))).toBe(true);
+    }, 30_000);
+
+  it("decodes the v30 layout and applies its legacy entity rotations", () => {
+    const filePath = path.join(sauerbratenDirectory, "packages", "base", "canyon.ogz");
+    const version31Bytes = zlib.gunzipSync(fs.readFileSync(filePath));
+    const version30Bytes = Buffer.from(version31Bytes);
+    version30Bytes.writeInt32LE(30, 4);
+    const version31 = new SauerMapParser().parse(arrayBuffer(version31Bytes), "canyon-v31");
+    const version30 = new SauerMapParser().parse(arrayBuffer(version30Bytes), "canyon-v30");
+    const rotated = version30.entities
+      .map((entity, index) => ({ entity, previous: version31.entities[index] }))
+      .filter(({ entity }) => entity.type === 2 || entity.type === 3);
+
+    expect(version30.header.version).toBe(30);
+    expect(version30.world).toHaveLength(8);
+    expect(version30.lightmaps).toHaveLength(version30.header.lightmapCount);
+    expect(collectSurfaces(version30.world)).toHaveLength(collectSurfaces(version31.world).length);
+    expect(rotated.length).toBeGreaterThan(0);
+    rotated.forEach(({ entity, previous }) => {
+      expect(entity.type).toBe(previous.type);
+      expect(entity.attributes[0]).toBe((previous.attributes[0] + 180) % 360);
+    });
+  }, 15_000);
+
   it.each(["aqueducts", "canyon", "cwcastle", "c_egypt", "face-capture", "fanatic_quake", "k_rpg1", "legazzo", "monastery", "nmp4", "oasis",
     "oddworld", "ogrosupply", "pitch_black", "recovery", "relic", "river_c", "rpg_01", "ruine", "sacrifice", "thor"])(
     "decodes bundled v31 map %s and converts its legacy surfaces", (mapName) => {
@@ -125,4 +164,8 @@ function visitSurfaces(cubes: import("./octa").OctreeCube[], callback: (lightmap
 function collectSurfaces(cubes: import("./octa").OctreeCube[]): import("./octa").Surface[] {
   return cubes.flatMap((cube) => [...cube.surfaces.filter((surface): surface is import("./octa").Surface => !!surface),
     ...(cube.children ? collectSurfaces(cube.children) : [])]);
+}
+
+function arrayBuffer(bytes: Buffer): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }

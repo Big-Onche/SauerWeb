@@ -815,7 +815,7 @@ function sauerMapsPlugin(): Plugin {
               const version = readMapVersion(filePath);
               return {
                 name: path.basename(entry.name, ".ogz"), size: fs.statSync(filePath).size, version,
-                supported: version !== null && version >= 31 && version <= 33,
+                supported: version !== null && version >= 29 && version <= 33,
               };
             })
             .sort((left, right) => left.name.localeCompare(right.name));
