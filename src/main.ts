@@ -19,7 +19,7 @@ interface MapListItem {
   supported: boolean;
 }
 
-const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "keys", "console"] as const;
+const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "binds", "console"] as const;
 type OptionTab = typeof OPTION_TABS[number];
 
 const EXPERIMENTAL_DISCLAIMER_KEY = "sauerweb.experimental-disclaimer-dismissed";
@@ -305,11 +305,11 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
     optionNote("Music follows Sauerbraten's menu and map rotation playlist."),
   ]);
   if (tab === "mouse") return optionGroup("mouse", [
-    touchSettingsMarkup(loadTouchSettings()),
     optionInfo("mouse capture", "pointer lock"), optionInfo("weapon selection", "mouse wheel"),
     optionNote("Click the game viewport to capture the mouse; press Escape to release it."),
   ]);
-  if (tab === "keys") return optionGroup("keys", [
+  if (tab === "binds") return optionGroup("binds", [
+    touchSettingsMarkup(loadTouchSettings()),
     movementBindingsMarkup(),
     `<button class="option-reset-binds" type="button" data-action="reset-binds">reset movement binds</button>`,
     optionInfo("1–7 / wheel", "select weapon"),

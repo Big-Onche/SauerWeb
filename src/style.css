@@ -131,7 +131,8 @@ button { color: inherit; }
   transform: translate(-50%, -50%); }
 .game-crosshair[hidden] { display: none; }
 .game-pause:not([hidden]) ~ .game-crosshair { display: none; }
-.touch-controls { position: absolute; inset: 0; z-index: 22; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+.touch-controls { position: absolute; inset: 0; z-index: 22; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none; }
 .touch-controls[hidden] { display: none; }
 .touch-stick { position: absolute; bottom: calc(env(safe-area-inset-bottom) + clamp(18px, 4vmin, 38px));
   left: calc(env(safe-area-inset-left) + clamp(18px, 4vmin, 38px)); width: clamp(112px, 20vmin, 174px); aspect-ratio: 1;

@@ -6,6 +6,7 @@ type PointerRole = "move" | "look" | "fire" | "jump";
 
 export class TouchControls {
   private readonly root: HTMLDivElement;
+  private readonly movementPad: HTMLDivElement;
   private readonly stick: HTMLDivElement;
   private readonly pointers = new Map<number, PointerRole>();
   private settings = loadTouchSettings();
@@ -25,13 +26,15 @@ export class TouchControls {
       <button class="touch-button touch-jump" data-touch-control="jump" type="button" aria-label="Jump">↑</button>
       <button class="touch-button touch-fire" data-touch-control="fire" type="button" aria-label="Fire"><span></span></button>`;
     parent.append(this.root);
+    this.movementPad = this.root.querySelector<HTMLDivElement>(".touch-stick")!;
     this.stick = this.root.querySelector<HTMLDivElement>(".touch-stick > div")!;
     this.root.addEventListener("pointerdown", this.onPointerDown);
-    this.root.addEventListener("pointermove", this.onPointerMove);
-    this.root.addEventListener("pointerup", this.onPointerEnd);
-    this.root.addEventListener("pointercancel", this.onPointerEnd);
+    window.addEventListener("pointermove", this.onPointerMove, { passive: false });
+    window.addEventListener("pointerup", this.onPointerEnd, { passive: false });
+    window.addEventListener("pointercancel", this.onPointerEnd, { passive: false });
     this.root.addEventListener("lostpointercapture", this.onLostPointerCapture);
     window.addEventListener("blur", this.clear);
+    window.addEventListener("resize", this.onViewportChanged);
     document.addEventListener("visibilitychange", this.onVisibilityChange);
     window.addEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     this.syncVisibility();
@@ -52,27 +55,38 @@ export class TouchControls {
   dispose(): void {
     this.clear();
     this.root.removeEventListener("pointerdown", this.onPointerDown);
-    this.root.removeEventListener("pointermove", this.onPointerMove);
-    this.root.removeEventListener("pointerup", this.onPointerEnd);
-    this.root.removeEventListener("pointercancel", this.onPointerEnd);
+    window.removeEventListener("pointermove", this.onPointerMove);
+    window.removeEventListener("pointerup", this.onPointerEnd);
+    window.removeEventListener("pointercancel", this.onPointerEnd);
     this.root.removeEventListener("lostpointercapture", this.onLostPointerCapture);
     window.removeEventListener("blur", this.clear);
+    window.removeEventListener("resize", this.onViewportChanged);
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
     window.removeEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     this.root.remove();
   }
 
   private readonly onPointerDown = (event: PointerEvent): void => {
-    if (!this.active || event.pointerType === "mouse") return;
-    const control = (event.target as Element).closest<HTMLElement>("[data-touch-control]")?.dataset.touchControl;
-    const role = control === "move" || control === "fire" || control === "jump" ? control : "look";
+    if (!this.active || event.pointerType === "mouse" && event.button !== 0) return;
+    const control = event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-touch-control]")?.dataset.touchControl : undefined;
+    const bounds = this.root.getBoundingClientRect();
+    const role = control === "move" || control === "fire" || control === "jump" ? control
+      : event.clientX >= bounds.left + bounds.width / 2 ? "look" : undefined;
+    if (!role) return;
     if (role === "move" && this.movePointer !== undefined || role === "fire" && this.firePointer !== undefined ||
         role === "jump" && this.jumpPointer !== undefined) return;
     this.pointers.set(event.pointerId, role);
-    this.root.setPointerCapture(event.pointerId);
+    try {
+      this.root.setPointerCapture(event.pointerId);
+    } catch {
+      // WebKit can reject capture for a pointer that started on a button. Window-level
+      // move/end listeners still keep every pointer tracked until it is released.
+    }
     if (role === "move") {
       this.movePointer = event.pointerId;
-      this.moveOrigin = { x: event.clientX, y: event.clientY };
+      const movementBounds = this.movementPad.getBoundingClientRect();
+      this.moveOrigin = { x: movementBounds.left + movementBounds.width / 2, y: movementBounds.top + movementBounds.height / 2 };
       this.updateMovement(event);
     } else if (role === "look") {
       this.lookPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -103,6 +117,7 @@ export class TouchControls {
   };
 
   private readonly onPointerEnd = (event: PointerEvent): void => {
+    if (!this.pointers.has(event.pointerId)) return;
     this.releasePointer(event.pointerId);
     event.preventDefault();
   };
@@ -114,10 +129,12 @@ export class TouchControls {
     this.syncVisibility();
   };
 
+  private readonly onViewportChanged = (): void => { this.syncVisibility(); };
+
   private readonly onVisibilityChange = (): void => { if (document.hidden) this.clear(); };
 
   private updateMovement(event: PointerEvent): void {
-    const radius = Math.max(30, this.root.querySelector<HTMLElement>(".touch-stick")!.clientWidth / 2);
+    const radius = Math.max(30, this.movementPad.clientWidth / 2);
     const dx = event.clientX - this.moveOrigin.x, dy = event.clientY - this.moveOrigin.y;
     const scale = Math.min(1, radius / Math.max(radius, Math.hypot(dx, dy)));
     const x = dx * scale / radius, y = dy * scale / radius;
@@ -146,6 +163,13 @@ export class TouchControls {
   }
 
   private readonly clear = (): void => {
+    for (const pointerId of this.pointers.keys()) {
+      try {
+        if (this.root.hasPointerCapture(pointerId)) this.root.releasePointerCapture(pointerId);
+      } catch {
+        // Capture may already have been discarded during blur or page suspension.
+      }
+    }
     this.pointers.clear();
     this.lookPositions.clear();
     this.movePointer = this.firePointer = this.jumpPointer = undefined;

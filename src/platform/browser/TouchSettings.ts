@@ -37,14 +37,17 @@ export function sanitizeTouchSettings(settings: Partial<TouchSettings>): TouchSe
 
 export function touchControlsWanted(settings = loadTouchSettings()): boolean {
   if (settings.controlType !== "auto") return settings.controlType === "touch";
-  return navigator.maxTouchPoints > 0 || matchMedia("(any-pointer: coarse)").matches;
+  const coarsePointer = matchMedia("(any-pointer: coarse)").matches;
+  const touchCapable = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+  const compactViewport = Math.min(window.innerWidth, window.innerHeight) <= 820 || Math.max(window.innerWidth, window.innerHeight) <= 1366;
+  return coarsePointer || touchCapable && compactViewport;
 }
 
 export function touchSettingsMarkup(settings = loadTouchSettings()): string {
   return `<label class="option-select" for="control-type"><span>control type</span><select id="control-type">
-    <option value="auto" ${settings.controlType === "auto" ? "selected" : ""}>automatic</option>
-    <option value="desktop" ${settings.controlType === "desktop" ? "selected" : ""}>keyboard &amp; mouse</option>
-    <option value="touch" ${settings.controlType === "touch" ? "selected" : ""}>touch</option>
+    <option value="auto" ${settings.controlType === "auto" ? "selected" : ""}>Auto</option>
+    <option value="desktop" ${settings.controlType === "desktop" ? "selected" : ""}>Keyboard &amp; Mouse</option>
+    <option value="touch" ${settings.controlType === "touch" ? "selected" : ""}>Touch</option>
   </select></label>
   <label class="option-slider" for="touch-sensitivity"><span>touch sensitivity</span><div>
     <input id="touch-sensitivity" type="range" min="25" max="200" step="5" value="${settings.sensitivity}" />
