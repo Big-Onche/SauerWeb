@@ -171,6 +171,70 @@ describe("Sauerbraten rifle protocol", () => {
 });
 
 describe("native server message framing", () => {
+  it("serializes N_ITEMPICKUP, optimistically hides it, and waits for N_ITEMACC before awarding stats", () => {
+    const client = createClient(), multiplayer = client.multiplayer;
+    multiplayer.connected = true;
+    multiplayer.clientNumber = 4;
+    const player = Reflect.apply(Reflect.get(multiplayer, "playerFor"), multiplayer, [4]) as NetworkPlayer;
+    Object.assign(player, { state: ClientState.Alive, alive: true });
+    const items = createFpsEntityRegistry([{ type: 8, position: { x: 4, y: 5, z: 6 }, attributes: [0, 0, 0, 0, 0] }]);
+    multiplayer.setMapEntities(items);
+    const list = new PacketWriter().putInt(NetworkMessage.ItemList).putInt(0).putInt(8).putInt(-1).finish();
+    Reflect.apply(Reflect.get(multiplayer, "parseMessages"), multiplayer, [-1, new PacketReader(list)]);
+    client.physics.player.position = { x: 4, y: 5, z: 6 + client.physics.player.eyeHeight };
+    const send = vi.spyOn(multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(multiplayer.transport, "flush").mockImplementation(() => undefined);
+
+    multiplayer.update(1_000);
+
+    const request = send.mock.calls.find(([, bytes]) => new PacketReader(bytes).getInt() === NetworkMessage.ItemPickup);
+    expect(request?.[0]).toBe(1);
+    expect(request?.[2]).toBe(true);
+    const packet = new PacketReader(request?.[1] ?? new Uint8Array());
+    expect([packet.getInt(), packet.getInt()]).toEqual([NetworkMessage.ItemPickup, 0]);
+    expect(packet.remaining).toBe(0);
+    expect(client.weapons.controller.inventory.ammo[Gun.Shotgun]).toBe(0);
+    expect(multiplayer.entities.itemState(0)).toMatchObject({ spawned: true, noPickup: true });
+
+    const accept = new PacketWriter().putInt(NetworkMessage.ItemAccept).putInt(0).putInt(4).finish();
+    Reflect.apply(Reflect.get(multiplayer, "parseMessages"), multiplayer, [-1, new PacketReader(accept)]);
+    expect(client.weapons.controller.inventory.ammo[Gun.Shotgun]).toBe(10);
+    expect(multiplayer.entities.itemState(0)).toMatchObject({ spawned: false, noPickup: false });
+  });
+
+  it("restores optimistic item visibility when the server rejects a competing pickup", () => {
+    const client = createClient().multiplayer;
+    client.setMapEntities(createFpsEntityRegistry([{ type: 14, position: { x: 0, y: 0, z: 0 }, attributes: [0, 0, 0, 0, 0] }]));
+    const list = new PacketWriter().putInt(NetworkMessage.ItemList).putInt(0).putInt(14).putInt(-1).finish();
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(list)]);
+    client.entities.optimisticPickup(0);
+
+    const rejection = new PacketWriter().putInt(NetworkMessage.ItemAccept).putInt(0).putInt(-1).finish();
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(rejection)]);
+
+    expect(client.entities.itemState(0)).toMatchObject({ spawned: true, noPickup: false });
+  });
+
+  it("tracks remote quad duration and emits its native expiration sound", () => {
+    const client = createClient().multiplayer, sounds: number[] = [];
+    const player = Reflect.apply(Reflect.get(client, "playerFor"), client, [7]) as NetworkPlayer;
+    Object.assign(player, { state: ClientState.Alive, alive: true, position: { x: 100, y: 100, z: 20 } });
+    client.setMapEntities(createFpsEntityRegistry([{ type: 18, position: { x: 100, y: 100, z: 6 }, attributes: [0, 0, 0, 0, 0] }]));
+    client.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "playsound") sounds.push(detail.sound);
+    });
+    const accept = new PacketWriter().putInt(NetworkMessage.ItemAccept).putInt(0).putInt(7).finish();
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(accept)]);
+
+    expect(player.quadMillis).toBe(20_000);
+    client.update(1_000);
+    client.update(21_000);
+
+    expect(player.quadMillis).toBe(0);
+    expect(sounds).toContain(GameSound.PowerupOut);
+  });
+
   it("keeps the native insta-CTF rifle loadout when a local match starts and respawns", () => {
     const client = createClient();
     client.multiplayer.gameMode = 12;

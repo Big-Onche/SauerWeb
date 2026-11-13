@@ -94,6 +94,9 @@ export interface BotCallbacks {
   spawnRequest?: (bot: BotActor) => void;
   changed?: () => void;
   objective?: (bot: BotActor, state: AiState, interests: AiInterest[]) => boolean;
+  itemPickup?: (bot: BotActor, entityIndex: number, now: number) => boolean;
+  itemAvailable?: (bot: BotActor, entityIndex: number) => boolean;
+  quadExpired?: (bot: BotActor) => void;
 }
 
 export interface AiInterest {
@@ -297,7 +300,9 @@ export class BotManager {
         this.checkItems(bot, now);
       });
       let fired = false;
+      const hadQuad = bot.weaponSystem.controller.quadMilliseconds > 0;
       this.profile("weapons", () => { fired = bot.weaponSystem.update(now, bot.ai.target); });
+      if (hadQuad && bot.weaponSystem.controller.quadMilliseconds <= 0) this.callbacks.quadExpired?.(bot);
       if (fired && bot.selectedGun === Gun.Pistol && bot.skill <= 100) {
         const controller = bot.weaponSystem.controller;
         controller.gunWait += Math.trunc(controller.gunWait * ((101 - bot.skill + this.rnd(111 - bot.skill)) / 100));
@@ -365,29 +370,9 @@ export class BotManager {
           z: (entity.attributes[0] ?? 0) * 12.5 };
         this.itemCooldowns.set(cooldownKey, now + 300);
       } else if (!gameModeHas(this.gameMode, GameModeFlag.NoItems) && entity.type >= 8 && entity.type <= 18) {
-        if (!this.pickup(bot, entity.type)) continue;
-        this.itemCooldowns.set(cooldownKey, now + (entity.type === 18 ? 60_000 : 10_000));
+        this.callbacks.itemPickup?.(bot, entity.index, now);
       }
     }
-  }
-
-  private pickup(bot: BotActor, type: number): boolean {
-    const inventory = bot.weaponSystem.controller.inventory;
-    if (type >= 8 && type <= 13) {
-      const gun = type - 7 as Gun, pickup = inventory.pickup(gun);
-      if (!pickup.max || inventory.ammo[gun] >= pickup.max) return false;
-      inventory.ammo[gun] = Math.min(pickup.max, inventory.ammo[gun] + pickup.add);
-      return true;
-    }
-    if (type === 14) { if (bot.health >= bot.maxHealth) return false; bot.health = Math.min(bot.maxHealth, bot.health + 25); return true; }
-    if (type === 15) { bot.maxHealth += 10; bot.health += 10; return true; }
-    if (type === 16 || type === 17) {
-      const armourType = type === 17 ? 2 : 1, armour = type === 17 ? 100 : 50;
-      if (bot.armourType > armourType || bot.armourType === armourType && bot.armour >= armour) return false;
-      bot.armourType = armourType; bot.armour = armour; return true;
-    }
-    if (type === 18) { bot.weaponSystem.controller.quadMilliseconds = Math.max(30_000, bot.weaponSystem.controller.quadMilliseconds + 30_000); return true; }
-    return false;
   }
 
   private think(bot: BotActor, now: number, run: boolean, players: readonly Damageable[], localAlive: boolean): void {
@@ -428,6 +413,7 @@ export class BotManager {
     }
     for (const entity of this.entities) {
       if (entity.type < 8 || entity.type > 18) continue;
+      if (this.callbacks.itemAvailable && !this.callbacks.itemAvailable(bot, entity.index)) continue;
       const node = this.waypoints.closestwaypoint(entity.position, SIGHTMIN, true);
       if (!this.waypoints.iswaypoint(node)) continue;
       const score = distance(bot.position, entity.position) / Math.max(this.itemScore(bot, entity.type), 1);

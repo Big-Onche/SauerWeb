@@ -37,7 +37,7 @@ export interface TextureManifest {
   lighting?: MapLightingOverrides;
   fog?: MapFogOverrides;
   mapModels: MapModelAsset[];
-  entityModels?: { teleporter?: MapModelAsset };
+  entityModels?: { teleporter?: MapModelAsset; pickups?: MapModelAsset[] };
   mapSounds?: MapSoundAsset[];
 }
 

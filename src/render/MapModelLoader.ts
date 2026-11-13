@@ -52,7 +52,8 @@ export interface EntityModelAnimation {
   asset: MapModelAsset;
 }
 export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[], assets: MapModelAsset[], wireframe: boolean,
-                                    generationIsCurrent: () => boolean, teleporter?: MapModelAsset): Promise<LoadedMapModels> {
+                                    generationIsCurrent: () => boolean, teleporter?: MapModelAsset,
+                                    pickupModels: MapModelAsset[] = []): Promise<LoadedMapModels> {
   const meshes: Mesh[] = [];
   const issues: string[] = [];
   let triangles = 0;
@@ -81,6 +82,10 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
   jobs.push(...[...teleports].map(([index, instances]) => ({
     index, instances, asset: index > 0 ? assets[index] : teleporter, animated: true,
   })));
+  for (let type = 8; type <= 18; type++) {
+    const instances = entities.filter((entity) => entity.type === type);
+    if (instances.length) jobs.push({ index: type, instances, asset: pickupModels[type - 8], animated: true });
+  }
   await Promise.all(jobs.map(async ({ index, instances, asset, animated }) => {
     if (!asset || asset.status !== "ready" || !asset.geometryPath) {
       for (const entity of instances) issues.push(modelIssue(entity, index, asset));
@@ -127,12 +132,14 @@ export async function loadMapModels(scene: Scene, entities: RegisteredMapEntity[
 // Original: src/fpsgame/entities.cpp
 // Function: renderentities()
 // Sauerbraten reference: SVN r6488
-export function animateEntityModels(animations: readonly EntityModelAnimation[], lastmillis: number): void {
+export function animateEntityModels(animations: readonly EntityModelAnimation[], lastmillis: number,
+                                    visible: (entity: RegisteredMapEntity) => boolean = () => true): void {
   for (const animation of animations) {
     const position = { ...animation.entity.position,
       z: animation.entity.position.z + 1 + Math.sin(lastmillis / 100 + animation.entity.position.x + animation.entity.position.y) / 20 };
     const yaw = lastmillis / 10 + (animation.asset.yaw ?? 0);
     for (const mesh of animation.meshes) {
+      mesh.setEnabled(visible(animation.entity));
       mesh.position.copyFrom(toBabylonPosition(position));
       mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(-yaw * Math.PI / 180, -(animation.asset.pitch ?? 0) * Math.PI / 180, 0);
     }

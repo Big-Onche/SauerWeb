@@ -142,7 +142,7 @@ async function loadMap(name: string): Promise<void> {
     const map = parser.parse(mapData, name);
     const manifest = await loadTextureManifest(name);
     await scene.loadMap(map, resolveMapTextures(map, manifest), manifest.skybox, manifest.lighting, manifest.fog, manifest.mapModels ?? [],
-      manifest.entityModels?.teleporter, manifest.mapSounds ?? []);
+      manifest.entityModels?.teleporter, manifest.mapSounds ?? [], manifest.entityModels?.pickups ?? []);
     scene.setMultiplayerMapInfo(name, crc32(new Uint8Array(mapData)));
     activeMap = name;
     document.title = `${name} — SauerWeb`;

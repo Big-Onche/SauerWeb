@@ -88,7 +88,7 @@ export class ParticleRenderer {
   private readonly systemPool: PooledParticleSystem[] = [];
   private readonly spritePool: Mesh[] = [];
   private readonly beamPool: Mesh[] = [];
-  private readonly textures = new Map<ParticleTexture, Texture>();
+  private readonly textures = new Map<string, Texture>();
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly persistentMeshes = new Set<Mesh>();
   private readonly effects: SpriteEffect[] = [];
@@ -113,6 +113,37 @@ export class ParticleRenderer {
     this.persistentMeshes.forEach((mesh) => { mesh.isVisible = enabled; });
     this.effects.forEach((effect) => { effect.mesh.isVisible = enabled; });
     this.projectiles.forEach((projectile) => { if (projectile.mesh) projectile.mesh.isVisible = enabled; });
+  }
+
+  // Original: src/fpsgame/entities.cpp, N_ITEMSPAWN and pickupeffects() particle_icon calls.
+  itemIcon(position: Vec3, icon: number, grey: boolean): void {
+    const mesh = MeshBuilder.CreatePlane(`particle-item-icon-${icon}`, { size: 4 }, this.scene);
+    mesh.position.copyFrom(toBabylonPosition(position));
+    mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    mesh.isPickable = false;
+    mesh.isVisible = this.renderingEnabled;
+    const key = `item-icon:${icon}:${grey ? 1 : 0}`;
+    let material = this.materials.get(key);
+    if (!material) {
+      material = new StandardMaterial(`particle-item-icon-${icon}-material`, this.scene);
+      const texture = new Texture(packageAssetUrl("hud/items.png") ?? "", this.scene, false, false);
+      texture.hasAlpha = true;
+      texture.uScale = texture.vScale = 0.25;
+      texture.uOffset = (icon % 4) * 0.25;
+      texture.vOffset = Math.floor(icon / 4) * 0.25;
+      material.diffuseTexture = texture;
+      material.opacityTexture = texture;
+      material.emissiveTexture = texture;
+      material.diffuseColor = material.emissiveColor = grey ? new Color3(0.7, 0.7, 0.7) : Color3.White();
+      material.disableLighting = true;
+      material.backFaceCulling = false;
+      material.useAlphaFromDiffuseTexture = true;
+      material.transparencyMode = Material.MATERIAL_ALPHABLEND;
+      this.materials.set(key, material);
+      this.textures.set(`items-${icon}-${grey ? 1 : 0}`, texture);
+    }
+    mesh.material = material;
+    this.effects.push({ mesh, started: performance.now(), duration: 2_000, startScale: 1, endScale: 1 });
   }
 
   clear(): void {

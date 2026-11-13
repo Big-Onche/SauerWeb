@@ -43,6 +43,7 @@ import { MultiplayerHUD } from "../platform/browser/MultiplayerHUD";
 import { SpectatorHUD } from "../platform/browser/SpectatorHUD";
 import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platform/browser/PlayerRenderer";
 import { CtfRenderer } from "../platform/browser/CtfRenderer";
+import { ITEM_ICONS } from "../fpsgame/entities";
 import { ClientState, PhysicsState } from "../engine/physics/types";
 import { ctfTeamFlag } from "../fpsgame/ctf";
 import { interpolateNetworkEntity } from "../fpsgame/networkInterpolation";
@@ -114,6 +115,9 @@ export class MapScene {
     spawnRequest: (bot) => this.fpsClient.multiplayer.requestOwnedBotSpawn(bot.clientNumber),
     changed: () => this.syncBotTargets(),
     objective: (bot, _state, interests) => this.ctfAiObjective(bot, interests),
+    itemPickup: (bot, entityIndex, now) => this.fpsClient.multiplayer.tryBotItemPickup(bot, entityIndex, now),
+    itemAvailable: (bot, entityIndex) => this.fpsClient.multiplayer.isBotItemAvailable(bot, entityIndex),
+    quadExpired: (bot) => this.fpsClient.multiplayer.notifyQuadExpired(bot.position),
   });
   private readonly weaponInput: BrowserWeaponInput;
   private readonly weaponHUD: WeaponHUD;
@@ -267,7 +271,8 @@ export class MapScene {
 
   async loadMap(map: SauerMap, textures: ResolvedTexture[], skyOverrides?: MapSkyOverrides,
                 lightingOverrides?: MapLightingOverrides, fogOverrides?: MapFogOverrides,
-                mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset, mapSounds: MapSoundAsset[] = []): Promise<SceneStats> {
+                mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset, mapSounds: MapSoundAsset[] = [],
+                pickupModels: MapModelAsset[] = []): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
     this.currentMap = map;
     const lighting = resolveMapLighting(map, lightingOverrides);
@@ -342,7 +347,7 @@ export class MapScene {
     if (this.entityDebug && !this.entityMeshes.length) map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
     this.particleRenderer.loadMap(map.entityRegistry);
     const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
-      () => generation === this.loadGeneration, teleporter);
+      () => generation === this.loadGeneration, teleporter, pickupModels);
     if (generation !== this.loadGeneration) {
       loadedMapModels.resources.dispose();
       return {
@@ -496,7 +501,7 @@ export class MapScene {
   setLocalGameMode(mode: number): void {
     if (this.runtimeMode !== "game") return;
     this.localGameMode = mode;
-    this.fpsClient.multiplayer.gameMode = mode;
+    this.fpsClient.multiplayer.setGameMode(mode);
     this.bots.setGameMode(mode);
     this.weapons.controller.spawnForGameMode(mode, performance.now());
     this.weaponHUD.render();
@@ -920,7 +925,8 @@ export class MapScene {
   }
 
   private updatePhysics(nowMilliseconds: number): void {
-    animateEntityModels(this.entityModelAnimations, nowMilliseconds);
+    animateEntityModels(this.entityModelAnimations, nowMilliseconds,
+      (entity) => entity.type < 8 || entity.type > 18 || this.fpsClient.multiplayer.entities.isSpawned(entity.index));
     if (this.bots.waypoints.showWaypoints && nowMilliseconds - this.lastWaypointDebugUpdate >= 500) {
       this.lastWaypointDebugUpdate = nowMilliseconds;
       this.syncWaypointDebug(true);
@@ -1028,6 +1034,11 @@ export class MapScene {
   }
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
+    if (event.type === "item-effect") {
+      const icon = ITEM_ICONS[event.entityType - 8];
+      if (icon !== undefined) this.particleRenderer.itemIcon(event.position, icon, !event.spawned);
+      return;
+    }
     if (event.type === "bot-init") {
       if (event.player.ownerNumber === this.fpsClient.multiplayer.clientNumber) {
         const bot = this.bots.init({ clientNumber: event.player.clientNumber, ownerNumber: event.player.ownerNumber, skill: event.player.skill,
@@ -1046,6 +1057,8 @@ export class MapScene {
         const player = this.fpsClient.multiplayer.players.get(bot.clientNumber);
         if (!player) continue;
         bot.health = player.health; bot.maxHealth = player.maxHealth; bot.armour = player.armour; bot.armourType = player.armourType;
+        bot.weaponSystem.controller.inventory.ammo.set(player.ammo);
+        bot.weaponSystem.controller.quadMilliseconds = player.quadMillis;
         bot.velocity = { ...player.velocity };
         if (player.state === ClientState.Dead && bot.alive) this.bots.killed(bot);
       }

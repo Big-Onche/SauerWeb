@@ -12,7 +12,7 @@ import { Gun, WEAPONS } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponHit } from "./weapon/WeaponEvents";
 import type { ConsoleLineType } from "../platform/browser/GameConsole";
 import { applyNetworkPosition, createNetworkInterpolation, resetNetworkInterpolation, type NetworkInterpolation } from "./networkInterpolation";
-import { FpsEntities, type EntityEffect } from "./entities";
+import { canpickup, FpsEntities, I_BOOST, I_CARTRIDGES, I_QUAD, pickup, type EntityEffect, type PickupState } from "./entities";
 import { GameSound } from "./sound";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
@@ -56,6 +56,7 @@ export interface NetworkPlayer extends Damageable {
   aiType: number;
   ownerNumber: number;
   skill: number;
+  quadMillis: number;
 }
 
 interface CaptureBase {
@@ -76,6 +77,7 @@ export type MultiplayerEvent =
   | { type: "remote-shot"; clientNumber: number; gun: Gun; from: Vec3; to: Vec3 }
   | { type: "entity-effect"; effect: EntityEffect; local: boolean }
   | { type: "playsound"; sound: GameSound; position?: Vec3 }
+  | { type: "item-effect"; entityType: number; position: Vec3; spawned: boolean }
   | { type: "disconnect"; reason: number }
   | { type: "bot-init"; player: NetworkPlayer };
 
@@ -114,6 +116,8 @@ export class MultiplayerClient extends EventTarget {
   private mapInfoPending = false;
   private captureBases: CaptureBase[] = [];
   private localGame = false;
+  private quadWasActive = false;
+  private lastQuadUpdate = 0;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
     super();
@@ -121,6 +125,9 @@ export class MultiplayerClient extends EventTarget {
       effect: (effect, local) => this.emit({ type: "entity-effect", effect, local }),
       send: (effect) => this.sendEntityEffect(effect),
       warning: (message) => this.console(message, "error"),
+      canPickup: (type) => canpickup(this.localPickupState(), type),
+      requestPickup: (entity) => this.requestItemPickup(entity),
+      announce: (type) => this.announceItem(type),
     });
     this.transport.addEventListener("enet", (event) => this.handleEnet((event as CustomEvent<EnetEvent>).detail));
     this.weapons.events.on((event) => this.handleWeaponEvent(event));
@@ -155,6 +162,8 @@ export class MultiplayerClient extends EventTarget {
     const player = this.playerFor(this.clientNumber);
     Object.assign(player, { name: this.endpoint.playerName, model: playerModel, state: ClientState.Alive, alive: true });
     this.copyLocalSpawnState(player);
+    this.entities.setGameMode(this.gameMode);
+    this.entities.spawnitems(false, performance.now(), this.players.size);
     this.synchronizeLocalState();
     this.emit({ type: "players" });
     this.emit({ type: "spawn", clientNumber: this.clientNumber });
@@ -177,6 +186,26 @@ export class MultiplayerClient extends EventTarget {
   // Functions: sendmessages(), respawnself()
   // Sauerbraten reference: SVN r6488
   update(nowMilliseconds: number): void {
+    const quadElapsed = this.lastQuadUpdate ? Math.max(0, nowMilliseconds - this.lastQuadUpdate) : 0;
+    this.lastQuadUpdate = nowMilliseconds;
+    if (quadElapsed) {
+      for (const player of this.players.values()) {
+        const locallySimulated = player.clientNumber === this.clientNumber || player.aiType !== 0 &&
+          (this.localGame ? player.ownerNumber < 0 : player.ownerNumber === this.clientNumber);
+        if (locallySimulated || player.quadMillis <= 0) continue;
+        player.quadMillis = Math.max(0, player.quadMillis - quadElapsed);
+        if (!player.quadMillis) this.emit({ type: "playsound", sound: GameSound.PowerupOut, position: player.position });
+      }
+    }
+    const quadActive = this.weapons.controller.quadMilliseconds > 0;
+    if (this.quadWasActive && !quadActive) {
+      this.emit({ type: "playsound", sound: GameSound.PowerupOut });
+      this.console("quad damage is over", "game-info");
+    }
+    this.quadWasActive = quadActive;
+    if (this.localGame) {
+      for (const entity of this.entities.updateLocalSpawns(nowMilliseconds)) this.itemSpawnEffects(entity);
+    }
     this.entities.checkitems(nowMilliseconds);
     if (this.localGame) {
       this.syncLocalPlayer();
@@ -208,7 +237,7 @@ export class MultiplayerClient extends EventTarget {
       if (!gameModeHas(this.gameMode, GameModeFlag.NoItems)) {
         items.putInt(NetworkMessage.ItemList);
         for (const entity of this.mapEntities) {
-          if (entity.type < 8 || entity.type > 18) continue;
+          if (entity.type < 8 || entity.type > 18 || gameModeHas(this.gameMode, GameModeFlag.NoAmmo) && entity.type <= I_CARTRIDGES) continue;
           items.putInt(entity.index).putInt(entity.type);
         }
         items.putInt(-1);
@@ -312,6 +341,10 @@ export class MultiplayerClient extends EventTarget {
 
   notifyLocalStateChange(): void { this.emit({ type: "players" }); }
 
+  notifyQuadExpired(position: Vec3): void {
+    this.emit({ type: "playsound", sound: GameSound.PowerupOut, position });
+  }
+
   localDied(victimNumber: number, actorNumber: number): void {
     if (!this.localGame) return;
     const victim = this.players.get(victimNumber), actor = this.players.get(actorNumber);
@@ -386,7 +419,35 @@ export class MultiplayerClient extends EventTarget {
   setMapEntities(entities: readonly RegisteredMapEntity[]): void {
     this.mapEntities = entities.map((entity) => ({ ...entity, position: { ...entity.position }, attributes: [...entity.attributes] }));
     this.ctfMode.setup(entities, this.gameMode);
-    this.entities.setMap(entities);
+    this.entities.setMap(entities, this.gameMode, this.localGame, performance.now(), Math.max(1, this.players.size));
+  }
+
+  setGameMode(gameMode: number): void {
+    this.gameMode = gameMode;
+    this.entities.setGameMode(gameMode);
+  }
+
+  tryBotItemPickup(bot: PhysicsEntity & { clientNumber: number; ammo: Int32Array; weaponSystem: WeaponSystem }, entityIndex: number,
+                   now = performance.now()): boolean {
+    const entity = this.mapEntities[entityIndex];
+    if (!entity || !this.entities.isSpawned(entityIndex)) return false;
+    const state = this.botPickupState(bot);
+    if (!canpickup(state, entity.type)) return false;
+    if (this.localGame) {
+      if (!this.entities.tryLocalPickup(entityIndex, state, now, Math.max(1, this.players.size))) return false;
+      this.playPickupEffects(entity.type, bot.clientNumber, bot.position);
+      return true;
+    }
+    if (!this.connected) return false;
+    this.entities.optimisticPickup(entityIndex);
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.FromAi).putInt(bot.clientNumber)
+      .putInt(NetworkMessage.ItemPickup).putInt(entityIndex).finish(), true);
+    return true;
+  }
+
+  isBotItemAvailable(bot: PhysicsEntity & { ammo: Int32Array; weaponSystem: WeaponSystem }, entityIndex: number): boolean {
+    const entity = this.mapEntities[entityIndex];
+    return Boolean(entity && this.entities.isSpawned(entityIndex) && canpickup(this.botPickupState(bot), entity.type));
   }
 
   synchronizeLocalState(): void {
@@ -563,13 +624,14 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.MapChange: {
           this.mapName = packet.getString();
-          this.gameMode = packet.getInt();
+          this.setGameMode(packet.getInt());
           packet.getInt();
           const mapAlreadyLoaded = this.loadedMapName.toLocaleLowerCase() === this.mapName.toLocaleLowerCase();
           this.mapInfoPending = mapAlreadyLoaded;
           this.mapStarted = performance.now();
           this.teamScores.clear();
           this.ctfMode.reset();
+          this.entities.resetspawns();
           if (mapAlreadyLoaded) this.ctfMode.setup(this.mapEntities, this.gameMode);
           this.captureBases = [];
           this.console(`game mode is ${gameModeName(this.gameMode)}`, "game-info");
@@ -616,10 +678,11 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.SayTeam: this.parseText(packet.getInt(), packet, true); break;
         case NetworkMessage.Resume: this.parseResume(packet); break;
         case NetworkMessage.TeamInfo: this.parseTeamInfo(packet); break;
-        case NetworkMessage.ItemList: while (packet.getInt() >= 0) packet.getInt(); break;
+        case NetworkMessage.ItemList: this.parseItemList(packet); break;
         case NetworkMessage.ItemSpawn: {
-          const entity = this.mapEntities[packet.getInt()];
-          if (entity) this.emit({ type: "playsound", sound: GameSound.ItemSpawn, position: entity.position });
+          const entityIndex = packet.getInt();
+          this.entities.setspawn(entityIndex, true);
+          this.itemSpawnEffects(entityIndex);
           break;
         }
         case NetworkMessage.ItemAccept: this.parseItemAccept(packet); break;
@@ -653,14 +716,7 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.BaseInfo: this.parseBaseInfo(packet); break;
         case NetworkMessage.BaseScore: this.parseBaseScore(packet); break;
         case NetworkMessage.Announce: {
-          const item = packet.getInt();
-          if (item === 18) {
-            this.console("quad damage will spawn in 10 seconds!", "game-info");
-            this.emit({ type: "playsound", sound: GameSound.VoiceQuad10 });
-          } else if (item === 15) {
-            this.console("health boost will spawn in 10 seconds!", "game-info");
-            this.emit({ type: "playsound", sound: GameSound.VoiceBoost10 });
-          }
+          this.announceItem(packet.getInt());
           break;
         }
         case NetworkMessage.InitFlags: this.ctfMode.parseInitFlags(packet, this.gameMode); this.emit({ type: "players" }); break;
@@ -873,22 +929,118 @@ export class MultiplayerClient extends EventTarget {
   // Sauerbraten reference: SVN r6488
   private parseItemAccept(packet: PacketReader): void {
     const entityIndex = packet.getInt(), clientNumber = packet.getInt();
-    if (clientNumber < 0) return;
+    if (clientNumber < 0) { this.entities.rejectPickup(entityIndex); return; }
     const entityType = this.mapEntities[entityIndex]?.type;
     if (!Number.isInteger(entityType) || entityType < 8 || entityType > 18) return;
     const player = this.players.get(clientNumber);
+    this.entities.acknowledgePickup(entityIndex);
+    this.playPickupEffects(entityType, clientNumber, player?.position);
+    if (!player) return;
+    if (clientNumber === this.clientNumber) {
+      pickup(this.localPickupState(), entityType);
+      this.copyLocalPickupState(player);
+    } else pickup(this.playerPickupState(player), entityType);
+    this.emit({ type: "players" });
+  }
+
+  private parseItemList(packet: PacketReader): void {
+    for (let entityIndex = packet.getInt(); entityIndex >= 0; entityIndex = packet.getInt()) {
+      packet.getInt();
+      this.entities.setspawn(entityIndex, true);
+    }
+  }
+
+  private itemSpawnEffects(entityIndex: number): void {
+    const entity = this.mapEntities[entityIndex];
+    if (entity) {
+      this.emit({ type: "playsound", sound: GameSound.ItemSpawn, position: entity.position });
+      this.emit({ type: "item-effect", entityType: entity.type, position: { ...entity.position, z: entity.position.z + 4 }, spawned: true });
+    }
+  }
+
+  private requestItemPickup(entityIndex: number): void {
+    const entityType = this.mapEntities[entityIndex]?.type;
+    if (!Number.isInteger(entityType)) return;
+    if (this.localGame) {
+      const player = this.players.get(this.clientNumber);
+      if (!player || !this.entities.tryLocalPickup(entityIndex, this.localPickupState(), performance.now(), Math.max(1, this.players.size))) return;
+      this.copyLocalPickupState(player);
+      this.playPickupEffects(entityType, this.clientNumber);
+      this.emit({ type: "players" });
+      return;
+    }
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.ItemPickup).putInt(entityIndex).finish(), true);
+  }
+
+  private playPickupEffects(entityType: number, clientNumber: number, position?: Vec3): void {
     const itemSound = entityType <= 13 ? GameSound.ItemAmmo : entityType <= 15 ? GameSound.ItemHealth
       : entityType <= 17 ? GameSound.ItemArmour : GameSound.ItemPowerup;
-    this.emit({ type: "playsound", sound: itemSound, position: clientNumber === this.clientNumber ? undefined : player?.position });
-    if (clientNumber === this.clientNumber && entityType === 15) this.emit({ type: "playsound", sound: GameSound.VoiceBoost });
-    if (clientNumber === this.clientNumber && entityType === 18) this.emit({ type: "playsound", sound: GameSound.VoiceQuad });
-    if (entityType > 13) return;
-    const gun = entityType - 8 + Gun.Shotgun;
-    if (!player || gun < Gun.Shotgun || gun > Gun.Pistol) return;
-    const pickup = this.weapons.controller.inventory.pickup(gun);
-    player.ammo[gun] = Math.min(pickup.max, player.ammo[gun] + pickup.add);
-    if (clientNumber === this.clientNumber) this.weapons.controller.inventory.ammo[gun] = player.ammo[gun];
+    this.emit({ type: "playsound", sound: itemSound, position: clientNumber === this.clientNumber ? undefined : position });
+    if (position) this.emit({ type: "item-effect", entityType, position: { ...position, z: position.z + 4 }, spawned: false });
+    if (clientNumber === this.clientNumber && entityType === I_BOOST) {
+      this.console("you got the health boost!", "game-info");
+      this.emit({ type: "playsound", sound: GameSound.VoiceBoost });
+    }
+    if (clientNumber === this.clientNumber && entityType === I_QUAD) {
+      this.console("you got the quad!", "game-info");
+      this.emit({ type: "playsound", sound: GameSound.VoiceQuad });
+    }
   }
+
+  private announceItem(type: number): void {
+    if (type === I_QUAD) {
+      this.console("quad damage will spawn in 10 seconds!", "game-info");
+      this.emit({ type: "playsound", sound: GameSound.VoiceQuad10 });
+    } else if (type === I_BOOST) {
+      this.console("health boost will spawn in 10 seconds!", "game-info");
+      this.emit({ type: "playsound", sound: GameSound.VoiceBoost10 });
+    }
+  }
+
+  private localPickupState(): PickupState {
+    const physics = this.physics.player, inventory = this.weapons.controller.inventory, controller = this.weapons.controller;
+    return {
+      get health() { return physics.health; }, set health(value) { physics.health = value; },
+      get maxHealth() { return physics.maxHealth; }, set maxHealth(value) { physics.maxHealth = value; },
+      get armour() { return physics.armour; }, set armour(value) { physics.armour = value; },
+      get armourType() { return physics.armourType; }, set armourType(value) { physics.armourType = value; },
+      ammo: inventory.ammo,
+      get quadMillis() { return controller.quadMilliseconds; }, set quadMillis(value) { controller.quadMilliseconds = value; },
+    };
+  }
+
+  private playerPickupState(player: NetworkPlayer): PickupState {
+    return {
+      get health() { return player.health; }, set health(value) { player.health = value; },
+      get maxHealth() { return player.maxHealth; }, set maxHealth(value) { player.maxHealth = value; },
+      get armour() { return player.armour; }, set armour(value) { player.armour = value; },
+      get armourType() { return player.armourType; }, set armourType(value) { player.armourType = value; },
+      ammo: player.ammo,
+      get quadMillis() { return player.quadMillis; }, set quadMillis(value) { player.quadMillis = value; },
+    };
+  }
+
+  private botPickupState(bot: PhysicsEntity & { ammo: Int32Array; weaponSystem: WeaponSystem }): PickupState {
+    return {
+      get health() { return bot.health; }, set health(value) { bot.health = value; },
+      get maxHealth() { return bot.maxHealth; }, set maxHealth(value) { bot.maxHealth = value; },
+      get armour() { return bot.armour; }, set armour(value) { bot.armour = value; },
+      get armourType() { return bot.armourType; }, set armourType(value) { bot.armourType = value; },
+      ammo: bot.ammo,
+      get quadMillis() { return bot.weaponSystem.controller.quadMilliseconds; },
+      set quadMillis(value) { bot.weaponSystem.controller.quadMilliseconds = value; },
+    };
+  }
+
+  private copyLocalPickupState(player: NetworkPlayer): void {
+    Object.assign(player, {
+      health: this.physics.player.health, maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour,
+      armourType: this.physics.player.armourType, ammo: this.weapons.controller.inventory.ammo,
+      quadMillis: this.weapons.controller.quadMilliseconds,
+    });
+  }
+
 
   // Original: src/fpsgame/capture.h
   // Function: parsepacketclient(), N_BASEREGEN
@@ -1117,6 +1269,7 @@ export class MultiplayerClient extends EventTarget {
       lifeSequence: -1, state: ClientState.Dead, frags: 0, deaths: 0, flags: 0, ping: 0, yaw: 0, pitch: 0, roll: 0,
       falling: { x: 0, y: 0, z: 0 }, move: 0 as const,
       strafe: 0 as const, physicsState: PhysicsState.Fall, selectedGun: Gun.Pistol, ammo: new Int32Array(12),
+      quadMillis: 0,
       lastAction: 0, gunWait: 0, lastAttackGun: -1, lastPain: 0, deadAt: 0,
       positionReady: false,
       interpolation: createNetworkInterpolation(this.physics.player.position),
@@ -1235,6 +1388,7 @@ export class MultiplayerClient extends EventTarget {
     this.weapons.controller.respawn(performance.now());
     this.weapons.controller.inventory.selectedGun = player.selectedGun;
     this.weapons.controller.inventory.ammo.set(player.ammo);
+    this.weapons.controller.quadMilliseconds = player.quadMillis;
   }
 
   private spawnLocalPlayer(): void {
@@ -1255,7 +1409,7 @@ export class MultiplayerClient extends EventTarget {
     Object.assign(player, {
       health: this.physics.player.health, maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour,
       armourType: this.physics.player.armourType, selectedGun: this.weapons.controller.inventory.selectedGun,
-      ammo: new Int32Array(this.weapons.controller.inventory.ammo),
+      ammo: new Int32Array(this.weapons.controller.inventory.ammo), quadMillis: this.weapons.controller.quadMilliseconds,
     });
   }
 
@@ -1272,6 +1426,7 @@ export class MultiplayerClient extends EventTarget {
       physicsState: this.physics.player.physicsState, state, alive: state === ClientState.Alive, health: this.physics.player.health,
       maxHealth: this.physics.player.maxHealth, armour: this.physics.player.armour, armourType: this.physics.player.armourType,
       selectedGun: this.weapons.controller.inventory.selectedGun, ammo: this.weapons.controller.inventory.ammo,
+      quadMillis: this.weapons.controller.quadMilliseconds,
       lastAction: this.weapons.controller.lastAction, gunWait: this.weapons.controller.gunWait,
       lastAttackGun: this.weapons.controller.lastAttackGun,
     });

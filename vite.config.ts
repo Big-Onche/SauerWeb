@@ -97,7 +97,7 @@ function readTextureManifest(mapName: string): {
   lighting: ConfigState["lighting"];
   fog: ConfigState["fog"];
   mapModels: ReturnType<typeof resolveMapModels>;
-  entityModels: { teleporter: ReturnType<typeof resolveMapModels>[number] };
+  entityModels: { teleporter: ReturnType<typeof resolveMapModels>[number]; pickups: ReturnType<typeof resolveMapModels> };
   mapSounds: ConfigState["mapSounds"];
 } {
   const state: ConfigState = {
@@ -124,7 +124,11 @@ function readTextureManifest(mapName: string): {
     lighting: state.lighting,
     fog: state.fog,
     mapModels: resolveMapModels(state.mapModels),
-    entityModels: { teleporter: resolveMapModels(["teleporter"])[0] },
+    entityModels: {
+      teleporter: resolveMapModels(["teleporter"])[0],
+      pickups: resolveMapModels(["ammo/shells", "ammo/bullets", "ammo/rockets", "ammo/rrounds", "ammo/grenades", "ammo/cartridges",
+        "health", "boost", "armor/green", "armor/yellow", "quad"]),
+    },
     mapSounds: state.mapSounds,
   };
 }
