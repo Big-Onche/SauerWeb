@@ -3,12 +3,14 @@ import type { ICameraInput } from "@babylonjs/core/Cameras/cameraInputsManager";
 import type { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { keyForEvent, loadMovementBindings, type MovementBindings } from "./KeyBindings";
+import { loadTouchSettings, TOUCH_SETTINGS_CHANGED, type TouchSettings } from "./TouchSettings";
 
 export class BrowserPhysicsInput {
   readonly state = createInputState();
   enabled = false;
   private readonly pressed = new Set<string>();
   private readonly bindings = loadMovementBindings();
+  private settings = loadTouchSettings();
   private touchX = 0;
   private touchY = 0;
   private touchJump = false;
@@ -19,6 +21,7 @@ export class BrowserPhysicsInput {
     window.addEventListener("blur", this.clear);
     document.addEventListener("mousemove", this.onMouseMove);
     canvas.addEventListener("click", this.onCanvasClick);
+    window.addEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
   }
 
   sample(): PhysicsInputState {
@@ -65,6 +68,7 @@ export class BrowserPhysicsInput {
     window.removeEventListener("blur", this.clear);
     document.removeEventListener("mousemove", this.onMouseMove);
     this.canvas.removeEventListener("click", this.onCanvasClick);
+    window.removeEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     this.clear();
   }
 
@@ -81,9 +85,12 @@ export class BrowserPhysicsInput {
 
   private readonly onMouseMove = (event: MouseEvent): void => {
     if (!this.enabled || document.pointerLockElement !== this.canvas) return;
-    this.state.yawDelta += event.movementX;
-    this.state.pitchDelta += event.movementY;
+    const scale = this.settings.mouseSensitivity / 100;
+    this.state.yawDelta += event.movementX * scale;
+    this.state.pitchDelta += event.movementY * scale;
   };
+
+  private readonly onSettingsChanged = (event: CustomEvent<TouchSettings>): void => { this.settings = event.detail; };
 
   private readonly onCanvasClick = (): void => {
     this.capture();

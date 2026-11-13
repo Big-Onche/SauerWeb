@@ -110,7 +110,7 @@ export class TouchControls {
     else if (role === "look") {
       const previous = this.lookPositions.get(event.pointerId);
       if (previous) {
-        const scale = this.settings.sensitivity / 100;
+        const scale = this.settings.touchSensitivity / 100;
         this.physics.addTouchLook((event.clientX - previous.x) * scale, (event.clientY - previous.y) * scale);
       }
       this.lookPositions.set(event.pointerId, { x: event.clientX, y: event.clientY });
