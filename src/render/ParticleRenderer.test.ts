@@ -1,12 +1,14 @@
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
+import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
 import { WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
-import { ParticleRenderer, sauerParticleColor, sauerParticleDiameter, sauerParticleOffset, sauerParticlePosition } from "./ParticleRenderer";
+import { explosionTexgenBasis, ParticleRenderer, sauerParticleColor, sauerParticleDiameter, sauerParticleOffset,
+  sauerParticlePosition } from "./ParticleRenderer";
 
 describe("Sauerbraten particle entity helpers", () => {
   it("bundles Babylon's particle shaders instead of requesting them as runtime URLs", () => {
@@ -71,5 +73,45 @@ describe("Sauerbraten particle entity helpers", () => {
     expect(scene.textures).toHaveLength(0);
     expect(scene.materials.every((material) => material.name === "default material")).toBe(true);
     engine.dispose();
+  });
+
+  it.each([
+    [Gun.Rocket, "explosion.png"],
+    [Gun.Grenade, "plasma.png"],
+  ])("renders %s explosions as native-style shader spheres using %s", (gun, textureName) => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const events = new WeaponEvents();
+    const camera = new FreeCamera("camera", new Vector3(0, 0, -100), scene);
+    scene.activeCamera = camera;
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+
+    events.emit({ type: "explosion", gun, position: { x: 0, y: 0, z: 0 }, radius: 40 });
+    const fireball = scene.getMeshByName("weapon-explosion-fireball");
+    expect(fireball).not.toBeNull();
+    expect(fireball!.billboardMode).toBe(0);
+    expect(fireball!.getTotalVertices()).toBe(91);
+    expect(fireball!.getTotalIndices()).toBe(360);
+    expect(fireball!.scaling.asArray()).toEqual([4, 4, 4]);
+    expect(fireball!.material).toBeInstanceOf(ShaderMaterial);
+    expect(fireball!.material!.getActiveTextures()[0].name).toContain(textureName);
+    expect((fireball!.material as ShaderMaterial).alphaMode).toBe(1);
+    expect(() => scene.render()).not.toThrow();
+
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("builds explosion texture coordinates around the camera-to-fireball direction", () => {
+    const center = new Vector3(8, 3, 12);
+    const camera = new Vector3(-4, 7, -2);
+    const basis = explosionTexgenBasis(center, camera, Vector3.Right(), Vector3.Up());
+    const view = center.subtract(camera).normalize();
+
+    expect(Vector3.Dot(basis.right, view)).toBeCloseTo(0);
+    expect(Vector3.Dot(basis.up, view)).toBeCloseTo(0);
+    expect(Vector3.Dot(basis.right, basis.up)).toBeCloseTo(0);
+    expect(basis.right.length()).toBeCloseTo(1);
+    expect(basis.up.length()).toBeCloseTo(1);
   });
 });

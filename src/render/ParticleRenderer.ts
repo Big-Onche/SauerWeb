@@ -3,6 +3,7 @@ import type { Camera } from "@babylonjs/core/Cameras/camera";
 import "@babylonjs/core/Culling/ray";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { Material } from "@babylonjs/core/Materials/material";
+import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
@@ -25,8 +26,8 @@ import { toBabylonDirection, toBabylonPosition } from "./coordinates";
 import { selectModelSkin } from "./modelSkin";
 
 type ParticleTexture = "ball1.png" | "ball2.png" | "ball3.png" | "base.png" | "explosion.png" | "flames.png" | "flare.jpg" |
-  "lensflares.png" | "lightning.jpg" | "muzzleflash1.jpg" | "muzzleflash2.jpg" | "muzzleflash3.jpg" | "smoke.png" | "snow.png" |
-  "spark.png" | "steam.png" | "blood.png" | "scorch.png";
+  "lensflares.png" | "lightning.jpg" | "muzzleflash1.jpg" | "muzzleflash2.jpg" | "muzzleflash3.jpg" | "plasma.png" | "smoke.png" |
+  "snow.png" | "spark.png" | "steam.png" | "blood.png" | "scorch.png";
 
 interface SpriteEffect {
   mesh: Mesh;
@@ -37,6 +38,9 @@ interface SpriteEffect {
   reusableMesh?: "sprite" | "beam";
   light?: PointLight;
   track?: () => Vec3 | undefined;
+  update?: (progress: number) => void;
+  fadeMesh?: boolean;
+  ownedMaterial?: Material;
 }
 
 interface PooledParticleSystem {
@@ -89,6 +93,60 @@ const MAX_POOLED_PARTICLE_SYSTEMS = 16;
 const MAX_POOLED_SPRITES = 64;
 const MAX_POOLED_BEAMS = 128;
 const PARTICLE_LAYER_MASK = 0x0fffffff;
+
+const EXPLOSION_VERTEX_SHADER = `
+  precision highp float;
+  attribute vec3 position;
+  attribute vec2 uv;
+  uniform mat4 worldViewProjection;
+  uniform vec3 center;
+  uniform vec3 cameraRight;
+  uniform vec3 cameraUp;
+  uniform float millis;
+  varying vec2 texcoord0;
+  varying vec2 texcoord1;
+  varying vec2 texcoord2;
+
+  vec3 rotateAroundAxis(vec3 value, vec3 axis, float angle) {
+    float sine = sin(angle);
+    float cosine = cos(angle);
+    return value * cosine + cross(axis, value) * sine + axis * dot(axis, value) * (1.0 - cosine);
+  }
+
+  void main(void) {
+    vec3 unitPosition = normalize(position);
+    float wobble = 1.0 + 0.5 * abs(fract(dot(unitPosition, center) + millis * 2.0) - 0.5);
+    float angle = radians(143.0) * millis;
+    vec3 axis = normalize(vec3(1.0));
+    vec3 rotatedPosition = rotateAroundAxis(position * wobble, axis, angle);
+    vec3 rotatedDirection = rotateAroundAxis(unitPosition, axis, angle);
+    gl_Position = worldViewProjection * vec4(rotatedPosition, 1.0);
+
+    vec2 projected = vec2(dot(cameraRight, rotatedDirection), dot(cameraUp, rotatedDirection));
+    texcoord0 = uv;
+    texcoord1 = projected;
+    texcoord2 = projected * 0.5 - millis * 0.5;
+  }
+`;
+
+const EXPLOSION_FRAGMENT_SHADER = `
+  precision highp float;
+  uniform sampler2D explosionSampler;
+  uniform vec3 color;
+  uniform float fade;
+  varying vec2 texcoord0;
+  varying vec2 texcoord1;
+  varying vec2 texcoord2;
+
+  void main(void) {
+    vec2 distorted = texcoord0 + texture2D(explosionSampler, texcoord2).xy * 0.1;
+    vec4 diffuse = texture2D(explosionSampler, distorted);
+    float edge = pow(clamp(1.0 - dot(texcoord1, texcoord1), 0.0, 1.0), 4.0);
+    diffuse *= edge * 4.0;
+    diffuse.b += 0.5 - edge * 0.5;
+    gl_FragColor = vec4(diffuse.rgb * color, diffuse.a * fade);
+  }
+`;
 
 /** Babylon presentation of Sauerbraten's renderparticles.cpp particle recipes. */
 export class ParticleRenderer {
@@ -476,13 +534,61 @@ export class ParticleRenderer {
     if (magic) return;
     this.decal(position, { x: 0, y: 0, z: 1 }, "scorch.png", 0xffffff, radius / 2);
     const blue = gun === Gun.Grenade;
-    const duration = blue ? Math.max(120, (radius - 4) * 15) : Math.max(300, radius * 20);
-    const effect = this.sprite(position, "explosion.png", blue ? 0x80ffff : 0xff8080, 4, duration, true, radius);
+    const duration = Math.max(1, (radius - 4) * (blue ? 15 : 20));
+    const effect = this.fireball(position, radius, duration, blue);
     const light = new PointLight("weapon-explosion-light", toBabylonPosition(position), this.scene);
     light.diffuse = blue ? new Color3(0.25, 1, 1) : new Color3(1, 0.75, 0.5);
     light.intensity = 2;
     light.range = radius * 1.15;
     effect.light = light;
+  }
+
+  // Original: src/engine/explosion.h and data/glsl.cfg. Native Sauerbraten renders
+  // fireballs as expanding, shader-wobbled spheres rather than billboard particles.
+  private fireball(position: Vec3, radius: number, duration: number, blue: boolean): SpriteEffect {
+    const texture = this.particleTexture(blue ? "plasma.png" : "explosion.png");
+    texture.wrapU = Texture.WRAP_ADDRESSMODE;
+    texture.wrapV = Texture.WRAP_ADDRESSMODE;
+    const material = new ShaderMaterial(`weapon-explosion-${blue ? "blue" : "red"}-material`, this.scene, {
+      vertexSource: EXPLOSION_VERTEX_SHADER,
+      fragmentSource: EXPLOSION_FRAGMENT_SHADER,
+    }, {
+      attributes: ["position", "uv"],
+      uniforms: ["worldViewProjection", "center", "cameraRight", "cameraUp", "millis", "color", "fade"],
+      samplers: ["explosionSampler"],
+      needAlphaBlending: true,
+    });
+    material.backFaceCulling = false;
+    material.disableDepthWrite = true;
+    material.alphaMode = 1;
+    material.setTexture("explosionSampler", texture);
+    material.setVector3("center", toBabylonPosition(position));
+    material.setColor3("color", particleColor3(blue ? 0x80ffff : 0xff8080));
+    material.setFloat("fade", 1);
+    material.onBindObservable.add(() => {
+      const camera = this.scene.activeCamera ?? this.playerCamera;
+      const basis = explosionTexgenBasis(toBabylonPosition(position), camera.globalPosition,
+        camera.getDirection(Vector3.Right()), camera.getDirection(Vector3.Up()));
+      material.setVector3("cameraRight", basis.right);
+      material.setVector3("cameraUp", basis.up);
+    });
+
+    const mesh = createExplosionSphere(this.scene);
+    mesh.position.copyFrom(toBabylonPosition(position));
+    mesh.scaling.setAll(4);
+    mesh.isPickable = false;
+    mesh.isVisible = this.renderingEnabled;
+    mesh.material = material;
+    const started = performance.now();
+    const effect: SpriteEffect = {
+      mesh, started, duration, startScale: 4, endScale: radius, fadeMesh: false, ownedMaterial: material,
+      update: (progress) => {
+        material.setFloat("millis", performance.now() / 1000);
+        material.setFloat("fade", Math.min(1, (1 - progress) * 4));
+      },
+    };
+    this.effects.push(effect);
+    return effect;
   }
 
   private decal(position: Vec3, normal: Vec3, texture: ParticleTexture, color: number, size: number): void {
@@ -768,8 +874,9 @@ export class ParticleRenderer {
         effect.mesh.position.copyFrom(toBabylonPosition(trackedPosition));
         effect.light?.position.copyFrom(effect.mesh.position);
       }
-      effect.mesh.visibility = 1 - progress;
+      effect.mesh.visibility = this.renderingEnabled ? (effect.fadeMesh === false ? 1 : 1 - progress) : 0;
       effect.mesh.scaling.setAll(effect.startScale + (effect.endScale - effect.startScale) * progress);
+      effect.update?.(progress);
       if (effect.light) effect.light.intensity = (1 - progress) * 2;
       if (progress >= 1) {
         this.disposeEffect(effect);
@@ -789,6 +896,7 @@ export class ParticleRenderer {
 
   private disposeEffect(effect: SpriteEffect, reuseMesh = true): void {
     effect.light?.dispose();
+    effect.ownedMaterial?.dispose(false, false);
     const pool = effect.reusableMesh === "sprite" ? this.spritePool : effect.reusableMesh === "beam" ? this.beamPool : undefined;
     const limit = effect.reusableMesh === "beam" ? MAX_POOLED_BEAMS : MAX_POOLED_SPRITES;
     if (reuseMesh && pool && pool.length < limit) {
@@ -856,6 +964,54 @@ function particleColor4(color: number, alpha: number): Color4 {
 
 function particleUrl(texture: ParticleTexture): string {
   return packageAssetUrl(`particles/${texture}`) ?? "";
+}
+
+/** Camera-facing texture projection used by explosion.h for fireball texgen. */
+export function explosionTexgenBasis(center: Vector3, cameraPosition: Vector3, cameraRight: Vector3,
+                                     cameraUp: Vector3): { right: Vector3; up: Vector3 } {
+  const view = center.subtract(cameraPosition);
+  if (view.lengthSquared() < 1e-8) return { right: cameraRight.normalizeToNew(), up: cameraUp.normalizeToNew() };
+  view.normalize();
+  let right = Vector3.Cross(Vector3.Up(), view);
+  if (right.lengthSquared() < 1e-8) right = cameraRight.clone();
+  right.normalize();
+  const up = Vector3.Cross(view, right).normalize();
+  return { right, up };
+}
+
+/** Exact 12x6 sphere topology and UV layout from src/engine/explosion.h. */
+function createExplosionSphere(scene: Scene): Mesh {
+  const slices = 12, stacks = 6, stride = slices + 1;
+  const positions: number[] = [], uvs: number[] = [], indices: number[] = [];
+  for (let stack = 0; stack <= stacks; stack++) {
+    const t = 1 - stack / stacks;
+    const rho = Math.PI * (1 - t);
+    const sineRho = stack > 0 && stack < stacks ? Math.sin(rho) : 0;
+    const cosineRho = stack === 0 ? 1 : stack < stacks ? Math.cos(rho) : -1;
+    for (let slice = 0; slice <= slices; slice++) {
+      const s = slice / slices;
+      const theta = slice === slices ? 0 : 2 * Math.PI * s;
+      // Sauerbraten is Z-up; Babylon is Y-up.
+      positions.push(-Math.sin(theta) * sineRho, cosineRho, Math.cos(theta) * sineRho);
+      uvs.push(s, t);
+    }
+  }
+  for (let stack = 0; stack < stacks; stack++) {
+    for (let index = 0; index < slices; index++) {
+      const slice = stack % 2 ? slices - index - 1 : index;
+      if (stack > 0) indices.push(stack * stride + slice, (stack + 1) * stride + slice, stack * stride + slice + 1);
+      if (stack + 1 < stacks) {
+        indices.push(stack * stride + slice + 1, (stack + 1) * stride + slice, (stack + 1) * stride + slice + 1);
+      }
+    }
+  }
+  const mesh = new Mesh("weapon-explosion-fireball", scene);
+  const data = new VertexData();
+  data.positions = positions;
+  data.uvs = uvs;
+  data.indices = indices;
+  data.applyToMesh(mesh, false);
+  return mesh;
 }
 
 function randomSphereVector(radius: number): Vec3 {
