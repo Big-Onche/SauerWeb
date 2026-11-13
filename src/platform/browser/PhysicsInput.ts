@@ -21,7 +21,8 @@ export class BrowserPhysicsInput {
   private gyroPitch = 0;
   private filteredGyroYaw = 0;
   private filteredGyroPitch = 0;
-  private previousGyro?: { alpha: number; beta: number; gamma: number };
+  private previousGyro?: DeviceViewAngles;
+  private stableGyroYaw = 0;
   private gyroPermissionRequested = false;
   private fullGyroContext = false;
 
@@ -33,6 +34,7 @@ export class BrowserPhysicsInput {
     canvas.addEventListener("click", this.onCanvasClick);
     window.addEventListener("pointerdown", this.requestGyroPermission);
     window.addEventListener("deviceorientation", this.onDeviceOrientation);
+    window.addEventListener("orientationchange", this.recenterGyro);
     window.addEventListener(GYRO_RECENTER_REQUESTED, this.recenterGyro);
     window.addEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
   }
@@ -96,6 +98,7 @@ export class BrowserPhysicsInput {
     this.canvas.removeEventListener("click", this.onCanvasClick);
     window.removeEventListener("pointerdown", this.requestGyroPermission);
     window.removeEventListener("deviceorientation", this.onDeviceOrientation);
+    window.removeEventListener("orientationchange", this.recenterGyro);
     window.removeEventListener(GYRO_RECENTER_REQUESTED, this.recenterGyro);
     window.removeEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     this.clear();
@@ -139,14 +142,15 @@ export class BrowserPhysicsInput {
     const gyroActive = this.fullGyroContext ? this.settings.fullGyroEnabled : this.settings.gyroEnabled;
     if (!this.enabled || !touchControlsWanted(this.settings) || !gyroActive ||
         event.alpha === null || event.beta === null || event.gamma === null) return;
-    const current = landscapeOrientation(event.alpha, event.beta, event.gamma);
+    const current = this.stabilizedViewAngles(event.alpha, event.beta, event.gamma);
     const previous = this.previousGyro;
     this.previousGyro = current;
     if (!previous) return;
     const smoothing = this.settings.gyroSmoothing / 100;
     const scale = this.settings.gyroSensitivity / 100 * (this.fullGyroContext ? 2.2 : 1);
-    const yaw = shortestAngle(current.alpha - previous.alpha) * scale * (this.settings.gyroInvertHorizontal ? -1 : 1);
-    const pitch = (current.beta - previous.beta) * scale * (this.settings.gyroInvertVertical ? -1 : 1);
+    const yaw = shortestAngle(current.yaw - previous.yaw) * scale * (this.settings.gyroInvertHorizontal ? -1 : 1);
+    // PhysicsInputState pitch deltas use mouse-screen direction, opposite to camera pitch.
+    const pitch = -(current.pitch - previous.pitch) * scale * (this.settings.gyroInvertVertical ? -1 : 1);
     this.filteredGyroYaw = this.filteredGyroYaw * smoothing + yaw * (1 - smoothing);
     this.filteredGyroPitch = this.filteredGyroPitch * smoothing + pitch * (1 - smoothing);
     this.gyroYaw += this.filteredGyroYaw * 10;
@@ -158,6 +162,13 @@ export class BrowserPhysicsInput {
     this.gyroYaw = this.gyroPitch = this.filteredGyroYaw = this.filteredGyroPitch = 0;
   };
 
+  private stabilizedViewAngles(alpha: number, beta: number, gamma: number): DeviceViewAngles {
+    const current = deviceViewAngles(alpha, beta, gamma);
+    if (current.horizontal >= 0.08) this.stableGyroYaw = current.yaw;
+    else current.yaw = this.stableGyroYaw;
+    return current;
+  }
+
   private readonly clear = (): void => {
     this.pressed.clear();
     this.clearTouch();
@@ -166,14 +177,27 @@ export class BrowserPhysicsInput {
   };
 }
 
-function landscapeOrientation(alpha: number, beta: number, gamma: number): { alpha: number; beta: number; gamma: number } {
-  const angle = screen.orientation?.angle ?? 0;
-  if (angle === 90) return { alpha, beta: -gamma, gamma: beta };
-  if (angle === 270 || angle === -90) return { alpha, beta: gamma, gamma: -beta };
-  return { alpha, beta, gamma };
-}
-
 function shortestAngle(value: number): number { return (value + 540) % 360 - 180; }
+
+export interface DeviceViewAngles { yaw: number; pitch: number; horizontal: number }
+
+// DeviceOrientation uses intrinsic Z-X'-Y'' rotations. Deriving the screen-normal
+// direction from its quaternion avoids the Euler discontinuities that occur while
+// a phone is tilted close to vertical. Yaw is intentionally undefined at the poles;
+// callers retain the last stable value there.
+export function deviceViewAngles(alpha: number, beta: number, gamma: number): DeviceViewAngles {
+  const halfAlpha = alpha * Math.PI / 360, halfBeta = beta * Math.PI / 360, halfGamma = gamma * Math.PI / 360;
+  const cX = Math.cos(halfBeta), cY = Math.cos(halfGamma), cZ = Math.cos(halfAlpha);
+  const sX = Math.sin(halfBeta), sY = Math.sin(halfGamma), sZ = Math.sin(halfAlpha);
+  const w = cX * cY * cZ - sX * sY * sZ;
+  const x = sX * cY * cZ - cX * sY * sZ;
+  const y = cX * sY * cZ + sX * cY * sZ;
+  const z = cX * cY * sZ + sX * sY * cZ;
+  const forwardX = 2 * (x * z + w * y), forwardY = 2 * (y * z - w * x);
+  const forwardZ = Math.max(-1, Math.min(1, 1 - 2 * (x * x + y * y)));
+  const horizontal = Math.hypot(forwardX, forwardY);
+  return { yaw: -Math.atan2(forwardX, -forwardY) * 180 / Math.PI, pitch: -Math.asin(forwardZ) * 180 / Math.PI, horizontal };
+}
 
 export class BrowserFreeCameraInput implements ICameraInput<UniversalCamera> {
   camera: UniversalCamera | null = null;
@@ -181,7 +205,8 @@ export class BrowserFreeCameraInput implements ICameraInput<UniversalCamera> {
   private readonly bindings: MovementBindings = loadMovementBindings();
   private noPreventDefault = false;
   private settings = loadTouchSettings();
-  private previousGyro?: { alpha: number; beta: number; gamma: number };
+  private previousGyro?: DeviceViewAngles;
+  private stableGyroYaw = 0;
   private filteredGyroYaw = 0;
   private filteredGyroPitch = 0;
 
@@ -195,6 +220,7 @@ export class BrowserFreeCameraInput implements ICameraInput<UniversalCamera> {
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("blur", this.clear);
     window.addEventListener("deviceorientation", this.onDeviceOrientation);
+    window.addEventListener("orientationchange", this.recenterGyro);
     window.addEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     window.addEventListener(GYRO_RECENTER_REQUESTED, this.recenterGyro);
   }
@@ -204,6 +230,7 @@ export class BrowserFreeCameraInput implements ICameraInput<UniversalCamera> {
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.clear);
     window.removeEventListener("deviceorientation", this.onDeviceOrientation);
+    window.removeEventListener("orientationchange", this.recenterGyro);
     window.removeEventListener(TOUCH_SETTINGS_CHANGED, this.onSettingsChanged as EventListener);
     window.removeEventListener(GYRO_RECENTER_REQUESTED, this.recenterGyro);
     this.clear();
@@ -237,14 +264,14 @@ export class BrowserFreeCameraInput implements ICameraInput<UniversalCamera> {
   private readonly onDeviceOrientation = (event: DeviceOrientationEvent): void => {
     if (!this.settings.fullGyroEnabled || !touchControlsWanted(this.settings) || !this.camera || event.alpha === null || event.beta === null ||
         event.gamma === null) return;
-    const current = landscapeOrientation(event.alpha, event.beta, event.gamma), previous = this.previousGyro;
+    const current = this.stabilizedViewAngles(event.alpha, event.beta, event.gamma), previous = this.previousGyro;
     this.previousGyro = current;
     if (!previous) return;
     const smoothing = this.settings.gyroSmoothing / 100;
     const scale = this.settings.gyroSensitivity / 100 * 2.2 * Math.PI / 180;
     const horizontal = this.settings.gyroInvertHorizontal ? -1 : 1, vertical = this.settings.gyroInvertVertical ? -1 : 1;
-    const yaw = shortestAngle(current.alpha - previous.alpha) * scale * horizontal;
-    const pitch = (current.beta - previous.beta) * scale * vertical;
+    const yaw = shortestAngle(current.yaw - previous.yaw) * scale * horizontal;
+    const pitch = -(current.pitch - previous.pitch) * scale * vertical;
     this.filteredGyroYaw = this.filteredGyroYaw * smoothing + yaw * (1 - smoothing);
     this.filteredGyroPitch = this.filteredGyroPitch * smoothing + pitch * (1 - smoothing);
     this.camera.rotation.y += this.filteredGyroYaw;
@@ -253,4 +280,11 @@ export class BrowserFreeCameraInput implements ICameraInput<UniversalCamera> {
   };
   private readonly recenterGyro = (): void => { this.previousGyro = undefined; this.filteredGyroYaw = this.filteredGyroPitch = 0; };
   private readonly clear = (): void => { this.pressed.clear(); this.recenterGyro(); };
+
+  private stabilizedViewAngles(alpha: number, beta: number, gamma: number): DeviceViewAngles {
+    const current = deviceViewAngles(alpha, beta, gamma);
+    if (current.horizontal >= 0.08) this.stableGyroYaw = current.yaw;
+    else current.yaw = this.stableGyroYaw;
+    return current;
+  }
 }
