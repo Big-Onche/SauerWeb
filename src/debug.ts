@@ -5,6 +5,7 @@ import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolve
 import { DEFAULT_VIEWPORT_TUNING, MapScene, type SceneStats, type ViewportTuning } from "./render/MapScene";
 import { PhysicsState } from "./engine/physics/types";
 import { FpsHud } from "./platform/browser/FpsHud";
+import { keyBindingLabel, loadMovementBindings } from "./platform/browser/KeyBindings";
 
 interface MapListItem {
   name: string;
@@ -15,6 +16,7 @@ interface MapListItem {
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing app root.");
+const movementBindings = loadMovementBindings();
 
 app.innerHTML = `
   <main class="shell">
@@ -90,7 +92,8 @@ app.innerHTML = `
       <div id="stats" class="stats" hidden></div>
       <div id="physics-debug" class="physics-debug" hidden></div>
       <details id="model-report" class="model-report" hidden><summary></summary><ul></ul></details>
-      <div id="controls" class="controls"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span><i></i><span>Mouse to look</span></div>
+      <div id="controls" class="controls"><kbd>${keyBindingLabel(movementBindings.forward)}</kbd><kbd>${keyBindingLabel(movementBindings.left)}</kbd>
+        <kbd>${keyBindingLabel(movementBindings.backward)}</kbd><kbd>${keyBindingLabel(movementBindings.right)}</kbd><span>Move</span><i></i><span>Mouse to look</span></div>
     </section>
   </main>
 `;

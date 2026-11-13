@@ -78,6 +78,16 @@ button { color: inherit; }
 .option-slider input { width: 100%; accent-color: #c47b32; }
 .option-slider output { color: #f0bc78; font-variant-numeric: tabular-nums; text-align: right; }
 .option-action { cursor: pointer; }.option-action b { color: #e7a95f; font-weight: 500; }.option-note { margin: 16px 12px; color: #89928d; font-size: 14px; line-height: 1.45; }
+.option-bind { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 7px 12px;
+  border-bottom: 1px solid #ffffff18; color: #b9c0bb; font-size: 17px; text-transform: lowercase; }
+.option-bind button, .option-reset-binds { border: 1px solid #8b6948; border-radius: 2px; background: linear-gradient(180deg, #70472888, #36271988);
+  color: #ffd39a; cursor: pointer; }
+.option-bind button { min-width: 130px; padding: 5px 13px; }
+.option-bind button:hover, .option-bind button:focus-visible, .option-bind button.capturing, .option-reset-binds:hover, .option-reset-binds:focus-visible {
+  border-color: #ffc77f; outline: none; background: linear-gradient(180deg, #955b2aaa, #543019aa); color: #fff3e2; }
+.option-bind button.capturing { animation: bind-pulse 1s ease-in-out infinite alternate; }
+.option-reset-binds { margin: 14px 12px 8px; padding: 5px 13px; }
+@keyframes bind-pulse { to { box-shadow: 0 0 0 2px #d9953d55; } }
 .options-dialog footer { display: flex; justify-content: space-between; padding-top: 9px; border-top: 1px solid #69737477; color: #7f898a; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
 @media (max-width: 720px) { .options-dialog { width: calc(100vw - 32px); height: calc(100vh - 32px); padding: 15px; } }
 .about-dialog { width: min(520px, calc(100vw - 72px)); padding: 26px; border: 0; overflow: visible; background: transparent; color: #e9e9e3; box-shadow: none; }

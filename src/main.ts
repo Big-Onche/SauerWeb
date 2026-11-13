@@ -8,6 +8,8 @@ import { guiSkinMarkup } from "./guiSkin";
 import { bindCrosshairSettings, CROSSHAIRS, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 import { loadHudSettings, saveHudSettings } from "./platform/browser/HudSettings";
 import { loadMusicVolume, musicPlayer } from "./platform/browser/MusicPlayer";
+import { isBindableKey, keyBindingLabel, keyForEvent, loadMovementBindings, MOVEMENT_BINDING_ACTIONS, resetMovementBindings,
+  saveMovementBindings, type MovementBindingAction } from "./platform/browser/KeyBindings";
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
 import { sauerFormattedMarkup } from "./sauerFormatting";
 
@@ -270,6 +272,7 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void document.documentElement.requestFullscreen();
   });
+  bindMovementBindingControls();
 }
 
 function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
@@ -304,13 +307,61 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
     optionNote("Click the game viewport to capture the mouse; press Escape to release it."),
   ]);
   if (tab === "keys") return optionGroup("keys", [
-    optionInfo("W A S D", "move"), optionInfo("space", "jump"), optionInfo("1–7 / wheel", "select weapon"),
+    movementBindingsMarkup(),
+    `<button class="option-reset-binds" type="button" data-action="reset-binds">reset movement binds</button>`,
+    optionInfo("1–7 / wheel", "select weapon"),
     optionInfo("T / Y", "chat / team chat"), optionInfo("F11", "console"), optionInfo("Escape", "pause"),
   ]);
   return optionGroup("console", [
     optionInfo("F11", "open full console"), optionInfo("Page Up / Page Down", "scroll console"),
     optionInfo("/", "enter command"), optionNote("The in-game console reports map, network and gameplay messages."),
   ]);
+}
+
+function movementBindingsMarkup(): string {
+  const bindings = loadMovementBindings();
+  return MOVEMENT_BINDING_ACTIONS.map((action) => `<div class="option-bind"><span>${action}</span><button type="button"
+    data-bind-action="${action}" aria-label="Change ${action} key">${keyBindingLabel(bindings[action])}</button></div>`).join("");
+}
+
+function bindMovementBindingControls(): void {
+  let bindings = loadMovementBindings();
+  document.querySelectorAll<HTMLButtonElement>("[data-bind-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll<HTMLButtonElement>("[data-bind-action]").forEach((candidate) => {
+        candidate.classList.remove("capturing");
+        const action = candidate.dataset.bindAction as MovementBindingAction;
+        candidate.textContent = keyBindingLabel(bindings[action]);
+      });
+      button.classList.add("capturing");
+      button.textContent = "press a key…";
+      button.focus();
+    });
+    button.addEventListener("keydown", (event) => {
+      if (!button.classList.contains("capturing")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        button.classList.remove("capturing");
+        button.textContent = keyBindingLabel(bindings[button.dataset.bindAction as MovementBindingAction]);
+        return;
+      }
+      if (!isBindableKey(event)) return;
+      const action = button.dataset.bindAction as MovementBindingAction;
+      const key = keyForEvent(event);
+      bindings = { ...bindings, [action]: key };
+      saveMovementBindings(bindings);
+      button.classList.remove("capturing");
+      button.textContent = keyBindingLabel(key);
+    });
+  });
+  document.querySelector<HTMLButtonElement>("[data-action='reset-binds']")?.addEventListener("click", () => {
+    bindings = resetMovementBindings();
+    document.querySelectorAll<HTMLButtonElement>("[data-bind-action]").forEach((button) => {
+      button.classList.remove("capturing");
+      button.textContent = keyBindingLabel(bindings[button.dataset.bindAction as MovementBindingAction]);
+    });
+  });
 }
 
 function optionGroup(title: string, rows: string[]): string {

@@ -30,7 +30,7 @@ import { animateEntityModels, loadMapModels, type EntityModelAnimation, type Map
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { installSauerFogDistance } from "./SauerFogShader";
-import { BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
+import { BrowserFreeCameraInput, BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics";
 import { createClient, type MultiplayerEvent, type NetworkPlayer, type ServerEndpoint } from "../fpsgame/client";
 import { BrowserWeaponInput } from "../platform/browser/WeaponInput";
@@ -174,10 +174,8 @@ export class MapScene {
     this.freeCamera = this.createCamera("free-camera");
     this.freeCamera.speed = 4;
     this.freeCamera.angularSensibility = 2200;
-    this.freeCamera.keysUp = [87, 38];
-    this.freeCamera.keysDown = [83, 40];
-    this.freeCamera.keysLeft = [65, 37];
-    this.freeCamera.keysRight = [68, 39];
+    this.freeCamera.inputs.removeByType("FreeCameraKeyboardMoveInput");
+    this.freeCamera.inputs.add(new BrowserFreeCameraInput());
     if (runtimeMode === "debug") this.freeCamera.attachControl(canvas, true);
     this.playerCamera = this.createCamera("player-camera");
     this.createViewportTuningPostProcess(this.freeCamera);
