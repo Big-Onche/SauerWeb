@@ -21,6 +21,8 @@ html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .game-chat:not([hidden]) ~ .game-chat-console { bottom: 122px; }
 .console-line.error, .console-line.teamkill { color: #ff8080; }.console-line.chat { color: #b6ffb6; }.console-line.team-chat { color: #96bfff; }
 .console-line.game-info, .console-line.frag-self { color: #ffff80; }.console-line.frag-other { color: #e8e8e8; }
+.game-console:not(.full) .console-line.error { animation: console-error-lifetime 5s linear both; }
+@keyframes console-error-lifetime { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
 .game-console.full { inset: 0 0 auto; z-index: 31; width: 100%; height: 75%; padding: 18px 24px; background: #090d0bdc;
   border-bottom: 1px solid #899b7388; pointer-events: auto; backdrop-filter: blur(5px); }
 .game-console.full .game-console-lines { height: 100%; overflow-y: auto; justify-content: flex-end; scrollbar-width: thin; scrollbar-color: #75836c transparent; }

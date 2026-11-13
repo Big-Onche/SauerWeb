@@ -10,6 +10,11 @@ export interface ConsoleLine {
 const MAX_CONSOLE_LINES = 200;
 const HUD_LINE_COUNT = 5;
 const HUD_FADE_MILLISECONDS = 30_000;
+const ERROR_FADE_MILLISECONDS = 5_000;
+
+export function consoleHudLifetime(type: ConsoleLineType): number {
+  return type === "error" ? ERROR_FADE_MILLISECONDS : HUD_FADE_MILLISECONDS;
+}
 
 // Original: src/engine/console.cpp, conline(), renderconsole(), toggleconsole.
 export class GameConsole {
@@ -44,8 +49,6 @@ export class GameConsole {
     if (this.lines.length > MAX_CONSOLE_LINES) this.lines.splice(0, this.lines.length - MAX_CONSOLE_LINES);
     this.skip = 0;
     this.render();
-    window.clearTimeout(this.fadeTimer);
-    this.fadeTimer = window.setTimeout(() => this.render(), HUD_FADE_MILLISECONDS + 50);
   }
 
   toggle(): boolean {
@@ -77,14 +80,20 @@ export class GameConsole {
     const hudLines = this.lines.filter((line) => !mobile || line.type !== "frag-self" && line.type !== "frag-other" && line.type !== "teamkill");
     const visible = this.fullConsole
       ? this.lines.slice(0, end)
-      : hudLines.slice(-(mobile ? 3 : HUD_LINE_COUNT)).filter((line) => now - line.outTime < HUD_FADE_MILLISECONDS);
+      : hudLines.filter((line) => now - line.outTime < consoleHudLifetime(line.type)).slice(-(mobile ? 3 : HUD_LINE_COUNT));
     this.linesElement.replaceChildren(...visible.map((line) => {
       const element = document.createElement("p");
       element.className = `console-line ${line.type}`;
       element.textContent = line.text;
+      if (!this.fullConsole && line.type === "error") element.style.animationDelay = `${Math.min(0, line.outTime - now)}ms`;
       return element;
     }));
     if (this.fullConsole) this.linesElement.scrollTop = this.linesElement.scrollHeight;
+    window.clearTimeout(this.fadeTimer);
+    if (!this.fullConsole) {
+      const nextExpiry = visible.reduce((earliest, line) => Math.min(earliest, line.outTime + consoleHudLifetime(line.type)), Infinity);
+      if (Number.isFinite(nextExpiry)) this.fadeTimer = window.setTimeout(() => this.render(), Math.max(0, nextExpiry - now) + 20);
+    }
     // Native miniconfilter defaults to zero; chat and frag lines are part of the normal five-line console above.
     this.miniElement.replaceChildren();
   }
