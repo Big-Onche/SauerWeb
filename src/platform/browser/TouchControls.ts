@@ -42,6 +42,8 @@ export class TouchControls {
 
   get active(): boolean { return !this.root.hidden; }
 
+  get preferred(): boolean { return touchControlsWanted(this.settings); }
+
   setGameplayEnabled(enabled: boolean): void {
     this.gameplayEnabled = enabled;
     this.syncVisibility();
@@ -126,6 +128,7 @@ export class TouchControls {
 
   private readonly onSettingsChanged = (event: CustomEvent<TouchSettings>): void => {
     this.settings = event.detail;
+    if (this.preferred && document.pointerLockElement) void document.exitPointerLock();
     this.syncVisibility();
   };
 
@@ -182,6 +185,7 @@ export class TouchControls {
 
   private syncVisibility(): void {
     const visible = this.gameplayEnabled && !this.blocked && touchControlsWanted(this.settings);
+    if (visible && document.pointerLockElement) void document.exitPointerLock();
     if (visible === !this.root.hidden) return;
     if (!visible) this.clear();
     this.root.hidden = !visible;

@@ -1,5 +1,5 @@
 import { ClientState } from "../../engine/physics/types";
-import type { MultiplayerClient, NetworkPlayer } from "../../fpsgame/client";
+import type { MultiplayerClient } from "../../fpsgame/client";
 import { GameModeFlag, gameModeHas } from "../../fpsgame/game";
 import type { WeaponController } from "../../fpsgame/weapon/WeaponController";
 import type { WeaponEvent, WeaponEvents } from "../../fpsgame/weapon/WeaponEvents";
@@ -73,7 +73,7 @@ export class WeaponHUD {
     const clock = this.multiplayer ? Math.max(0, this.multiplayer.timeLeftSeconds) : 0;
     const damageActive = performance.now() < this.damageUntil;
     const frame = [width, height, current.health, current.maxHealth, current.armour, current.armourType, current.selectedGun,
-      current.state, current.flags, this.controller.quadMilliseconds > 0, clock, this.scoreKey(), damageActive,
+      current.state, current.flags, this.controller.quadMilliseconds > 0, clock, damageActive,
       ...Array.from({ length: 7 }, (_, gun) => current.ammo[gun] ?? 0)].join(":");
     if (frame === this.lastFrame) return;
     this.lastFrame = frame;
@@ -117,7 +117,7 @@ export class WeaponHUD {
     context.scale(scale, scale);
     if (player.state !== ClientState.Spectator && player.state !== ClientState.Editing) this.drawPlayerHud(context, player);
     context.restore();
-    this.drawClockAndScores(context, width, height, clockSeconds);
+    this.drawClock(context, width, height, clockSeconds);
   }
 
   private drawPlayerHud(context: CanvasRenderingContext2D, player: HudPlayerView): void {
@@ -164,7 +164,7 @@ export class WeaponHUD {
     return carriedTeam === localTeam ? Icon.BlueFlag : Icon.RedFlag;
   }
 
-  private drawClockAndScores(context: CanvasRenderingContext2D, width: number, height: number, seconds: number): void {
+  private drawClock(context: CanvasRenderingContext2D, width: number, height: number, seconds: number): void {
     if (!this.multiplayer || (!this.multiplayer.connected && !this.multiplayer.isLocalGame)) return;
     const mins = Math.trunc(seconds / 60), remaining = seconds % 60;
     const clock = `${mins}:${String(remaining).padStart(2, "0")}`;
@@ -174,35 +174,7 @@ export class WeaponHUD {
     context.font = `${FONT_HEIGHT * 0.75}px Sauerbraten, sans-serif`;
     context.fillStyle = mins < 1 ? "#ffc040" : "#ffffff";
     this.drawOutlinedText(context, clock, width * 0.5, height * 0.03 - FONT_HEIGHT * 0.75 * 0.5);
-    const scores = this.leadingScores();
-    if (scores.length) {
-      context.font = `${FONT_HEIGHT}px Sauerbraten, sans-serif`;
-      context.fillStyle = scores[0].local ? "#60a0ff" : "#ff4040";
-      context.textAlign = "right";
-      this.drawOutlinedText(context, String(scores[0].score), width * 0.5 - 20, height * 0.075);
-      if (scores[1]) {
-        context.fillStyle = scores[1].local ? "#60a0ff" : "#ff4040";
-        context.textAlign = "left";
-        this.drawOutlinedText(context, String(scores[1].score), width * 0.5 + 20, height * 0.075);
-      }
-    }
     context.restore();
-  }
-
-  private leadingScores(): Array<{ score: number; local: boolean }> {
-    if (!this.multiplayer) return [];
-    const local = this.multiplayer.players.get(this.multiplayer.clientNumber);
-    if (gameModeHas(this.multiplayer.gameMode, GameModeFlag.Team)) {
-      const teams = [...new Set([...this.multiplayer.players.values()].filter((player) => player.state !== ClientState.Spectator).map((player) => player.team))];
-      return teams.map((team) => ({ score: this.multiplayer!.getTeamScore(team), local: team === local?.team }))
-        .sort((left, right) => right.score - left.score).slice(0, 2);
-    }
-    return [...this.multiplayer.players.values()].filter((player) => player.state !== ClientState.Spectator)
-      .sort(nativePlayerSort).slice(0, 2).map((player) => ({ score: player.frags, local: player.clientNumber === this.multiplayer!.clientNumber }));
-  }
-
-  private scoreKey(): string {
-    return this.leadingScores().map((entry) => `${entry.score},${entry.local}`).join(";");
   }
 
   private drawDamage(context: CanvasRenderingContext2D, width: number, height: number): void {
@@ -262,10 +234,6 @@ export class WeaponHUD {
     this.lastFrame = "";
     this.render();
   };
-}
-
-function nativePlayerSort(left: NetworkPlayer, right: NetworkPlayer): number {
-  return right.flags - left.flags || right.frags - left.frags || left.name.localeCompare(right.name);
 }
 
 function loadImage(source: string, loaded: () => void): HTMLImageElement {

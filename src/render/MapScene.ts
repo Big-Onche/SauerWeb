@@ -627,7 +627,10 @@ export class MapScene {
   }
 
   captureMouse(): void {
-    if (this.runtimeMode === "game" && !this.touchControls.active) this.physicsInput.capture();
+    // Menus and the death screen temporarily hide touch controls. Use the selected
+    // control mode rather than current visibility so a respawn tap cannot acquire
+    // pointer lock before the touch overlay is shown again.
+    if (this.runtimeMode === "game" && !this.touchControls.preferred) this.physicsInput.capture();
   }
 
   setMultiplayerMapInfo(name: string, crc: number): void {
