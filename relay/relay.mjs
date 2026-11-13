@@ -19,6 +19,10 @@ const DEFAULT_LAN_INFO_PORT = 28786;
 const DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128";
 const PRESENCE_STALE_MILLISECONDS = 45_000;
 const PRESENCE_SWEEP_MILLISECONDS = 5_000;
+const DEFAULT_TEAMKILL_WARNING_THRESHOLD = 2;
+const DEFAULT_TEAMKILL_DISCONNECT_THRESHOLD = 3;
+const DEFAULT_TEAMKILL_WINDOW_MILLISECONDS = 5 * 60_000;
+const DEFAULT_TEAMKILL_COOLDOWN_MILLISECONDS = 10 * 60_000;
 
 export function configuredServers(environment = process.env) {
   const value = environment.SAUER_RELAY_SERVERS || "127.0.0.1:28785";
@@ -41,6 +45,10 @@ export function attachSauerRelay(httpServer, options = {}) {
   const allowedOrigins = new Set((process.env.SAUER_RELAY_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean));
   const trustedProxies = parseTrustedProxies(options.trustedProxies ?? process.env.SAUER_RELAY_TRUSTED_PROXIES ?? DEFAULT_TRUSTED_PROXIES);
   const connectionsByAddress = new Map();
+  const connectionsByTarget = new Map();
+  const teamkillsByTarget = new Map();
+  const cooldownsByTarget = new Map();
+  const teamkillProtection = resolveTeamkillProtection(options.teamkillProtection);
   const webSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_DATAGRAM_BYTES, perMessageDeflate: false });
   const refreshAllowedServers = () => {
     serverRefresh ??= updateServers(keepservers).then((updated) => {
@@ -65,6 +73,11 @@ export function attachSauerRelay(httpServer, options = {}) {
       target = servers.find((server) => `${server.host}:${server.port}` === key);
     }
     const remoteConnections = connectionsByAddress.get(remoteAddress) || 0;
+    if (target && (cooldownsByTarget.get(key) ?? 0) > Date.now()) {
+      socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     if (!target || connectionCount >= MAX_CONNECTIONS || remoteConnections >= MAX_CONNECTIONS_PER_ADDRESS ||
         (allowedOrigins.size && !allowedOrigins.has(origin)) || socket.destroyed) {
       if (socket.destroyed) return;
@@ -76,7 +89,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     connectionsByAddress.set(remoteAddress, remoteConnections + 1);
     try {
       webSockets.handleUpgrade(request, socket, head, (webSocket) => {
-        webSockets.emit("connection", webSocket, request, target, remoteAddress);
+        webSockets.emit("connection", webSocket, request, target, remoteAddress, key);
       });
     } catch (error) {
       releaseConnection(remoteAddress);
@@ -91,17 +104,22 @@ export function attachSauerRelay(httpServer, options = {}) {
     else connectionsByAddress.delete(remoteAddress);
   };
 
-  webSockets.on("connection", (webSocket, _request, target, remoteAddress) => {
+  webSockets.on("connection", (webSocket, _request, target, remoteAddress, targetKey) => {
     const udp = dgram.createSocket("udp4");
     let closed = false;
     let windowStarted = Date.now();
     let packets = 0;
     let bytes = 0;
+    const targetConnections = connectionsByTarget.get(targetKey) ?? new Set();
+    targetConnections.add(webSocket);
+    connectionsByTarget.set(targetKey, targetConnections);
     const close = () => {
       if (closed) return;
       closed = true;
       try { udp.close(); } catch {}
       if (webSocket.readyState === WebSocket.OPEN) webSocket.close(1000);
+      targetConnections.delete(webSocket);
+      if (!targetConnections.size) connectionsByTarget.delete(targetKey);
       releaseConnection(remoteAddress);
     };
     udp.on("message", (datagram) => {
@@ -110,6 +128,10 @@ export function attachSauerRelay(httpServer, options = {}) {
     udp.on("error", close);
     udp.connect(target.port, target.host);
     webSocket.on("message", (payload, isBinary) => {
+      if (!isBinary) {
+        handleTeamkillReport(payload, targetKey);
+        return;
+      }
       const datagram = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
       const now = Date.now();
       if (now - windowStarted >= 1000) {
@@ -130,6 +152,56 @@ export function attachSauerRelay(httpServer, options = {}) {
   });
 
   return { servers, close: () => webSockets.close() };
+
+  function handleTeamkillReport(payload, targetKey) {
+    if (payload.length > 128) return;
+    let report;
+    try { report = JSON.parse(payload.toString()); } catch { return; }
+    if (report?.type !== "teamkill") return;
+    const now = Date.now();
+    if ((cooldownsByTarget.get(targetKey) ?? 0) > now) return;
+    const cutoff = now - teamkillProtection.windowMilliseconds;
+    const timestamps = (teamkillsByTarget.get(targetKey) ?? []).filter((timestamp) => timestamp > cutoff && timestamp <= now);
+    timestamps.push(now);
+    teamkillsByTarget.set(targetKey, timestamps);
+    if (timestamps.length === teamkillProtection.warningThreshold) {
+      broadcastControl(targetKey, { type: "teamkill-warning", count: timestamps.length });
+    }
+    if (timestamps.length < teamkillProtection.disconnectThreshold) return;
+    cooldownsByTarget.set(targetKey, now + teamkillProtection.cooldownMilliseconds);
+    broadcastControl(targetKey, { type: "teamkill-disconnect", cooldownMilliseconds: teamkillProtection.cooldownMilliseconds });
+    for (const connection of connectionsByTarget.get(targetKey) ?? []) {
+      const timer = setTimeout(() => connection.close(4001, "Teamkill protection cooldown"), 250);
+      timer.unref();
+    }
+  }
+
+  function broadcastControl(targetKey, message) {
+    const payload = JSON.stringify(message);
+    for (const connection of connectionsByTarget.get(targetKey) ?? []) {
+      if (connection.readyState === WebSocket.OPEN) connection.send(payload);
+    }
+  }
+}
+
+export function resolveTeamkillProtection(config = {}, environment = process.env) {
+  const integer = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  };
+  const warningThreshold = integer(config.warningThreshold ?? environment.SAUER_RELAY_TEAMKILL_WARNING,
+    DEFAULT_TEAMKILL_WARNING_THRESHOLD);
+  const disconnectThreshold = integer(config.disconnectThreshold ?? environment.SAUER_RELAY_TEAMKILL_DISCONNECT,
+    DEFAULT_TEAMKILL_DISCONNECT_THRESHOLD);
+  if (disconnectThreshold <= warningThreshold) throw new Error("The relay teamkill disconnect threshold must exceed its warning threshold.");
+  return {
+    warningThreshold,
+    disconnectThreshold,
+    windowMilliseconds: integer(config.windowMilliseconds ?? environment.SAUER_RELAY_TEAMKILL_WINDOW_MS,
+      DEFAULT_TEAMKILL_WINDOW_MILLISECONDS),
+    cooldownMilliseconds: integer(config.cooldownMilliseconds ?? environment.SAUER_RELAY_TEAMKILL_COOLDOWN_MS,
+      DEFAULT_TEAMKILL_COOLDOWN_MILLISECONDS),
+  };
 }
 
 export function attachPresence(httpServer, options = {}) {

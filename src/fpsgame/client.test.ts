@@ -8,6 +8,7 @@ import type { WeaponEvent } from "./weapon/WeaponEvents";
 import { createFpsEntityRegistry } from "./entities";
 import { ClientState } from "../engine/physics/types";
 import { GameSound } from "./sound";
+import { TEAMKILL_PROTECTION_MESSAGE, TeamkillProtection } from "./teamkillProtection";
 
 describe("Sauerbraten rifle protocol", () => {
   it("serializes the exact native N_SHOOT fields and hit record", () => {
@@ -171,6 +172,49 @@ describe("Sauerbraten rifle protocol", () => {
 });
 
 describe("native server message framing", () => {
+  it("counts only server-confirmed teamkills by the local human player", () => {
+    const protection = new TeamkillProtection();
+    const fps = createClient(undefined, protection), client = fps.multiplayer;
+    Reflect.set(client, "protectionTarget", "play.example:28785");
+    client.clientNumber = 4;
+    client.connected = true;
+    const local = Reflect.apply(Reflect.get(client, "playerFor"), client, [4]) as NetworkPlayer;
+    const teammate = Reflect.apply(Reflect.get(client, "playerFor"), client, [5]) as NetworkPlayer;
+    const enemy = Reflect.apply(Reflect.get(client, "playerFor"), client, [6]) as NetworkPlayer;
+    const bot = Reflect.apply(Reflect.get(client, "playerFor"), client, [7]) as NetworkPlayer;
+    Object.assign(local, { team: "good", aiType: 0 });
+    Object.assign(teammate, { team: "good", aiType: 0 });
+    Object.assign(enemy, { team: "evil", aiType: 0 });
+    Object.assign(bot, { team: "good", aiType: 1 });
+    const protectionEvents: string[] = [];
+    client.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "teamkill-protection") protectionEvents.push(detail.message);
+    });
+    const report = vi.spyOn(client.transport, "reportTeamkill").mockImplementation(() => undefined);
+    const disconnect = vi.spyOn(client.transport, "disconnect").mockImplementation(() => undefined);
+    const died = (victim: number, actor: number): void => {
+      const packet = new PacketWriter().putInt(NetworkMessage.Died).putInt(victim).putInt(actor).putInt(0).putInt(0).finish();
+      Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(packet)]);
+    };
+
+    died(4, 4);
+    died(6, 4);
+    died(7, 4);
+    expect(protection.count("play.example:28785")).toBe(0);
+    died(5, 4);
+
+    expect(protection.count("play.example:28785")).toBe(1);
+    expect(report).toHaveBeenCalledTimes(1);
+    died(5, 4);
+    died(5, 4);
+
+    expect(report).toHaveBeenCalledTimes(3);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(client.connected).toBe(false);
+    expect(protectionEvents).toEqual([TEAMKILL_PROTECTION_MESSAGE]);
+  });
+
   it("serializes N_ITEMPICKUP, optimistically hides it, and waits for N_ITEMACC before awarding stats", () => {
     const client = createClient(), multiplayer = client.multiplayer;
     multiplayer.connected = true;

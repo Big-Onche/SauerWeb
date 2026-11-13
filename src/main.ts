@@ -14,6 +14,7 @@ import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./pla
 import { requestMobileLandscapeFullscreen } from "./platform/browser/TouchControls";
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
 import { sauerFormattedMarkup } from "./sauerFormatting";
+import { TEAMKILL_PROTECTION_MESSAGE } from "./fpsgame/teamkillProtection";
 
 interface MapListItem {
   name: string;
@@ -76,6 +77,7 @@ function route(): void {
 function renderMainMenu(): void {
   const playerModel = savedPlayerModel();
   const playerModelInfo = PLAYER_MODEL_INFO[playerModel];
+  const showTeamkillProtection = new URLSearchParams(location.search).get("notice") === "teamkill-protection";
   app.innerHTML = `
     <main class="sauer-screen">
       ${backgroundMarkup(true)}
@@ -158,6 +160,15 @@ function renderMainMenu(): void {
           <footer><button type="button" data-action="dismiss-experimental-disclaimer" autofocus>I Understand</button></footer>
         </div>
       </dialog>
+      <dialog id="teamkill-disclaimer" class="experimental-disclaimer teamkill-disclaimer" aria-labelledby="teamkill-disclaimer-title"
+        aria-describedby="teamkill-disclaimer-description">
+        ${guiSkinMarkup()}
+        <div class="experimental-disclaimer-content">
+          <h2 id="teamkill-disclaimer-title">Multiplayer safety disconnect</h2>
+          <p id="teamkill-disclaimer-description">${escapeHtml(TEAMKILL_PROTECTION_MESSAGE)}</p>
+          <footer><button type="button" data-action="dismiss-teamkill-disclaimer" autofocus>Back to main menu</button></footer>
+        </div>
+      </dialog>
     </main>`;
 
   updateOnlinePlayerCounter();
@@ -226,7 +237,13 @@ function renderMainMenu(): void {
     dismissExperimentalDisclaimer();
     experimentalDisclaimer.close();
   });
-  if (shouldShowExperimentalDisclaimer()) experimentalDisclaimer.showModal();
+  const teamkillDisclaimer = required<HTMLDialogElement>("#teamkill-disclaimer");
+  teamkillDisclaimer.addEventListener("cancel", (event) => event.preventDefault());
+  required<HTMLButtonElement>("[data-action='dismiss-teamkill-disclaimer']").addEventListener("click", () => teamkillDisclaimer.close());
+  if (showTeamkillProtection) {
+    history.replaceState(null, "", "/");
+    teamkillDisclaimer.showModal();
+  } else if (shouldShowExperimentalDisclaimer()) experimentalDisclaimer.showModal();
 }
 
 function updateOnlinePlayerCounter(): void {

@@ -2,7 +2,8 @@ import dgram from "node:dgram";
 import http from "node:http";
 import { WebSocket } from "ws";
 import { describe, expect, it } from "vitest";
-import { attachPresence, attachSauerRelay, parseMasterServerList, parseTrustedProxies, resolveClientAddress } from "./relay.mjs";
+import { attachPresence, attachSauerRelay, parseMasterServerList, parseTrustedProxies, resolveClientAddress,
+  resolveTeamkillProtection } from "./relay.mjs";
 
 describe("parseMasterServerList", () => {
   it("parses and deduplicates the original addserver format", () => {
@@ -55,6 +56,38 @@ describe("resolveClientAddress", () => {
 });
 
 describe("relay connection limits", () => {
+  it("aggregates teamkills across clients sharing a native target and enforces a reconnect cooldown", async () => {
+    const target = { host: "127.0.0.1", port: 28785, label: "test" };
+    const server = http.createServer();
+    const relay = attachSauerRelay(server, {
+      servers: [target],
+      updateServers: async () => [target],
+      teamkillProtection: { warningThreshold: 2, disconnectThreshold: 3, windowMilliseconds: 60_000, cooldownMilliseconds: 60_000 },
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `ws://127.0.0.1:${server.address().port}/relay?server=${target.host}&port=${target.port}`;
+    const first = new WebSocket(url), second = new WebSocket(url);
+    await Promise.all([opened(first), opened(second)]);
+    const warning = nextJsonMessage(first, "teamkill-warning");
+    first.send(JSON.stringify({ type: "teamkill" }));
+    second.send(JSON.stringify({ type: "teamkill" }));
+    await expect(warning).resolves.toEqual({ type: "teamkill-warning", count: 2 });
+    const disconnected = nextJsonMessage(second, "teamkill-disconnect");
+    first.send(JSON.stringify({ type: "teamkill" }));
+    await expect(disconnected).resolves.toEqual({ type: "teamkill-disconnect", cooldownMilliseconds: 60_000 });
+
+    const blocked = new WebSocket(url);
+    const status = new Promise((resolve) => {
+      blocked.once("unexpected-response", (_request, response) => { response.resume(); resolve(response.statusCode); });
+      blocked.once("error", () => resolve(0));
+    });
+    await expect(status).resolves.toBe(429);
+    first.terminate();
+    second.terminate();
+    relay.close();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
   it("atomically limits concurrent upgrades to four connections per resolved client address", async () => {
     const target = { host: "127.0.0.1", port: 28785, label: "test" };
     let finishRefresh;
@@ -114,6 +147,23 @@ describe("relay connection limits", () => {
   });
 });
 
+describe("relay teamkill configuration", () => {
+  it("uses conservative defaults and accepts deployment overrides", () => {
+    expect(resolveTeamkillProtection({}, {})).toEqual({
+      warningThreshold: 2,
+      disconnectThreshold: 3,
+      windowMilliseconds: 300_000,
+      cooldownMilliseconds: 600_000,
+    });
+    expect(resolveTeamkillProtection({}, {
+      SAUER_RELAY_TEAMKILL_WARNING: "3",
+      SAUER_RELAY_TEAMKILL_DISCONNECT: "4",
+      SAUER_RELAY_TEAMKILL_WINDOW_MS: "120000",
+      SAUER_RELAY_TEAMKILL_COOLDOWN_MS: "300000",
+    })).toEqual({ warningThreshold: 3, disconnectThreshold: 4, windowMilliseconds: 120_000, cooldownMilliseconds: 300_000 });
+  });
+});
+
 describe("browser presence", () => {
   it("counts unique sessions, replaces a resumed session, and expires stale sessions", async () => {
     const server = http.createServer();
@@ -161,6 +211,20 @@ function opened(webSocket) {
 function nextPresenceCount(webSocket) {
   return new Promise((resolve, reject) => {
     webSocket.once("message", (payload) => resolve(JSON.parse(payload.toString()).count));
+    webSocket.once("error", reject);
+  });
+}
+
+function nextJsonMessage(webSocket, type) {
+  return new Promise((resolve, reject) => {
+    const message = (payload, isBinary) => {
+      if (isBinary) return;
+      const value = JSON.parse(payload.toString());
+      if (value.type !== type) return;
+      webSocket.off("message", message);
+      resolve(value);
+    };
+    webSocket.on("message", message);
     webSocket.once("error", reject);
   });
 }

@@ -16,6 +16,7 @@ import { applyNetworkPosition, createNetworkInterpolation, resetNetworkInterpola
 import { canpickup, FpsEntities, I_BOOST, I_CARTRIDGES, I_QUAD, pickup, type EntityEffect, type PickupState } from "./entities";
 import { GameSound } from "./sound";
 import { MATF_CLIP, MAT_GAMECLIP } from "../engine/material";
+import { browserTeamkillProtection, TEAMKILL_PROTECTION_MESSAGE, TeamkillProtection } from "./teamkillProtection";
 
 export interface FpsClient { physics: PhysicsSimulation; weapons: WeaponSystem; multiplayer: MultiplayerClient }
 export interface ServerEndpoint {
@@ -83,15 +84,16 @@ export type MultiplayerEvent =
   | { type: "playsound"; sound: GameSound; position?: Vec3 }
   | { type: "item-effect"; entityType: number; position: Vec3; spawned: boolean }
   | { type: "disconnect"; reason: number }
+  | { type: "teamkill-protection"; message: string; cooldownMilliseconds: number }
   | { type: "bot-init"; player: NetworkPlayer };
 
-export function createClient(physics = new PhysicsSimulation()): FpsClient {
+export function createClient(physics = new PhysicsSimulation(), teamkillProtection = browserTeamkillProtection()): FpsClient {
   const weapons = new WeaponSystem({
     raycast: (origin, direction, distance, radius, skipFirst) => physics.raycast(origin, direction, distance, radius, skipFirst),
     lookupMaterial: (position) => physics.lookupMaterial(position),
     collideBouncer: (position, radius, direction) => physics.collideBouncer(position, radius, direction),
   }, physics.player);
-  return { physics, weapons, multiplayer: new MultiplayerClient(physics, weapons) };
+  return { physics, weapons, multiplayer: new MultiplayerClient(physics, weapons, teamkillProtection) };
 }
 
 // Original: src/fpsgame/client.cpp
@@ -126,9 +128,13 @@ export class MultiplayerClient extends EventTarget {
   private localIntermission = false;
   private quadWasActive = false;
   private lastQuadUpdate = 0;
+  private readonly teamkillProtection: TeamkillProtection;
+  private protectionTarget = "";
 
-  constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem) {
+  constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem,
+              teamkillProtection = browserTeamkillProtection()) {
     super();
+    this.teamkillProtection = teamkillProtection;
     this.collectMode = new CollectClientMode((origin, yaw) => this.moveCollectToken(origin, yaw));
     this.entities = new FpsEntities(physics, {
       effect: (effect, local) => this.emit({ type: "entity-effect", effect, local }),
@@ -146,6 +152,13 @@ export class MultiplayerClient extends EventTarget {
     this.disconnect();
     this.weapons.controller.serverAuthoritative = true;
     this.endpoint = { ...endpoint, playerName: endpoint.playerName.slice(0, 15) || "unnamed" };
+    this.protectionTarget = `${endpoint.host}:${endpoint.port}`;
+    const cooldown = this.teamkillProtection.cooldownRemaining(this.protectionTarget);
+    if (cooldown > 0) {
+      this.weapons.controller.serverAuthoritative = false;
+      this.emit({ type: "teamkill-protection", message: TEAMKILL_PROTECTION_MESSAGE, cooldownMilliseconds: cooldown });
+      throw new Error(`${TEAMKILL_PROTECTION_MESSAGE} Reconnect available in ${Math.ceil(cooldown / 1000)} seconds.`);
+    }
     this.emit({ type: "status", status: `connecting to ${endpoint.host}:${endpoint.port}` });
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     try {
@@ -632,6 +645,15 @@ export class MultiplayerClient extends EventTarget {
       this.weapons.controller.serverAuthoritative = false;
       this.console(`server network error, disconnecting (${event.data})`, "error");
       this.emit({ type: "disconnect", reason: event.data });
+      return;
+    }
+    if (event.type === "control") {
+      if (event.data.type === "teamkill-warning") {
+        this.console(`Shared relay teamkill warning: ${event.data.count} confirmed teamkills in the rolling window.`, "teamkill");
+      } else {
+        this.teamkillProtection.enforceCooldown(this.protectionTarget, Date.now(), event.data.cooldownMilliseconds);
+        this.disconnectForTeamkills(event.data.cooldownMilliseconds);
+      }
       return;
     }
     if (event.type !== "receive") return;
@@ -1246,6 +1268,27 @@ export class MultiplayerClient extends EventTarget {
     } else this.console(victimNumber === this.clientNumber ? `${victimName} got fragged by ${actorName}` : `${actorName} fragged ${victimName}`,
       involved ? "frag-self" : "frag-other");
     this.setDead(victimNumber);
+    if (actor.clientNumber === this.clientNumber && victimNumber !== actor.clientNumber && victim.aiType === 0 &&
+        Boolean(victim.team && victim.team === actor.team)) this.confirmTeamkill();
+  }
+
+  private confirmTeamkill(): void {
+    const result = this.teamkillProtection.record(this.protectionTarget);
+    this.transport.reportTeamkill();
+    if (result.warn && !result.disconnect) {
+      this.console(`Teamkill warning: ${result.count}/${this.teamkillProtection.config.disconnectThreshold} in ` +
+        `${Math.round(this.teamkillProtection.config.windowMilliseconds / 60_000)} minutes.`, "teamkill");
+    }
+    if (result.disconnect) this.disconnectForTeamkills(Math.max(0, result.cooldownUntil - Date.now()));
+  }
+
+  private disconnectForTeamkills(cooldownMilliseconds: number): void {
+    if (!this.connected) return;
+    this.connected = false;
+    this.weapons.controller.serverAuthoritative = false;
+    this.console(TEAMKILL_PROTECTION_MESSAGE, "error");
+    this.transport.disconnect();
+    this.emit({ type: "teamkill-protection", message: TEAMKILL_PROTECTION_MESSAGE, cooldownMilliseconds });
   }
 
   private parseText(sender: number, packet: PacketReader, team: boolean): void {

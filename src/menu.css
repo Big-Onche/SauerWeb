@@ -119,6 +119,8 @@ button { color: inherit; }
   color: #fff; font-size: 18px; font-weight: 600; cursor: pointer; text-shadow: 0 2px 2px #000; }
 .experimental-disclaimer button:hover, .experimental-disclaimer button:focus-visible { border-color: #ffc77f; outline: none;
   background: linear-gradient(90deg, #a76028, #79411c); color: #fff2df; box-shadow: 0 0 0 2px #d9953d44; }
+.teamkill-disclaimer h2 { color: #ff8b73; }
+.teamkill-disclaimer p { padding: 12px 14px; border: 1px solid #b84c3d; border-radius: 2px; background: #260705d9; }
 .playermodel-dialog { width: min(850px, calc(100vw - 60px)); padding: 24px 27px 17px; border: 0; overflow: visible; background: transparent; color: #e9e9e3; box-shadow: none; }
 .playermodel-dialog::backdrop { background: #000a; backdrop-filter: blur(3px); }
 .playermodel-layout { display: grid; grid-template-columns: 220px 1px minmax(0, 1fr); gap: 22px; min-height: 470px; }

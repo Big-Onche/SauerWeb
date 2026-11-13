@@ -93,6 +93,7 @@ let activeMap = "";
 let disposed = false;
 let respawnPending = false;
 let teamChat = false;
+let protectionRedirecting = false;
 
 scene.setPlayerModel(savedPlayerModel());
 scene.setLocalGameMode(localGameMode);
@@ -105,6 +106,10 @@ scene.onMultiplayer((event) => {
   }
   if (event.type === "console") gameConsole.add(event.text, event.consoleType);
   if (event.type === "status") gameConsole.add(event.status, event.error ? "error" : "info");
+  if (event.type === "teamkill-protection" && !protectionRedirecting) {
+    protectionRedirecting = true;
+    location.assign("/?notice=teamkill-protection");
+  }
 });
 respawnButton.addEventListener("click", requestRespawn);
 required<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => setPaused(false));

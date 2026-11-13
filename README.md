@@ -174,6 +174,11 @@ The relay forwards complete binary datagrams without parsing or modifying ENet g
 
 Each browser connection receives its own UDP socket.
 
+The relay also aggregates client-confirmed teamkills per native server target to protect its shared outbound IP. By default it warns at two and
+disconnects all connections to that target at three teamkills in a rolling five-minute window, followed by a ten-minute reconnect cooldown. The
+binary ENet datagrams remain untouched. Deployments can override the defaults with `SAUER_RELAY_TEAMKILL_WARNING`,
+`SAUER_RELAY_TEAMKILL_DISCONNECT`, `SAUER_RELAY_TEAMKILL_WINDOW_MS`, and `SAUER_RELAY_TEAMKILL_COOLDOWN_MS`.
+
 **Compatibility target:**
 
 - Sauerbraten protocol **260**

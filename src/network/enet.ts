@@ -15,7 +15,12 @@ export interface EnetConnectionEvent {
   data: number;
 }
 
-export type EnetEvent = EnetPacketEvent | EnetConnectionEvent;
+export interface EnetControlEvent {
+  type: "control";
+  data: { type: "teamkill-warning"; count: number } | { type: "teamkill-disconnect"; cooldownMilliseconds: number };
+}
+
+export type EnetEvent = EnetPacketEvent | EnetConnectionEvent | EnetControlEvent;
 
 // Original: src/engine/client.cpp
 // Functions: connectserv(), gets2c(), c2sinfo(), disconnect()
@@ -45,7 +50,10 @@ export class EnetClient extends EventTarget {
     }
     this.module = module;
     this.socket = socket;
-    socket.addEventListener("message", (event) => this.queueIncoming(new Uint8Array(event.data as ArrayBuffer)));
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data === "string") this.handleControl(event.data);
+      else this.queueIncoming(new Uint8Array(event.data as ArrayBuffer));
+    });
     socket.addEventListener("close", () => this.dispatchEvent(new CustomEvent<EnetConnectionEvent>("enet", {
       detail: { type: "disconnect", data: 0 },
     })));
@@ -73,6 +81,10 @@ export class EnetClient extends EventTarget {
     if (!this.module) return;
     this.module._sauer_enet_disconnect(data);
     this.service();
+  }
+
+  reportTeamkill(): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: "teamkill" }));
   }
 
   close(): void {
@@ -110,6 +122,16 @@ export class EnetClient extends EventTarget {
     module._sauer_enet_queue_incoming(pointer, bytes.length);
     module._free(pointer);
     this.service();
+  }
+
+  private handleControl(message: string): void {
+    try {
+      const data = JSON.parse(message) as EnetControlEvent["data"];
+      if (data.type === "teamkill-warning" && (!Number.isInteger(data.count) || data.count < 1)) return;
+      if (data.type === "teamkill-disconnect" && (!Number.isFinite(data.cooldownMilliseconds) || data.cooldownMilliseconds <= 0)) return;
+      if (data.type !== "teamkill-warning" && data.type !== "teamkill-disconnect") return;
+      this.dispatchEvent(new CustomEvent<EnetControlEvent>("enet", { detail: { type: "control", data } }));
+    } catch {}
   }
 
   private flushDatagrams(): void {
