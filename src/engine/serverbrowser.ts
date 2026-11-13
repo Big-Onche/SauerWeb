@@ -2,6 +2,8 @@
 // Functions: retrieveservers(), updatefrommaster(), refreshservers(), sortservers(), serverinfostartcolumn()
 // Sauerbraten reference: SVN r6488
 
+import { PacketReader, PacketWriter } from "../network/protocol";
+
 export interface ServerListItem {
   host: string;
   port: number;
@@ -16,10 +18,66 @@ export interface ServerListItem {
 }
 
 export async function retrieveservers(searchlan = false): Promise<ServerListItem[]> {
-  const query = searchlan ? "?searchlan=1" : "";
+  const query = searchlan ? "?targets=1&searchlan=1" : "?targets=1";
   const response = await fetch(`/api/servers${query}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Server index returned ${response.status}.`);
-  return response.json() as Promise<ServerListItem[]>;
+  const servers = await response.json() as ServerListItem[];
+  return queryservers(servers);
+}
+
+export async function queryservers(servers: ServerListItem[], concurrency = 4): Promise<ServerListItem[]> {
+  const results = new Array<ServerListItem>(servers.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let index = next++; index < servers.length; index = next++) results[index] = await queryserver(servers[index]);
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, servers.length) }, worker));
+  return results;
+}
+
+async function queryserver(server: ServerListItem): Promise<ServerListItem> {
+  return new Promise((resolve) => {
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const url = new URL(`${protocol}//${location.host}/relay`);
+    url.searchParams.set("server", server.host);
+    url.searchParams.set("port", String(server.port));
+    url.searchParams.set("info", "1");
+    const socket = new WebSocket(url);
+    let result: ServerListItem | undefined;
+    const offline = (): ServerListItem => ({ ...server, ping: null, online: false });
+    const finish = (value: ServerListItem): void => {
+      if (result) return;
+      result = value;
+      clearTimeout(timeout);
+      if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) resolve(value);
+      else socket.close();
+    };
+    const timeout = setTimeout(() => finish(offline()), 1200);
+    socket.binaryType = "arraybuffer";
+    socket.addEventListener("open", () => {
+      const started = performance.now();
+      socket.addEventListener("message", (event) => {
+        if (!(event.data instanceof ArrayBuffer)) return;
+        try { finish(decodeServerInfo(new Uint8Array(event.data), performance.now() - started, server)); }
+        catch { finish(offline()); }
+      }, { once: true });
+      socket.send(new PacketWriter().putInt(Math.trunc(started)).finish());
+    }, { once: true });
+    socket.addEventListener("error", () => finish(offline()), { once: true });
+    socket.addEventListener("close", () => resolve(result ?? offline()), { once: true });
+  });
+}
+
+export function decodeServerInfo(bytes: Uint8Array, ping: number, server: ServerListItem): ServerListItem {
+  const packet = new PacketReader(bytes);
+  packet.getInt();
+  const numPlayers = packet.getInt(), attributeCount = packet.getInt();
+  if (attributeCount < 0 || attributeCount > 64) throw new RangeError("Invalid Sauerbraten server attribute count.");
+  const attributes = Array.from({ length: attributeCount }, () => packet.getInt());
+  return {
+    ...server, ping: Math.max(0, Math.trunc(ping)), online: true, numPlayers, attributes,
+    map: packet.getString(), description: packet.getString(),
+  };
 }
 
 export async function updatefrommaster(searchlan = false): Promise<ServerListItem[]> {

@@ -71,6 +71,28 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.remaining).toBe(0);
   });
 
+  it("measures N_PONG at the browser and reports the vanilla-smoothed RTT with N_CLIENTPING", () => {
+    const client = createClient(), multiplayer = client.multiplayer;
+    multiplayer.connected = true;
+    multiplayer.clientNumber = 4;
+    const send = vi.spyOn(multiplayer.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(multiplayer.transport, "flush").mockImplementation(() => undefined);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1060);
+    const pong = new PacketWriter().putInt(NetworkMessage.Pong).putInt(1000).finish();
+
+    Reflect.apply(Reflect.get(multiplayer, "parseMessages"), multiplayer, [-1, new PacketReader(pong)]);
+    multiplayer.update(1100);
+
+    expect(multiplayer.players.get(4)?.ping).toBe(10);
+    const messageCall = send.mock.calls.find(([channel, bytes]) => channel === 1 && new PacketReader(bytes).getInt() === NetworkMessage.ClientPing);
+    const messages = new PacketReader(messageCall?.[1] ?? new Uint8Array());
+    expect([messages.getInt(), messages.getInt(), messages.getInt(), messages.getInt()]).toEqual([
+      NetworkMessage.ClientPing, 10, NetworkMessage.Ping, 1100,
+    ]);
+    expect(messages.remaining).toBe(0);
+    now.mockRestore();
+  });
+
   it("requests spectator changes without changing state before server confirmation", () => {
     const client = createClient();
     client.multiplayer.connected = true;

@@ -67,6 +67,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     const origin = request.headers.origin || "";
     const remoteAddress = resolveClientAddress(request, trustedProxies);
     const key = `${url.searchParams.get("server") || ""}:${Number(url.searchParams.get("port"))}`;
+    const serverInfo = url.searchParams.get("info") === "1";
     let target = servers.find((server) => `${server.host}:${server.port}` === key);
     if (!target) {
       try { await refreshAllowedServers(); } catch {}
@@ -84,7 +85,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     connectionsByAddress.set(remoteAddress, remoteConnections + 1);
     try {
       webSockets.handleUpgrade(request, socket, head, (webSocket) => {
-        webSockets.emit("connection", webSocket, request, target, remoteAddress, `${remoteAddress}|${key}`);
+        webSockets.emit("connection", webSocket, request, target, remoteAddress, `${remoteAddress}|${key}`, serverInfo);
       });
     } catch (error) {
       releaseConnection(remoteAddress);
@@ -99,7 +100,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     else connectionsByAddress.delete(remoteAddress);
   };
 
-  webSockets.on("connection", (webSocket, _request, target, remoteAddress, protectionKey) => {
+  webSockets.on("connection", (webSocket, _request, target, remoteAddress, protectionKey, serverInfo) => {
     const udp = dgram.createSocket("udp4");
     let closed = false;
     let windowStarted = Date.now();
@@ -154,7 +155,7 @@ export function attachSauerRelay(httpServer, options = {}) {
       notify.unref();
       return;
     }
-    udp.connect(target.port, target.host);
+    udp.connect(target.port + (serverInfo ? 1 : 0), target.host);
   });
 
   return { servers, close: () => webSockets.close() };
@@ -415,6 +416,19 @@ export function serverListMiddleware(servers = configuredServers(), environment 
         console.warn(`Could not update from Sauerbraten master server: ${error instanceof Error ? error.message : String(error)}`);
       }
       const searchlan = new URL(request.url || "/", "http://relay.invalid").searchParams.get("searchlan") === "1";
+      const targetsOnly = new URL(request.url || "/", "http://relay.invalid").searchParams.get("targets") === "1";
+      if (targetsOnly) {
+        if (searchlan) {
+          const lanServers = await discoverLanServers();
+          for (const server of lanServers) {
+            if (!servers.some((candidate) => candidate.host === server.host && candidate.port === server.port)) servers.push(server);
+          }
+        }
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        response.end(JSON.stringify(servers));
+        return;
+      }
       const queried = await queryConfiguredServers(servers);
       if (searchlan) {
         const lanServers = await discoverLanServers();

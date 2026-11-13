@@ -118,6 +118,7 @@ export class MultiplayerClient extends EventTarget {
   private endpoint?: ServerEndpoint;
   private lastUpdate = -1000;
   private lastPing = 0;
+  private pendingClientPing?: number;
   private mapStarted = performance.now();
   private lastSpawnAttempt = Number.NEGATIVE_INFINITY;
   private respawnRequested = false;
@@ -205,6 +206,7 @@ export class MultiplayerClient extends EventTarget {
     this.localGame = false;
     this.clientNumber = -1;
     this.players.clear();
+    this.pendingClientPing = undefined;
     this.respawnRequested = false;
     this.lastSpawnAttempt = Number.NEGATIVE_INFINITY;
     this.mapInfoPending = Boolean(this.loadedMapName);
@@ -276,6 +278,10 @@ export class MultiplayerClient extends EventTarget {
     this.lastUpdate = nowMilliseconds;
     if (this.physics.player.alive) this.transport.send(0, this.buildPosition());
     const messages = new PacketWriter();
+    if (this.pendingClientPing !== undefined) {
+      messages.putInt(NetworkMessage.ClientPing).putInt(this.pendingClientPing);
+      this.pendingClientPing = undefined;
+    }
     if (nowMilliseconds - this.lastPing > 250) {
       messages.putInt(NetworkMessage.Ping).putInt(Math.trunc(nowMilliseconds));
       this.lastPing = nowMilliseconds;
@@ -841,7 +847,14 @@ export class MultiplayerClient extends EventTarget {
           packet.getInt();
           for (let clientNumber = packet.getInt(); clientNumber >= 0; clientNumber = packet.getInt()) packet.getInt();
           break;
-        case NetworkMessage.Pong: packet.getInt(); break;
+        case NetworkMessage.Pong: {
+          const sentAt = packet.getInt(), receivedAt = Math.trunc(performance.now()) | 0;
+          const player = this.playerFor(this.clientNumber);
+          player.ping = Math.trunc((player.ping * 5 + ((receivedAt - sentAt) | 0)) / 6);
+          this.pendingClientPing = player.ping;
+          this.emit({ type: "players" });
+          break;
+        }
         case NetworkMessage.TimeUp: {
           this.timeLeftSeconds = packet.getInt();
           if (this.timeLeftSeconds <= 0) this.logIntermission();

@@ -152,6 +152,29 @@ describe("relay connection limits", () => {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => udp.close(resolve));
   });
+
+  it("forwards browser-timed server-info probes to the vanilla info port", async () => {
+    const info = dgram.createSocket("udp4");
+    await new Promise((resolve) => info.bind(0, "127.0.0.1", resolve));
+    const target = { host: "127.0.0.1", port: info.address().port - 1, label: "info" };
+    info.on("message", (datagram, remote) => info.send(datagram, remote.port, remote.address));
+    const server = http.createServer();
+    const relay = attachSauerRelay(server, { servers: [target], updateServers: async () => [target] });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const client = new WebSocket(
+      `ws://127.0.0.1:${server.address().port}/relay?server=${target.host}&port=${target.port}&info=1`,
+    );
+    await opened(client);
+    const received = new Promise((resolve) => client.once("message", (datagram) => resolve(Buffer.from(datagram))));
+
+    client.send(Buffer.from([42]));
+
+    await expect(received).resolves.toEqual(Buffer.from([42]));
+    await new Promise((resolve) => { client.once("close", resolve); client.close(); });
+    relay.close();
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => info.close(resolve));
+  });
 });
 
 describe("relay teamkill configuration", () => {
