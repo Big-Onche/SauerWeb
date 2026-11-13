@@ -86,6 +86,7 @@ export type MultiplayerEvent =
   | { type: "item-effect"; entityType: number; position: Vec3; spawned: boolean }
   | { type: "disconnect"; reason: number }
   | { type: "teamkill-protection"; message: string; cooldownMilliseconds: number }
+  | { type: "server-capacity"; message: string }
   | { type: "bot-init"; player: NetworkPlayer };
 
 export function createClient(physics = new PhysicsSimulation(), teamkillProtection = browserTeamkillProtection(),
@@ -135,6 +136,8 @@ export class MultiplayerClient extends EventTarget {
   private readonly chatModeration: ChatModeration;
   private protectionTarget = "";
   private protectionDisconnecting = false;
+  private relayAuth?: { name: string; domain: string };
+  private relayAuthConfirmed = false;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem,
               teamkillProtection = browserTeamkillProtection(), chatModeration = new ChatModeration()) {
@@ -157,6 +160,8 @@ export class MultiplayerClient extends EventTarget {
   async connect(endpoint: ServerEndpoint): Promise<void> {
     this.disconnect();
     this.protectionDisconnecting = false;
+    this.relayAuth = undefined;
+    this.relayAuthConfirmed = false;
     this.weapons.controller.serverAuthoritative = true;
     this.endpoint = { ...endpoint, playerName: endpoint.playerName.slice(0, 15) || "unnamed" };
     this.protectionTarget = `${endpoint.host}:${endpoint.port}`;
@@ -669,9 +674,17 @@ export class MultiplayerClient extends EventTarget {
     if (event.type === "control") {
       if (event.data.type === "teamkill-warning") {
         this.console(`Shared relay teamkill warning: ${event.data.count} confirmed teamkills in the rolling window.`, "teamkill");
-      } else {
+      } else if (event.data.type === "teamkill-disconnect") {
         this.teamkillProtection.enforceCooldown(this.protectionTarget, Date.now(), event.data.cooldownMilliseconds);
         this.disconnectForTeamkills(event.data.cooldownMilliseconds);
+      } else if (event.data.type === "server-capacity") {
+        this.emit({ type: "server-capacity", message: event.data.message });
+      } else if (event.data.type === "auth-config") {
+        this.relayAuth = { name: event.data.name, domain: event.data.domain };
+      } else if (event.data.type === "auth-answer" && event.data.domain === this.relayAuth?.domain) {
+        this.transport.send(1, new PacketWriter().putInt(NetworkMessage.AuthAnswer).putString(event.data.domain)
+          .putInt(event.data.id).putString(event.data.answer).finish(), true);
+        this.transport.flush();
       }
       return;
     }
@@ -845,7 +858,13 @@ export class MultiplayerClient extends EventTarget {
         case NetworkMessage.ItemAccept: this.parseItemAccept(packet); break;
         case NetworkMessage.CurrentMaster:
           packet.getInt();
-          for (let clientNumber = packet.getInt(); clientNumber >= 0; clientNumber = packet.getInt()) packet.getInt();
+          for (let clientNumber = packet.getInt(); clientNumber >= 0; clientNumber = packet.getInt()) {
+            const privilege = packet.getInt();
+            if (clientNumber === this.clientNumber && privilege > 0 && this.relayAuth && !this.relayAuthConfirmed) {
+              this.relayAuthConfirmed = true;
+              this.transport.reportAuthSuccess();
+            }
+          }
           break;
         case NetworkMessage.Pong: {
           const sentAt = packet.getInt(), receivedAt = Math.trunc(performance.now()) | 0;
@@ -920,7 +939,20 @@ export class MultiplayerClient extends EventTarget {
         }
         case NetworkMessage.PauseGame: packet.getInt(); packet.getInt(); break;
         case NetworkMessage.GameSpeed: packet.getInt(); packet.getInt(); break;
-        case NetworkMessage.RequestAuth: packet.getString(); break;
+        case NetworkMessage.RequestAuth: {
+          const domain = packet.getString();
+          if (domain === this.relayAuth?.domain) {
+            this.transport.send(1, new PacketWriter().putInt(NetworkMessage.AuthTry).putString(domain)
+              .putString(this.relayAuth.name).finish(), true);
+            this.transport.flush();
+          }
+          break;
+        }
+        case NetworkMessage.AuthChallenge: {
+          const domain = packet.getString(), id = packet.getInt(), challenge = packet.getString();
+          if (domain === this.relayAuth?.domain) this.transport.requestAuthAnswer(domain, id >>> 0, challenge);
+          break;
+        }
         case NetworkMessage.Spectator: {
           this.setSpectatorState(packet.getInt(), packet.getInt() !== 0);
           break;
@@ -948,7 +980,7 @@ export class MultiplayerClient extends EventTarget {
     packet.getString();
     if (passwordProtected) throw new Error("Password-protected servers are not supported yet.");
     const intro = new PacketWriter().putInt(NetworkMessage.Connect).putString(this.endpoint?.playerName ?? "unnamed")
-      .putInt(this.endpoint?.playerModel ?? 0).putString("").putString("").putString("");
+      .putInt(this.endpoint?.playerModel ?? 0).putString("").putString(this.relayAuth?.domain ?? "").putString(this.relayAuth?.name ?? "");
     this.transport.send(1, intro.finish(), true);
     this.transport.flush();
   }

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
-import { attachPresence, attachSauerRelay, configuredServers, serverListMiddleware } from "./relay/relay.mjs";
+import { attachPresence, attachSauerRelay, relayConfiguration, serverListMiddleware } from "./relay/relay.mjs";
 import { normalizeSauerbratenGzip } from "./sauerbratenGzip";
 import { loadSauerbratenDirectory, validateSauerbratenDirectory } from "./sauerbratenDirectory";
 import { isSupportedMapVersion } from "./src/engine/mapversion";
@@ -772,13 +772,13 @@ function resolveHudGunPose(source: string) {
 
 function sauerMapsPlugin(): Plugin {
   let cachedMaps: MapListItem[] | undefined;
-  const relayServers = configuredServers();
+  const { servers: relayServers, serverConfigs } = relayConfiguration();
 
   return {
     name: "sauer-maps",
     configureServer(server) {
       if (server.httpServer) {
-        attachSauerRelay(server.httpServer, { servers: relayServers });
+        attachSauerRelay(server.httpServer, { servers: relayServers, serverConfigs });
         attachPresence(server.httpServer);
       }
       server.middlewares.use("/api/servers", serverListMiddleware(relayServers));

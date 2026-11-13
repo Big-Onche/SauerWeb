@@ -110,6 +110,10 @@ scene.onMultiplayer((event) => {
     protectionRedirecting = true;
     location.assign("/?notice=teamkill-protection");
   }
+  if (event.type === "server-capacity" && !protectionRedirecting) {
+    protectionRedirecting = true;
+    location.assign("/?notice=server-capacity");
+  }
 });
 respawnButton.addEventListener("click", requestRespawn);
 required<HTMLButtonElement>("[data-action='resume']").addEventListener("click", () => setPaused(false));

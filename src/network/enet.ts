@@ -17,7 +17,9 @@ export interface EnetConnectionEvent {
 
 export interface EnetControlEvent {
   type: "control";
-  data: { type: "teamkill-warning"; count: number } | { type: "teamkill-disconnect"; cooldownMilliseconds: number };
+  data: { type: "teamkill-warning"; count: number } | { type: "teamkill-disconnect"; cooldownMilliseconds: number }
+    | { type: "server-capacity"; message: string } | { type: "auth-config"; name: string; domain: string; autoauth: true }
+    | { type: "auth-answer"; domain: string; id: number; answer: string };
 }
 
 export type EnetEvent = EnetPacketEvent | EnetConnectionEvent | EnetControlEvent;
@@ -87,6 +89,14 @@ export class EnetClient extends EventTarget {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: "teamkill" }));
   }
 
+  requestAuthAnswer(domain: string, id: number, challenge: string): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: "auth-challenge", domain, id, challenge }));
+  }
+
+  reportAuthSuccess(): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: "auth-success" }));
+  }
+
   close(): void {
     if (this.serviceTimer) clearInterval(this.serviceTimer);
     this.serviceTimer = undefined;
@@ -129,7 +139,14 @@ export class EnetClient extends EventTarget {
       const data = JSON.parse(message) as EnetControlEvent["data"];
       if (data.type === "teamkill-warning" && (!Number.isInteger(data.count) || data.count < 1)) return;
       if (data.type === "teamkill-disconnect" && (!Number.isFinite(data.cooldownMilliseconds) || data.cooldownMilliseconds <= 0)) return;
-      if (data.type !== "teamkill-warning" && data.type !== "teamkill-disconnect") return;
+      if (data.type === "server-capacity" && data.message !==
+          "Server capacity reached. Try another server or use the original Sauerbraten client.") return;
+      if (data.type === "auth-config" && (data.autoauth !== true || typeof data.name !== "string" || typeof data.domain !== "string" ||
+          !data.name || !data.domain)) return;
+      if (data.type === "auth-answer" && (typeof data.domain !== "string" || !Number.isInteger(data.id) ||
+          typeof data.answer !== "string" || !/^[0-9a-f]{1,48}$/.test(data.answer))) return;
+      if (data.type !== "teamkill-warning" && data.type !== "teamkill-disconnect" && data.type !== "server-capacity" &&
+          data.type !== "auth-config" && data.type !== "auth-answer") return;
       this.dispatchEvent(new CustomEvent<EnetControlEvent>("enet", { detail: { type: "control", data } }));
     } catch {}
   }

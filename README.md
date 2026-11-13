@@ -246,3 +246,20 @@ Original Sauerbraten assets and third-party components remain subject to their r
 *Desktop, laptop, phone, smart TV... or whatever appliance has a browser.*
 
 *The fridge benchmark is still pending.*
+
+# Per-server relay configuration
+
+The relay loads optional `key=value` files from `server-configs/` at startup. Name each file `IPv4.cfg`, or `IPv4_port.cfg` when the same address has multiple configured ports. `port` is required; all other settings are optional:
+
+```ini
+port=69420
+name=SauerWeb
+domain=sauervibe-server
+envvar=SAUERWEB_SUPER_SERVER_AUTH_PRIVATE_KEY
+autoauth=true
+maxclients=3
+```
+
+`name`, `domain`, and `envvar` must be supplied together. The named environment variable is read only by the relay and its private key is never included in HTTP, WebSocket configuration, client bundles, errors, or logs. `maxclients` limits pending and active SauerWeb sessions for that exact IP and port; native players are not counted. Unconfigured destinations retain the normal relay behavior.
+
+Slot reservations are coordinated through atomic files in the system temporary directory, so relay workers on one host share the limit. Set `SAUER_RELAY_SLOT_DIRECTORY` to the same durable/shared-filesystem path for relay processes on multiple hosts. Stale reservations are reclaimed after two minutes and live sessions refresh their reservation every 30 seconds. Set `SAUER_RELAY_CONFIG_DIRECTORY` to override the configuration directory.

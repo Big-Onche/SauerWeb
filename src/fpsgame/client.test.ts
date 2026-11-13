@@ -237,6 +237,36 @@ describe("Sauerbraten rifle protocol", () => {
 });
 
 describe("native server message framing", () => {
+  it("uses relay identity in N_CONNECT and returns N_AUTHCHAL as a native N_AUTHANS", () => {
+    const client = createClient().multiplayer;
+    Reflect.set(client, "endpoint", { host: "192.0.2.50", port: 28785, playerName: "web-player", playerModel: 2 });
+    const send = vi.spyOn(client.transport, "send").mockImplementation(() => undefined);
+    vi.spyOn(client.transport, "flush").mockImplementation(() => undefined);
+    const requestAnswer = vi.spyOn(client.transport, "requestAuthAnswer").mockImplementation(() => undefined);
+    Reflect.apply(Reflect.get(client, "handleEnet"), client, [{
+      type: "control", data: { type: "auth-config", name: "relay-user", domain: "example-domain", autoauth: true },
+    }]);
+    const serverInfo = new PacketWriter().putInt(NetworkMessage.ServInfo).putInt(4).putInt(260).putInt(99).putInt(0)
+      .putString("Example").putString("example-domain").finish();
+
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(serverInfo)]);
+
+    const connect = new PacketReader(send.mock.calls[0][1]);
+    expect([connect.getInt(), connect.getString(), connect.getInt(), connect.getString(), connect.getString(), connect.getString()])
+      .toEqual([NetworkMessage.Connect, "web-player", 2, "", "example-domain", "relay-user"]);
+    const challenge = new PacketWriter().putInt(NetworkMessage.AuthChallenge).putString("example-domain").putInt(17)
+      .putString("+1234").finish();
+    Reflect.apply(Reflect.get(client, "parseMessages"), client, [-1, new PacketReader(challenge)]);
+    expect(requestAnswer).toHaveBeenCalledWith("example-domain", 17, "+1234");
+
+    Reflect.apply(Reflect.get(client, "handleEnet"), client, [{
+      type: "control", data: { type: "auth-answer", domain: "example-domain", id: 17, answer: "abcd" },
+    }]);
+    const answer = new PacketReader(send.mock.calls[1][1]);
+    expect([answer.getInt(), answer.getString(), answer.getInt(), answer.getString()])
+      .toEqual([NetworkMessage.AuthAnswer, "example-domain", 17, "abcd"]);
+  });
+
   it("surfaces a relay cooldown before the native server welcome completes", () => {
     const client = createClient().multiplayer, messages: string[] = [];
     client.addEventListener("multiplayer", (event) => {

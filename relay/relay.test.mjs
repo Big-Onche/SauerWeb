@@ -1,9 +1,74 @@
 import dgram from "node:dgram";
+import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { WebSocket } from "ws";
 import { describe, expect, it } from "vitest";
-import { attachPresence, attachSauerRelay, parseMasterServerList, parseTrustedProxies, resolveClientAddress,
+import { attachPresence, attachSauerRelay, parseMasterServerList, parseTrustedProxies, resolveClientAddress, SharedSlotLimiter,
   resolveTeamkillProtection } from "./relay.mjs";
+import { answerChallenge } from "./sauer-auth.mjs";
+import { loadServerConfigs, parseServerConfig } from "./server-config.mjs";
+
+describe("per-server configuration", () => {
+  it("parses an IPv4_port file and resolves a valid secret without exposing it in public fields", () => {
+    const config = parseServerConfig("192.0.2.50_60700.cfg", [
+      "# Example server", "port=60700", "name=SauerWeb", "domain=example-domain", "envvar=TEST_AUTH_KEY", "autoauth=true",
+      "maxclients=2",
+    ].join("\n"), { TEST_AUTH_KEY: "2" });
+    expect(config).toMatchObject({ host: "192.0.2.50", port: 60700, name: "SauerWeb", domain: "example-domain",
+      autoauth: true, maxclients: 2 });
+    expect(JSON.stringify({ type: "auth-config", name: config.name, domain: config.domain, autoauth: config.autoauth })).not.toContain("\"2\"");
+  });
+
+  it("disables autoauth and warns when the relay secret is absent", () => {
+    const config = parseServerConfig("192.0.2.1.cfg", "port=28785\nname=web\ndomain=test\nenvvar=MISSING\nautoauth=true", {});
+    expect(config.autoauth).toBe(false);
+    expect(config.privateKey).toBeUndefined();
+    expect(config.authWarning).toContain("MISSING");
+  });
+
+  it("rejects malformed files while continuing to load valid destinations", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sauerweb-config-test-"));
+    fs.writeFileSync(path.join(directory, "192.0.2.1.cfg"), "port=28785\nmaxclients=2");
+    fs.writeFileSync(path.join(directory, "192.0.2.2.cfg"), "port=invalid");
+    const errors = [];
+    const configs = loadServerConfigs(directory, {}, { info() {}, warn() {}, error: (message) => errors.push(message) });
+    expect([...configs.keys()]).toEqual(["192.0.2.1:28785"]);
+    expect(errors[0]).toContain("192.0.2.2.cfg");
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+});
+
+describe("native Sauerbraten authentication", () => {
+  it("matches the NIST P-192 result used by Sauerbraten answerchallenge", () => {
+    const baseX = "188da80eb03090f67cbf20eb43a18800f4ff0afd82ff1012";
+    expect(answerChallenge("1", `-${baseX}`)).toBe(baseX);
+    expect(answerChallenge("2", `-${baseX}`)).toBe("dafebf5828783f2ad35534631588a3f629a70fb16982a888");
+  });
+
+  it("rejects malformed challenges without including private material in the error", () => {
+    expect(() => answerChallenge("secret-value", "+1234")).toThrow("Invalid private key");
+  });
+});
+
+describe("shared configured-server slots", () => {
+  it("counts reservations across limiter instances and makes release idempotent", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sauerweb-slot-test-"));
+    const first = new SharedSlotLimiter(directory), second = new SharedSlotLimiter(directory);
+    const one = await first.reserve("192.0.2.1:28785", 2), two = await second.reserve("192.0.2.1:28785", 2);
+    expect(one).toBeTruthy();
+    expect(two).toBeTruthy();
+    expect(await first.reserve("192.0.2.1:28785", 2)).toBeUndefined();
+    one.release();
+    one.release();
+    const replacement = await second.reserve("192.0.2.1:28785", 2);
+    expect(replacement).toBeTruthy();
+    two.release();
+    replacement.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+});
 
 describe("parseMasterServerList", () => {
   it("parses and deduplicates the original addserver format", () => {
@@ -56,6 +121,33 @@ describe("resolveClientAddress", () => {
 });
 
 describe("relay connection limits", () => {
+  it("rejects configured-server capacity before creating a relay session and releases the slot on close", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sauerweb-capacity-test-"));
+    const target = { host: "127.0.0.1", port: 28785, label: "limited" };
+    const server = http.createServer();
+    const relay = attachSauerRelay(server, {
+      servers: [target], updateServers: async () => [target], slotDirectory: directory,
+      serverConfigs: new Map([["127.0.0.1:28785", { ...target, autoauth: false, maxclients: 1 }]]),
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `ws://127.0.0.1:${server.address().port}/relay?server=${target.host}&port=${target.port}`;
+    const first = new WebSocket(url);
+    await opened(first);
+    const blocked = new WebSocket(url), capacity = nextJsonMessage(blocked, "server-capacity");
+    await opened(blocked);
+    await expect(capacity).resolves.toEqual({
+      type: "server-capacity", message: "Server capacity reached. Try another server or use the original Sauerbraten client.",
+    });
+    await new Promise((resolve) => { first.once("close", resolve); first.close(); });
+    const replacement = new WebSocket(url);
+    await opened(replacement);
+    replacement.close();
+    blocked.terminate();
+    relay.close();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
   it("scopes teamkill disconnects and cooldowns to one browser address and native target", async () => {
     const target = { host: "127.0.0.1", port: 28785, label: "test" };
     const server = http.createServer();

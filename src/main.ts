@@ -79,6 +79,7 @@ function renderMainMenu(): void {
   const playerModel = savedPlayerModel();
   const playerModelInfo = PLAYER_MODEL_INFO[playerModel];
   const showTeamkillProtection = new URLSearchParams(location.search).get("notice") === "teamkill-protection";
+  const showServerCapacity = new URLSearchParams(location.search).get("notice") === "server-capacity";
   app.innerHTML = `
     <main class="sauer-screen">
       ${backgroundMarkup(true)}
@@ -170,6 +171,15 @@ function renderMainMenu(): void {
           <footer><button type="button" data-action="dismiss-teamkill-disclaimer" autofocus>Back to main menu</button></footer>
         </div>
       </dialog>
+      <dialog id="server-capacity" class="experimental-disclaimer" aria-labelledby="server-capacity-title"
+        aria-describedby="server-capacity-description">
+        ${guiSkinMarkup()}
+        <div class="experimental-disclaimer-content">
+          <h2 id="server-capacity-title">Server capacity reached</h2>
+          <p id="server-capacity-description">Server capacity reached. Try another server or use the original Sauerbraten client.</p>
+          <footer><button type="button" data-action="dismiss-server-capacity" autofocus>Back to main menu</button></footer>
+        </div>
+      </dialog>
     </main>`;
 
   updateOnlinePlayerCounter();
@@ -241,9 +251,12 @@ function renderMainMenu(): void {
   const teamkillDisclaimer = required<HTMLDialogElement>("#teamkill-disclaimer");
   teamkillDisclaimer.addEventListener("cancel", (event) => event.preventDefault());
   required<HTMLButtonElement>("[data-action='dismiss-teamkill-disclaimer']").addEventListener("click", () => teamkillDisclaimer.close());
-  if (showTeamkillProtection) {
+  const serverCapacity = required<HTMLDialogElement>("#server-capacity");
+  serverCapacity.addEventListener("cancel", (event) => event.preventDefault());
+  required<HTMLButtonElement>("[data-action='dismiss-server-capacity']").addEventListener("click", () => serverCapacity.close());
+  if (showTeamkillProtection || showServerCapacity) {
     history.replaceState(null, "", "/");
-    teamkillDisclaimer.showModal();
+    (showTeamkillProtection ? teamkillDisclaimer : serverCapacity).showModal();
   } else if (shouldShowExperimentalDisclaimer()) experimentalDisclaimer.showModal();
 }
 

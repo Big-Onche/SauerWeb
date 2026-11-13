@@ -3,8 +3,12 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
+import { answerChallenge } from "./sauer-auth.mjs";
+import { loadServerConfigs, serverConfigKey } from "./server-config.mjs";
 
 const MAX_DATAGRAM_BYTES = 65_535;
 const RETRIEVELIMIT = 20_000;
@@ -23,6 +27,7 @@ const DEFAULT_TEAMKILL_WARNING_THRESHOLD = 2;
 const DEFAULT_TEAMKILL_DISCONNECT_THRESHOLD = 3;
 const DEFAULT_TEAMKILL_WINDOW_MILLISECONDS = 5 * 60_000;
 const DEFAULT_TEAMKILL_COOLDOWN_MILLISECONDS = 10 * 60_000;
+export const SERVER_CAPACITY_MESSAGE = "Server capacity reached. Try another server or use the original Sauerbraten client.";
 
 export function configuredServers(environment = process.env) {
   const value = environment.SAUER_RELAY_SERVERS || "127.0.0.1:28785";
@@ -36,8 +41,22 @@ export function configuredServers(environment = process.env) {
   });
 }
 
+export function relayConfiguration(environment = process.env, logger = console) {
+  const servers = configuredServers(environment);
+  const directory = environment.SAUER_RELAY_CONFIG_DIRECTORY || fileURLToPath(new URL("../server-configs/", import.meta.url));
+  const serverConfigs = loadServerConfigs(directory, environment, logger);
+  for (const config of serverConfigs.values()) {
+    if (!servers.some((server) => server.host === config.host && server.port === config.port)) {
+      servers.push({ host: config.host, port: config.port, label: config.host, keep: true });
+    }
+  }
+  return { servers, serverConfigs };
+}
+
 export function attachSauerRelay(httpServer, options = {}) {
   const servers = options.servers || configuredServers();
+  const serverConfigs = options.serverConfigs || new Map();
+  const slotLimiter = options.slotLimiter || new SharedSlotLimiter(options.slotDirectory);
   const keepservers = [...servers];
   const updateServers = options.updateServers || updatefrommaster;
   let serverRefresh;
@@ -81,13 +100,29 @@ export function attachSauerRelay(httpServer, options = {}) {
       socket.destroy();
       return;
     }
+    const serverConfig = serverConfigs.get(serverConfigKey(target.host, target.port));
+    let slot;
+    if (!serverInfo && serverConfig?.maxclients !== undefined) {
+      slot = await slotLimiter.reserve(serverConfigKey(target.host, target.port), serverConfig.maxclients);
+      if (!slot) {
+        console.info(`[server-config] Capacity rejected for ${target.host}:${target.port}.`);
+        webSockets.handleUpgrade(request, socket, head, (webSocket) => {
+          webSocket.send(JSON.stringify({ type: "server-capacity", message: SERVER_CAPACITY_MESSAGE }));
+          const timer = setTimeout(() => webSocket.close(4003, "Server capacity reached"), 100);
+          timer.unref();
+        });
+        return;
+      }
+      console.info(`[server-config] Allocated relay slot for ${target.host}:${target.port}.`);
+    }
     connectionCount++;
     connectionsByAddress.set(remoteAddress, remoteConnections + 1);
     try {
       webSockets.handleUpgrade(request, socket, head, (webSocket) => {
-        webSockets.emit("connection", webSocket, request, target, remoteAddress, `${remoteAddress}|${key}`, serverInfo);
+        webSockets.emit("connection", webSocket, request, target, remoteAddress, `${remoteAddress}|${key}`, serverInfo, serverConfig, slot);
       });
     } catch (error) {
+      slot?.release();
       releaseConnection(remoteAddress);
       throw error;
     }
@@ -100,12 +135,13 @@ export function attachSauerRelay(httpServer, options = {}) {
     else connectionsByAddress.delete(remoteAddress);
   };
 
-  webSockets.on("connection", (webSocket, _request, target, remoteAddress, protectionKey, serverInfo) => {
+  webSockets.on("connection", (webSocket, _request, target, remoteAddress, protectionKey, serverInfo, serverConfig, slot) => {
     const udp = dgram.createSocket("udp4");
     let closed = false;
     let windowStarted = Date.now();
     let packets = 0;
     let bytes = 0;
+    const authState = { attempted: false, succeeded: false };
     const protectedConnections = connectionsByProtectionKey.get(protectionKey) ?? new Set();
     protectedConnections.add(webSocket);
     connectionsByProtectionKey.set(protectionKey, protectedConnections);
@@ -117,6 +153,13 @@ export function attachSauerRelay(httpServer, options = {}) {
       protectedConnections.delete(webSocket);
       if (!protectedConnections.size) connectionsByProtectionKey.delete(protectionKey);
       releaseConnection(remoteAddress);
+      if (slot) {
+        slot.release();
+        console.info(`[server-config] Released relay slot for ${target.host}:${target.port}.`);
+      }
+      if (authState.attempted && !authState.succeeded) {
+        console.warn(`[server-config] Authentication did not complete for ${target.host}:${target.port}.`);
+      }
     };
     udp.on("message", (datagram) => {
       if (datagram.length <= MAX_DATAGRAM_BYTES && webSocket.readyState === WebSocket.OPEN) webSocket.send(datagram, { binary: true });
@@ -124,6 +167,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     udp.on("error", close);
     webSocket.on("message", (payload, isBinary) => {
       if (!isBinary) {
+        if (handleAuthRequest(payload, webSocket, serverConfig, target, authState)) return;
         handleTeamkillReport(payload, protectionKey);
         return;
       }
@@ -144,6 +188,10 @@ export function attachSauerRelay(httpServer, options = {}) {
     });
     webSocket.on("close", close);
     webSocket.on("error", close);
+    if (serverConfig?.authWarning) console.warn(`[server-config] ${target.host}:${target.port}: ${serverConfig.authWarning}.`);
+    if (serverConfig?.autoauth) {
+      webSocket.send(JSON.stringify({ type: "auth-config", name: serverConfig.name, domain: serverConfig.domain, autoauth: true }));
+    }
     const cooldownRemaining = (cooldownsByProtectionKey.get(protectionKey) ?? 0) - Date.now();
     if (cooldownRemaining > 0) {
       const notify = setTimeout(() => {
@@ -187,6 +235,86 @@ export function attachSauerRelay(httpServer, options = {}) {
     const payload = JSON.stringify(message);
     for (const connection of connectionsByProtectionKey.get(protectionKey) ?? []) {
       if (connection.readyState === WebSocket.OPEN) connection.send(payload);
+    }
+  }
+
+  function handleAuthRequest(payload, webSocket, config, target, state) {
+    if (payload.length > 1024) return false;
+    let request;
+    try { request = JSON.parse(payload.toString()); } catch { return false; }
+    if (request?.type === "auth-success") {
+      if (config?.autoauth && state.attempted && !state.succeeded) {
+        state.succeeded = true;
+        console.info(`[server-config] Native authentication succeeded for ${target.host}:${target.port}.`);
+      }
+      return true;
+    }
+    if (request?.type !== "auth-challenge") return false;
+    if (!config?.autoauth || request.domain !== config.domain || !Number.isInteger(request.id) || request.id < 0 ||
+        request.id > 0xFFFF_FFFF || typeof request.challenge !== "string") {
+      console.warn(`[server-config] Ignored invalid authentication challenge for ${target.host}:${target.port}.`);
+      return true;
+    }
+    try {
+      state.attempted = true;
+      const answer = answerChallenge(config.privateKey, request.challenge);
+      if (webSocket.readyState === WebSocket.OPEN) {
+        webSocket.send(JSON.stringify({ type: "auth-answer", domain: config.domain, id: request.id, answer }));
+        console.info(`[server-config] Answered native authentication challenge for ${target.host}:${target.port}.`);
+      }
+    } catch (error) {
+      console.warn(`[server-config] Authentication failed for ${target.host}:${target.port}: ` +
+        `${error instanceof Error ? error.message : "invalid challenge"}.`);
+    }
+    return true;
+  }
+}
+
+export class SharedSlotLimiter {
+  constructor(directory = process.env.SAUER_RELAY_SLOT_DIRECTORY || path.join(os.tmpdir(), "sauerweb-relay-slots")) {
+    this.directory = directory;
+    fs.mkdirSync(directory, { recursive: true });
+  }
+
+  async reserve(key, maximum) {
+    const directory = path.join(this.directory, key.replace(/[^A-Za-z0-9_.-]/g, "_"));
+    const lock = `${directory}.lock`;
+    fs.mkdirSync(directory, { recursive: true });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        fs.mkdirSync(lock);
+        try {
+          this.removeStale(directory);
+          if (fs.readdirSync(directory).length >= maximum) return undefined;
+          const token = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.slot`;
+          const file = path.join(directory, token);
+          fs.writeFileSync(file, JSON.stringify({ pid: process.pid, created: Date.now() }), { flag: "wx", mode: 0o600 });
+          let released = false;
+          const heartbeat = setInterval(() => { try { fs.utimesSync(file, new Date(), new Date()); } catch {} }, 30_000);
+          heartbeat.unref();
+          return { release: () => {
+            if (released) return;
+            released = true;
+            clearInterval(heartbeat);
+            try { fs.unlinkSync(file); } catch {}
+          } };
+        } finally {
+          try { fs.rmdirSync(lock); } catch {}
+        }
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error;
+        try { if (fs.statSync(lock).mtimeMs < Date.now() - 5_000) fs.rmdirSync(lock); } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+    }
+    throw new Error(`Timed out acquiring shared slot lock for ${key}`);
+  }
+
+  removeStale(directory) {
+    const cutoff = Date.now() - 120_000;
+    for (const name of fs.readdirSync(directory)) {
+      const file = path.join(directory, name);
+      try { if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file); } catch {}
     }
   }
 }
@@ -572,7 +700,7 @@ function packetReader(bytes) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.SAUER_RELAY_PORT || 8080);
-  const servers = configuredServers();
+  const { servers, serverConfigs } = relayConfiguration();
   const listServers = serverListMiddleware(servers);
   const handler = (request, response) => {
     const url = new URL(request.url || "/", "http://relay.invalid");
@@ -583,7 +711,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const server = process.env.SAUER_RELAY_TLS_KEY && process.env.SAUER_RELAY_TLS_CERT ? https.createServer({
     key: fs.readFileSync(process.env.SAUER_RELAY_TLS_KEY), cert: fs.readFileSync(process.env.SAUER_RELAY_TLS_CERT),
   }, handler) : http.createServer(handler);
-  attachSauerRelay(server, { servers });
+  attachSauerRelay(server, { servers, serverConfigs });
   attachPresence(server);
   server.listen(port, () => console.log(`SauerWeb relay listening on ${port}`));
 }
