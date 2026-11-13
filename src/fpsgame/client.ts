@@ -130,6 +130,7 @@ export class MultiplayerClient extends EventTarget {
   private lastQuadUpdate = 0;
   private readonly teamkillProtection: TeamkillProtection;
   private protectionTarget = "";
+  private protectionDisconnecting = false;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem,
               teamkillProtection = browserTeamkillProtection()) {
@@ -150,6 +151,7 @@ export class MultiplayerClient extends EventTarget {
 
   async connect(endpoint: ServerEndpoint): Promise<void> {
     this.disconnect();
+    this.protectionDisconnecting = false;
     this.weapons.controller.serverAuthoritative = true;
     this.endpoint = { ...endpoint, playerName: endpoint.playerName.slice(0, 15) || "unnamed" };
     this.protectionTarget = `${endpoint.host}:${endpoint.port}`;
@@ -1283,7 +1285,8 @@ export class MultiplayerClient extends EventTarget {
   }
 
   private disconnectForTeamkills(cooldownMilliseconds: number): void {
-    if (!this.connected) return;
+    if (this.protectionDisconnecting) return;
+    this.protectionDisconnecting = true;
     this.connected = false;
     this.weapons.controller.serverAuthoritative = false;
     this.console(TEAMKILL_PROTECTION_MESSAGE, "error");

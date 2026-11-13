@@ -38,6 +38,10 @@ export class EnetClient extends EventTarget {
     socketUrl.searchParams.set("port", String(port));
     const socket = new WebSocket(socketUrl);
     socket.binaryType = "arraybuffer";
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data === "string") this.handleControl(event.data);
+      else this.queueIncoming(new Uint8Array(event.data as ArrayBuffer));
+    });
     await new Promise<void>((resolve, reject) => {
       const failed = (): void => reject(new Error("The Sauerbraten relay connection failed."));
       socket.addEventListener("open", () => resolve(), { once: true });
@@ -50,10 +54,6 @@ export class EnetClient extends EventTarget {
     }
     this.module = module;
     this.socket = socket;
-    socket.addEventListener("message", (event) => {
-      if (typeof event.data === "string") this.handleControl(event.data);
-      else this.queueIncoming(new Uint8Array(event.data as ArrayBuffer));
-    });
     socket.addEventListener("close", () => this.dispatchEvent(new CustomEvent<EnetConnectionEvent>("enet", {
       detail: { type: "disconnect", data: 0 },
     })));

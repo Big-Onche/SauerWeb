@@ -45,9 +45,9 @@ export function attachSauerRelay(httpServer, options = {}) {
   const allowedOrigins = new Set((process.env.SAUER_RELAY_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean));
   const trustedProxies = parseTrustedProxies(options.trustedProxies ?? process.env.SAUER_RELAY_TRUSTED_PROXIES ?? DEFAULT_TRUSTED_PROXIES);
   const connectionsByAddress = new Map();
-  const connectionsByTarget = new Map();
-  const teamkillsByTarget = new Map();
-  const cooldownsByTarget = new Map();
+  const connectionsByProtectionKey = new Map();
+  const teamkillsByProtectionKey = new Map();
+  const cooldownsByProtectionKey = new Map();
   const teamkillProtection = resolveTeamkillProtection(options.teamkillProtection);
   const webSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_DATAGRAM_BYTES, perMessageDeflate: false });
   const refreshAllowedServers = () => {
@@ -73,11 +73,6 @@ export function attachSauerRelay(httpServer, options = {}) {
       target = servers.find((server) => `${server.host}:${server.port}` === key);
     }
     const remoteConnections = connectionsByAddress.get(remoteAddress) || 0;
-    if (target && (cooldownsByTarget.get(key) ?? 0) > Date.now()) {
-      socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
     if (!target || connectionCount >= MAX_CONNECTIONS || remoteConnections >= MAX_CONNECTIONS_PER_ADDRESS ||
         (allowedOrigins.size && !allowedOrigins.has(origin)) || socket.destroyed) {
       if (socket.destroyed) return;
@@ -89,7 +84,7 @@ export function attachSauerRelay(httpServer, options = {}) {
     connectionsByAddress.set(remoteAddress, remoteConnections + 1);
     try {
       webSockets.handleUpgrade(request, socket, head, (webSocket) => {
-        webSockets.emit("connection", webSocket, request, target, remoteAddress, key);
+        webSockets.emit("connection", webSocket, request, target, remoteAddress, `${remoteAddress}|${key}`);
       });
     } catch (error) {
       releaseConnection(remoteAddress);
@@ -104,32 +99,31 @@ export function attachSauerRelay(httpServer, options = {}) {
     else connectionsByAddress.delete(remoteAddress);
   };
 
-  webSockets.on("connection", (webSocket, _request, target, remoteAddress, targetKey) => {
+  webSockets.on("connection", (webSocket, _request, target, remoteAddress, protectionKey) => {
     const udp = dgram.createSocket("udp4");
     let closed = false;
     let windowStarted = Date.now();
     let packets = 0;
     let bytes = 0;
-    const targetConnections = connectionsByTarget.get(targetKey) ?? new Set();
-    targetConnections.add(webSocket);
-    connectionsByTarget.set(targetKey, targetConnections);
+    const protectedConnections = connectionsByProtectionKey.get(protectionKey) ?? new Set();
+    protectedConnections.add(webSocket);
+    connectionsByProtectionKey.set(protectionKey, protectedConnections);
     const close = () => {
       if (closed) return;
       closed = true;
       try { udp.close(); } catch {}
       if (webSocket.readyState === WebSocket.OPEN) webSocket.close(1000);
-      targetConnections.delete(webSocket);
-      if (!targetConnections.size) connectionsByTarget.delete(targetKey);
+      protectedConnections.delete(webSocket);
+      if (!protectedConnections.size) connectionsByProtectionKey.delete(protectionKey);
       releaseConnection(remoteAddress);
     };
     udp.on("message", (datagram) => {
       if (datagram.length <= MAX_DATAGRAM_BYTES && webSocket.readyState === WebSocket.OPEN) webSocket.send(datagram, { binary: true });
     });
     udp.on("error", close);
-    udp.connect(target.port, target.host);
     webSocket.on("message", (payload, isBinary) => {
       if (!isBinary) {
-        handleTeamkillReport(payload, targetKey);
+        handleTeamkillReport(payload, protectionKey);
         return;
       }
       const datagram = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -149,36 +143,48 @@ export function attachSauerRelay(httpServer, options = {}) {
     });
     webSocket.on("close", close);
     webSocket.on("error", close);
+    const cooldownRemaining = (cooldownsByProtectionKey.get(protectionKey) ?? 0) - Date.now();
+    if (cooldownRemaining > 0) {
+      const notify = setTimeout(() => {
+        if (webSocket.readyState !== WebSocket.OPEN) return;
+        webSocket.send(JSON.stringify({ type: "teamkill-disconnect", cooldownMilliseconds: cooldownRemaining }));
+        const disconnect = setTimeout(() => webSocket.close(4001, "Teamkill protection cooldown"), 250);
+        disconnect.unref();
+      }, 10);
+      notify.unref();
+      return;
+    }
+    udp.connect(target.port, target.host);
   });
 
   return { servers, close: () => webSockets.close() };
 
-  function handleTeamkillReport(payload, targetKey) {
+  function handleTeamkillReport(payload, protectionKey) {
     if (payload.length > 128) return;
     let report;
     try { report = JSON.parse(payload.toString()); } catch { return; }
     if (report?.type !== "teamkill") return;
     const now = Date.now();
-    if ((cooldownsByTarget.get(targetKey) ?? 0) > now) return;
+    if ((cooldownsByProtectionKey.get(protectionKey) ?? 0) > now) return;
     const cutoff = now - teamkillProtection.windowMilliseconds;
-    const timestamps = (teamkillsByTarget.get(targetKey) ?? []).filter((timestamp) => timestamp > cutoff && timestamp <= now);
+    const timestamps = (teamkillsByProtectionKey.get(protectionKey) ?? []).filter((timestamp) => timestamp > cutoff && timestamp <= now);
     timestamps.push(now);
-    teamkillsByTarget.set(targetKey, timestamps);
+    teamkillsByProtectionKey.set(protectionKey, timestamps);
     if (timestamps.length === teamkillProtection.warningThreshold) {
-      broadcastControl(targetKey, { type: "teamkill-warning", count: timestamps.length });
+      broadcastControl(protectionKey, { type: "teamkill-warning", count: timestamps.length });
     }
     if (timestamps.length < teamkillProtection.disconnectThreshold) return;
-    cooldownsByTarget.set(targetKey, now + teamkillProtection.cooldownMilliseconds);
-    broadcastControl(targetKey, { type: "teamkill-disconnect", cooldownMilliseconds: teamkillProtection.cooldownMilliseconds });
-    for (const connection of connectionsByTarget.get(targetKey) ?? []) {
+    cooldownsByProtectionKey.set(protectionKey, now + teamkillProtection.cooldownMilliseconds);
+    broadcastControl(protectionKey, { type: "teamkill-disconnect", cooldownMilliseconds: teamkillProtection.cooldownMilliseconds });
+    for (const connection of connectionsByProtectionKey.get(protectionKey) ?? []) {
       const timer = setTimeout(() => connection.close(4001, "Teamkill protection cooldown"), 250);
       timer.unref();
     }
   }
 
-  function broadcastControl(targetKey, message) {
+  function broadcastControl(protectionKey, message) {
     const payload = JSON.stringify(message);
-    for (const connection of connectionsByTarget.get(targetKey) ?? []) {
+    for (const connection of connectionsByProtectionKey.get(protectionKey) ?? []) {
       if (connection.readyState === WebSocket.OPEN) connection.send(payload);
     }
   }

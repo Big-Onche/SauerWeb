@@ -172,6 +172,23 @@ describe("Sauerbraten rifle protocol", () => {
 });
 
 describe("native server message framing", () => {
+  it("surfaces a relay cooldown before the native server welcome completes", () => {
+    const client = createClient().multiplayer, messages: string[] = [];
+    client.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail.type === "teamkill-protection") messages.push(detail.message);
+    });
+    const disconnect = vi.spyOn(client.transport, "disconnect").mockImplementation(() => undefined);
+
+    Reflect.apply(Reflect.get(client, "handleEnet"), client, [{
+      type: "control",
+      data: { type: "teamkill-disconnect", cooldownMilliseconds: 60_000 },
+    }]);
+
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(messages).toEqual([TEAMKILL_PROTECTION_MESSAGE]);
+  });
+
   it("counts only server-confirmed teamkills by the local human player", () => {
     const protection = new TeamkillProtection();
     const fps = createClient(undefined, protection), client = fps.multiplayer;

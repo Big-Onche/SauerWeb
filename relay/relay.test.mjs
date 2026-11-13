@@ -56,34 +56,41 @@ describe("resolveClientAddress", () => {
 });
 
 describe("relay connection limits", () => {
-  it("aggregates teamkills across clients sharing a native target and enforces a reconnect cooldown", async () => {
+  it("scopes teamkill disconnects and cooldowns to one browser address and native target", async () => {
     const target = { host: "127.0.0.1", port: 28785, label: "test" };
     const server = http.createServer();
     const relay = attachSauerRelay(server, {
       servers: [target],
+      trustedProxies: "127.0.0.1/32",
       updateServers: async () => [target],
       teamkillProtection: { warningThreshold: 2, disconnectThreshold: 3, windowMilliseconds: 60_000, cooldownMilliseconds: 60_000 },
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `ws://127.0.0.1:${server.address().port}/relay?server=${target.host}&port=${target.port}`;
-    const first = new WebSocket(url), second = new WebSocket(url);
-    await Promise.all([opened(first), opened(second)]);
-    const warning = nextJsonMessage(first, "teamkill-warning");
-    first.send(JSON.stringify({ type: "teamkill" }));
-    second.send(JSON.stringify({ type: "teamkill" }));
+    const offenderOptions = { headers: { "X-Forwarded-For": "203.0.113.8" } };
+    const innocentOptions = { headers: { "X-Forwarded-For": "198.51.100.9" } };
+    const offender = new WebSocket(url, offenderOptions), innocent = new WebSocket(url, innocentOptions);
+    await Promise.all([opened(offender), opened(innocent)]);
+    const warning = nextJsonMessage(offender, "teamkill-warning");
+    offender.send(JSON.stringify({ type: "teamkill" }));
+    offender.send(JSON.stringify({ type: "teamkill" }));
     await expect(warning).resolves.toEqual({ type: "teamkill-warning", count: 2 });
-    const disconnected = nextJsonMessage(second, "teamkill-disconnect");
-    first.send(JSON.stringify({ type: "teamkill" }));
+    const disconnected = nextJsonMessage(offender, "teamkill-disconnect");
+    const offenderClosed = new Promise((resolve) => offender.once("close", resolve));
+    offender.send(JSON.stringify({ type: "teamkill" }));
     await expect(disconnected).resolves.toEqual({ type: "teamkill-disconnect", cooldownMilliseconds: 60_000 });
+    await offenderClosed;
+    expect(innocent.readyState).toBe(WebSocket.OPEN);
 
-    const blocked = new WebSocket(url);
-    const status = new Promise((resolve) => {
-      blocked.once("unexpected-response", (_request, response) => { response.resume(); resolve(response.statusCode); });
-      blocked.once("error", () => resolve(0));
-    });
-    await expect(status).resolves.toBe(429);
-    first.terminate();
-    second.terminate();
+    const innocentReconnect = new WebSocket(url, innocentOptions);
+    await opened(innocentReconnect);
+    const blocked = new WebSocket(url, offenderOptions);
+    const cooldown = nextJsonMessage(blocked, "teamkill-disconnect");
+    await opened(blocked);
+    await expect(cooldown).resolves.toMatchObject({ type: "teamkill-disconnect" });
+    innocent.terminate();
+    innocentReconnect.terminate();
+    blocked.terminate();
     relay.close();
     await new Promise((resolve) => server.close(resolve));
   });
