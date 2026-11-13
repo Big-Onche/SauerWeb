@@ -131,6 +131,31 @@ button { color: inherit; }
   transform: translate(-50%, -50%); }
 .game-crosshair[hidden] { display: none; }
 .game-pause:not([hidden]) ~ .game-crosshair { display: none; }
+.touch-controls { position: absolute; inset: 0; z-index: 22; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+.touch-controls[hidden] { display: none; }
+.touch-stick { position: absolute; bottom: calc(env(safe-area-inset-bottom) + clamp(18px, 4vmin, 38px));
+  left: calc(env(safe-area-inset-left) + clamp(18px, 4vmin, 38px)); width: clamp(112px, 20vmin, 174px); aspect-ratio: 1;
+  border: 2px solid #fff5; border-radius: 50%; background: radial-gradient(circle, #fff1 0 24%, #06100c59 26% 100%);
+  box-shadow: inset 0 0 24px #0006; pointer-events: auto; }
+.touch-stick > div { position: absolute; inset: 26%; border: 2px solid #fff7; border-radius: 50%; background: #dce8de45;
+  box-shadow: 0 3px 12px #0007; pointer-events: none; }
+.touch-button { position: absolute; right: calc(env(safe-area-inset-right) + clamp(18px, 4vmin, 38px)); display: grid; place-items: center;
+  padding: 0; border: 2px solid #fff6; border-radius: 50%; background: #17211e82; color: #fff; box-shadow: 0 4px 15px #0007;
+  font: 700 clamp(25px, 5vmin, 40px) "Rajdhani", sans-serif; text-shadow: 0 2px 3px #000; pointer-events: auto; touch-action: none; }
+.touch-button.pressed { border-color: #ffc77fcc; background: #9b5725a8; transform: scale(.94); }
+.touch-fire { bottom: calc(env(safe-area-inset-bottom) + clamp(18px, 4vmin, 38px)); width: clamp(82px, 15vmin, 124px); aspect-ratio: 1; }
+.touch-fire span { width: 42%; aspect-ratio: 1; border: 3px solid #fff9; border-radius: 50%; }
+.touch-jump { right: calc(env(safe-area-inset-right) + clamp(30px, 6.5vmin, 62px));
+  bottom: calc(env(safe-area-inset-bottom) + clamp(118px, 22vmin, 186px)); width: clamp(62px, 11vmin, 88px); aspect-ratio: 1; }
+.touch-settings-dialog .option-select, .touch-settings-dialog .option-slider { font-family: "Rajdhani", sans-serif; }
+.touch-settings-dialog .option-select { display: flex; align-items: center; justify-content: space-between; min-height: 52px;
+  border-bottom: 1px solid #ffffff18; color: #dfe3de; font-size: 18px; }
+.touch-settings-dialog .option-select select { min-width: 210px; padding: 6px 9px; border: 1px solid #8b6948; border-radius: 2px;
+  background: #181d1c; color: #ffd39a; }
+.touch-settings-dialog .option-slider { display: flex; align-items: center; justify-content: space-between; min-height: 58px; color: #dfe3de; font-size: 18px; }
+.touch-settings-dialog .option-slider > div { display: grid; grid-template-columns: minmax(150px, 260px) 38px; align-items: center; gap: 12px; }
+.touch-settings-dialog .option-slider input { width: 100%; accent-color: #c47b32; }
+.touch-settings-dialog .option-slider output { color: #f0bc78; text-align: right; }
 .spectator-hud { position: absolute; right: 3.5556vh; bottom: 8.3333vh; z-index: 20; display: grid; justify-items: end;
   color: #fff; font: 3.5556vh/1 "Sauerbraten", sans-serif; text-shadow: 3px 3px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000,
   -2px 2px 0 #000; pointer-events: none; }

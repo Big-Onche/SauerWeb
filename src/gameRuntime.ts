@@ -10,6 +10,7 @@ import { FpsHud } from "./platform/browser/FpsHud";
 import { musicPlayer } from "./platform/browser/MusicPlayer";
 import { MapScene } from "./render/MapScene";
 import { bindCrosshairSettings, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
+import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./platform/browser/TouchSettings";
 
 const app = required<HTMLDivElement>("#app");
 const parameters = new URLSearchParams(location.search);
@@ -50,6 +51,8 @@ app.innerHTML = `
             </button>
             <button type="button" data-action="crosshair"><img src="/api/packages/crosshairs/cross_normal.png" alt="" />
               <span>crosshair..</span></button>
+            <button type="button" data-action="touch-settings"><img src="/api/packages/icons/menu.jpg" alt="" />
+              <span>controls..</span></button>
             <button type="button" data-action="menu"><img src="/api/packages/icons/exit.jpg" alt="" /><span>main menu</span></button>
           </div>
         </div>
@@ -59,6 +62,12 @@ app.innerHTML = `
         <h2 id="crosshair-title">crosshair</h2>
         ${crosshairSettingsMarkup(loadCrosshairSettings())}
         <footer><span>Vanilla Sauerbraten crosshairs</span><button type="button" data-action="close-crosshair">back</button></footer>
+      </dialog>
+      <dialog id="touch-settings-dialog" class="crosshair-dialog touch-settings-dialog" aria-labelledby="touch-settings-title">
+        ${guiSkinMarkup()}
+        <h2 id="touch-settings-title">controls</h2>
+        ${touchSettingsMarkup(loadTouchSettings())}
+        <footer><span>Changes apply immediately</span><button type="button" data-action="close-touch-settings">back</button></footer>
       </dialog>
     </section>
   </main>`;
@@ -76,6 +85,7 @@ const chatPrompt = required<HTMLLabelElement>("#chat-prompt");
 const gameConsole = new GameConsole(required<HTMLElement>(".viewport-panel"));
 const fpsHud = new FpsHud(required<HTMLElement>(".viewport-panel"));
 const scene = new MapScene(canvas, "game");
+scene.setTouchControlsBlocked(true);
 const parser = new SauerMapParser();
 let activeMap = "";
 let disposed = false;
@@ -105,6 +115,10 @@ const crosshairDialog = required<HTMLDialogElement>("#crosshair-dialog");
 bindCrosshairSettings(crosshairDialog);
 required<HTMLButtonElement>("[data-action='crosshair']").addEventListener("click", () => crosshairDialog.showModal());
 required<HTMLButtonElement>("[data-action='close-crosshair']").addEventListener("click", () => crosshairDialog.close());
+const touchSettingsDialog = required<HTMLDialogElement>("#touch-settings-dialog");
+bindTouchSettings(touchSettingsDialog);
+required<HTMLButtonElement>("[data-action='touch-settings']").addEventListener("click", () => touchSettingsDialog.showModal());
+required<HTMLButtonElement>("[data-action='close-touch-settings']").addEventListener("click", () => touchSettingsDialog.close());
 required<HTMLButtonElement>("[data-action='menu']").addEventListener("click", () => location.assign("/"));
 chat.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -129,6 +143,7 @@ async function start(): Promise<void> {
     scene.configureBotMatch(botCount, botMinimumSkill, botMaximumSkill);
   }
   if (activeMap) scene.captureMouse();
+  syncTouchControls();
 }
 
 async function loadMap(name: string): Promise<void> {
@@ -159,6 +174,7 @@ function onKeyDown(event: KeyboardEvent): void {
     if (event.code === "Escape") {
       event.preventDefault();
       chat.hidden = true;
+      syncTouchControls();
       canvas.focus();
     }
     event.stopImmediatePropagation();
@@ -190,6 +206,7 @@ function onKeyDown(event: KeyboardEvent): void {
     chatPrompt.textContent = event.code === "Slash" ? "/" : teamChat ? "[team]" : ">";
     if (event.code === "Slash") chatInput.value = "/";
     chat.hidden = false;
+    syncTouchControls();
     chatInput.focus();
   } else if (event.code === "KeyG" && chat.hidden && pauseMenu.hidden) {
     scene.tryDropFlag();
@@ -222,6 +239,7 @@ function syncDeathMenu(): void {
       scene.captureMouse();
     }
   }
+  syncTouchControls();
 }
 
 function syncSpectatorButton(): void {
@@ -232,11 +250,16 @@ function syncSpectatorButton(): void {
 function setPaused(paused: boolean): void {
   pauseMenu.hidden = !paused;
   scene.setPhysicsPaused(paused && !server);
+  syncTouchControls();
   if (paused && document.pointerLockElement === canvas) void document.exitPointerLock();
   if (!paused) {
     canvas.focus();
     scene.captureMouse();
   }
+}
+
+function syncTouchControls(): void {
+  scene.setTouchControlsBlocked(!pauseMenu.hidden || !deathMenu.hidden || !chat.hidden || gameConsole.isFull || !loading.hidden || !error.hidden);
 }
 
 function dispose(): void {

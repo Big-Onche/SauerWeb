@@ -57,6 +57,7 @@ import { SIGHTMIN } from "../fpsgame/waypoint";
 import { RendererPerformanceOverlay, type RendererDiagnosticState, type RendererResourceCounters,
   type RendererResourceOwner } from "../platform/browser/RendererPerformanceOverlay";
 import { FrameProfiler } from "../platform/browser/FrameProfiler";
+import { TouchControls } from "../platform/browser/TouchControls";
 
 export type CameraMode = "free" | "player";
 
@@ -120,6 +121,7 @@ export class MapScene {
     quadExpired: (bot) => this.fpsClient.multiplayer.notifyQuadExpired(bot.position),
   });
   private readonly weaponInput: BrowserWeaponInput;
+  private readonly touchControls: TouchControls;
   private readonly weaponHUD: WeaponHUD;
   private readonly crosshairHUD: CrosshairHUD;
   private readonly weaponRenderer: WeaponRenderer;
@@ -190,6 +192,7 @@ export class MapScene {
     this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
+    this.touchControls = new TouchControls(viewport, this.physicsInput, this.weaponInput);
     this.performanceOverlay = new RendererPerformanceOverlay(viewport, this.engine, this.scene, this.frameProfiler,
       () => this.resourceCounters(), () => ({ ...this.renderDiagnostics }), (diagnostic) => this.toggleRenderDiagnostic(diagnostic));
     this.physics.raycastPerformanceRecorder = (milliseconds) => this.frameProfiler.recordRaycast(milliseconds);
@@ -218,6 +221,7 @@ export class MapScene {
     this.ctfRenderer = new CtfRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
     this.weaponInput.enabled = runtimeMode === "game";
+    this.touchControls.setGameplayEnabled(runtimeMode === "game");
     this.weaponHUD.setVisible(runtimeMode === "game");
     this.crosshairHUD.setVisible(runtimeMode === "game");
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
@@ -421,6 +425,7 @@ export class MapScene {
     const playerMode = mode === "player";
     this.physicsInput.enabled = playerMode;
     this.weaponInput.enabled = playerMode;
+    this.touchControls.setGameplayEnabled(playerMode);
     this.weaponHUD.setVisible(playerMode);
     this.crosshairHUD.setVisible(playerMode && !this.isLocalPlayerDead());
     this.multiplayerHUD.setVisible(playerMode && this.fpsClient.multiplayer.clientNumber >= 0);
@@ -442,6 +447,10 @@ export class MapScene {
 
   setPhysicsPaused(paused: boolean): void {
     this.physics.setPaused(paused, performance.now());
+  }
+
+  setTouchControlsBlocked(blocked: boolean): void {
+    this.touchControls.setBlocked(blocked);
   }
 
   setThirdPerson(enabled: boolean): void {
@@ -552,6 +561,7 @@ export class MapScene {
     this.fpsClient.multiplayer.disconnect();
     this.physicsInput.dispose();
     this.weaponInput.dispose();
+    this.touchControls.dispose();
     this.crosshairHUD.dispose();
     this.multiplayerHUD.dispose();
     this.spectatorHUD.dispose();
@@ -617,7 +627,7 @@ export class MapScene {
   }
 
   captureMouse(): void {
-    if (this.runtimeMode === "game") this.physicsInput.capture();
+    if (this.runtimeMode === "game" && !this.touchControls.active) this.physicsInput.capture();
   }
 
   setMultiplayerMapInfo(name: string, crc: number): void {
@@ -1461,6 +1471,7 @@ export class MapScene {
     const followed = this.followedPlayer();
     this.physicsInput.enabled = this.runtimeMode === "game";
     this.weaponInput.enabled = this.runtimeMode === "game" && !dead && !spectator;
+    this.touchControls.setGameplayEnabled(this.runtimeMode === "game" && !dead && !spectator);
     // Native gameplayhud remains active while dead and while freely spectating (health 0, clock/scores, and spectator text still render).
     this.weaponHUD.setVisible(this.runtimeMode === "game");
     this.crosshairHUD.setVisible(this.runtimeMode === "game" && !dead && (!spectator || followed?.state !== ClientState.Dead && Boolean(followed)));

@@ -9,6 +9,9 @@ export class BrowserPhysicsInput {
   enabled = false;
   private readonly pressed = new Set<string>();
   private readonly bindings = loadMovementBindings();
+  private touchX = 0;
+  private touchY = 0;
+  private touchJump = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", this.onKeyDown);
@@ -19,11 +22,11 @@ export class BrowserPhysicsInput {
   }
 
   sample(): PhysicsInputState {
-    this.state.forward = this.pressed.has(this.bindings.forward);
-    this.state.backward = this.pressed.has(this.bindings.backward);
-    this.state.left = this.pressed.has(this.bindings.left);
-    this.state.right = this.pressed.has(this.bindings.right);
-    this.state.jump = this.pressed.has(this.bindings.jump);
+    this.state.forward = this.pressed.has(this.bindings.forward) || this.touchY < -.25;
+    this.state.backward = this.pressed.has(this.bindings.backward) || this.touchY > .25;
+    this.state.left = this.pressed.has(this.bindings.left) || this.touchX < -.25;
+    this.state.right = this.pressed.has(this.bindings.right) || this.touchX > .25;
+    this.state.jump = this.pressed.has(this.bindings.jump) || this.touchJump;
     const sampled = { ...this.state };
     this.state.yawDelta = 0;
     this.state.pitchDelta = 0;
@@ -39,6 +42,21 @@ export class BrowserPhysicsInput {
       // Browsers require a user activation for the first pointer lock. Entry makes a
       // best-effort request; respawn/resume handlers call this again from their gesture.
     }
+  }
+
+  setTouchMovement(x: number, y: number): void { this.touchX = x; this.touchY = y; }
+
+  setTouchJumping(jumping: boolean): void { this.touchJump = jumping; }
+
+  addTouchLook(yawDelta: number, pitchDelta: number): void {
+    this.state.yawDelta += yawDelta;
+    this.state.pitchDelta += pitchDelta;
+  }
+
+  clearTouch(): void {
+    this.touchX = this.touchY = 0;
+    this.touchJump = false;
+    this.state.yawDelta = this.state.pitchDelta = 0;
   }
 
   dispose(): void {
@@ -73,6 +91,7 @@ export class BrowserPhysicsInput {
 
   private readonly clear = (): void => {
     this.pressed.clear();
+    this.clearTouch();
     Object.assign(this.state, createInputState());
   };
 }

@@ -77,6 +77,10 @@ button { color: inherit; }
 .option-slider > div { display: grid; grid-template-columns: minmax(150px, 260px) 38px; align-items: center; gap: 12px; }
 .option-slider input { width: 100%; accent-color: #c47b32; }
 .option-slider output { color: #f0bc78; font-variant-numeric: tabular-nums; text-align: right; }
+.option-select { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 8px 12px;
+  border-bottom: 1px solid #ffffff18; color: #b9c0bb; font-size: 17px; }
+.option-select select { min-width: 210px; padding: 6px 9px; border: 1px solid #8b6948; border-radius: 2px;
+  background: #181d1c; color: #ffd39a; }
 .option-action { cursor: pointer; }.option-action b { color: #e7a95f; font-weight: 500; }.option-note { margin: 16px 12px; color: #89928d; font-size: 14px; line-height: 1.45; }
 .option-bind { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 7px 12px;
   border-bottom: 1px solid #ffffff18; color: #b9c0bb; font-size: 17px; text-transform: lowercase; }

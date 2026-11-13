@@ -10,6 +10,7 @@ import { loadHudSettings, saveHudSettings } from "./platform/browser/HudSettings
 import { loadMusicVolume, musicPlayer } from "./platform/browser/MusicPlayer";
 import { isBindableKey, keyBindingLabel, keyForEvent, loadMovementBindings, MOVEMENT_BINDING_ACTIONS, resetMovementBindings,
   saveMovementBindings, type MovementBindingAction } from "./platform/browser/KeyBindings";
+import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./platform/browser/TouchSettings";
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
 import { sauerFormattedMarkup } from "./sauerFormatting";
 
@@ -273,6 +274,7 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
     else void document.documentElement.requestFullscreen();
   });
   bindMovementBindingControls();
+  bindTouchSettings(document);
 }
 
 function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
@@ -303,6 +305,7 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
     optionNote("Music follows Sauerbraten's menu and map rotation playlist."),
   ]);
   if (tab === "mouse") return optionGroup("mouse", [
+    touchSettingsMarkup(loadTouchSettings()),
     optionInfo("mouse capture", "pointer lock"), optionInfo("weapon selection", "mouse wheel"),
     optionNote("Click the game viewport to capture the mouse; press Escape to release it."),
   ]);
