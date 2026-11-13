@@ -123,7 +123,7 @@ export class WeaponHUD {
     if (mobile) context.translate(width / scale / 2 - 760, -150);
     if (player.state !== ClientState.Spectator && player.state !== ClientState.Editing) this.drawPlayerHud(context, player);
     context.restore();
-    this.drawClock(context, width, height, clockSeconds);
+    this.drawClock(context, width, height, clockSeconds, mobile, hudScale);
   }
 
   private drawPlayerHud(context: CanvasRenderingContext2D, player: HudPlayerView): void {
@@ -170,16 +170,19 @@ export class WeaponHUD {
     return carriedTeam === localTeam ? Icon.BlueFlag : Icon.RedFlag;
   }
 
-  private drawClock(context: CanvasRenderingContext2D, width: number, height: number, seconds: number): void {
+  private drawClock(context: CanvasRenderingContext2D, width: number, height: number, seconds: number, mobile: boolean,
+                    hudScale: number): void {
     if (!this.multiplayer || (!this.multiplayer.connected && !this.multiplayer.isLocalGame)) return;
     const mins = Math.trunc(seconds / 60), remaining = seconds % 60;
     const clock = `${mins}:${String(remaining).padStart(2, "0")}`;
     context.save();
     context.textBaseline = "top";
     context.textAlign = "center";
-    context.font = `${FONT_HEIGHT * 0.75}px Sauerbraten, sans-serif`;
+    const fontSize = mobile ? Math.min(26, Math.max(16, Math.min(width, height) * 0.055)) * hudScale : FONT_HEIGHT * 0.75;
+    const top = mobile ? Math.max(6, height * 0.018) : height * 0.03 - fontSize * 0.5;
+    context.font = `${fontSize}px Sauerbraten, sans-serif`;
     context.fillStyle = mins < 1 ? "#ffc040" : "#ffffff";
-    this.drawOutlinedText(context, clock, width * 0.5, height * 0.03 - FONT_HEIGHT * 0.75 * 0.5);
+    this.drawOutlinedText(context, clock, width * 0.5, top);
     context.restore();
   }
 
