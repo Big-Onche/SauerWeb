@@ -30,9 +30,12 @@ export class ProjectileSystem {
     this.bouncers = new BouncerSystem(world, explosions, events, random);
   }
 
-  spawn(gun: Gun, owner: Damageable, from: Vec3, target: Vec3, damageMultiplier: number, nowMilliseconds?: number): number {
+  spawn(gun: Gun, owner: Damageable, from: Vec3, target: Vec3, damageMultiplier: number, nowMilliseconds?: number,
+        visualOrigin?: Vec3, firstPerson = false): number {
     const definition = WEAPONS[gun];
-    if (gun === Gun.Grenade) return this.bouncers.spawnGrenadeShot(owner, from, target, damageMultiplier, { nowMilliseconds });
+    if (gun === Gun.Grenade) {
+      return this.bouncers.spawnGrenadeShot(owner, from, target, damageMultiplier, { nowMilliseconds, visualOrigin, firstPerson });
+    }
     const direction = subtract(target, from);
     normalize(direction);
     const projectile: Projectile = { id: this.nextId++, gun, owner, position: copyVec3(from), velocity: direction,

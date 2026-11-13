@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MAT_WATER } from "../../engine/material";
 import type { Vec3 } from "../../engine/octa";
+import { rescale, subtract } from "../../engine/physics/vector";
 import { createDamageable } from "./DamageSystem";
 import { DamageSystem } from "./DamageSystem";
 import { ExplosionSystem } from "./ExplosionSystem";
@@ -29,6 +30,32 @@ describe("native bouncer physics", () => {
     bouncers.updatebouncers(100, [owner]);
     expect(grenade.velocity.z).toBeCloseTo(12.807, 3);
     expect(grenade.lifetime).toBe(1400);
+  });
+
+  it("starts visually at the HUD muzzle while keeping grenade physics clear of its owner", () => {
+    const { bouncers } = system(emptyWorld);
+    const owner = createDamageable("owner", { x: 0, y: 0, z: 10 });
+    const muzzle = { x: 2, y: 1, z: 12 };
+    bouncers.spawnGrenadeShot(owner, owner.position, { x: 100, y: 0, z: 10 }, 1,
+      { visualOrigin: muzzle, firstPerson: true });
+    const grenade = bouncers.activeBouncers[0];
+    const expectedOffset = subtract(muzzle, owner.position);
+    rescale(expectedOffset, 16);
+    expect(bouncers.offsetpos(grenade)).toEqual({
+      x: owner.position.x + expectedOffset.x,
+      y: owner.position.y + expectedOffset.y,
+      z: owner.position.z + expectedOffset.z,
+    });
+    expect(grenade.position.x).toBeGreaterThan(owner.radius + grenade.radius);
+  });
+
+  it("uses the exact tagged muzzle for a third-person grenade", () => {
+    const { bouncers } = system(emptyWorld);
+    const owner = createDamageable("owner", { x: 0, y: 0, z: 10 });
+    const muzzle = { x: 6, y: 3, z: 14 };
+    bouncers.spawnGrenadeShot(owner, owner.position, { x: 100, y: 0, z: 10 }, 1,
+      { visualOrigin: muzzle, firstPerson: false });
+    expect(bouncers.offsetpos(bouncers.activeBouncers[0])).toEqual(muzzle);
   });
 
   it("is deterministic across variable frame partitions", () => {

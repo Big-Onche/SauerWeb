@@ -16,6 +16,7 @@ export class WeaponController {
   lastAttackGun = -1;
   quadMilliseconds = 0;
   serverAuthoritative = false;
+  projectileVisualOrigin?: (gun: Gun, from: Vec3, to: Vec3) => { position?: Vec3; firstPerson: boolean } | undefined;
 
   constructor(readonly owner: Damageable, private readonly world: WeaponWorld, private readonly hitscan: HitscanSystem,
               private readonly projectiles: ProjectileSystem, private readonly events: WeaponEvents) {}
@@ -47,7 +48,10 @@ export class WeaponController {
     const multiplier = this.quadMilliseconds > 0 ? 4 : 1;
     this.projectiles.serverAuthoritative = this.serverAuthoritative;
     let rays: Vec3[] = [], hits: WeaponHit[] = [];
-    if (definition.projectileSpeed) this.projectiles.spawn(gun, this.owner, from, to, multiplier, nowMilliseconds);
+    if (definition.projectileSpeed) {
+      const visual = gun === Gun.Grenade ? this.projectileVisualOrigin?.(gun, from, to) : undefined;
+      this.projectiles.spawn(gun, this.owner, from, to, multiplier, nowMilliseconds, visual?.position, visual?.firstPerson);
+    }
     else ({ endpoints: rays, hits } = this.hitscan.fire(gun, this.owner, from, to, multiplier, targets, !this.serverAuthoritative));
     if (definition.rays === 1 && rays.length) to = copyVec3(rays[0]);
     this.events.emit({ type: "shot", gun, millis: nowMilliseconds, from, to, rays, hits });

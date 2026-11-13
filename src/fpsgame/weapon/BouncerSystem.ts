@@ -42,6 +42,7 @@ export interface NewBouncerOptions {
   id?: number;
   nowMilliseconds?: number;
   visualOrigin?: Vec3;
+  firstPerson?: boolean;
   damageMultiplier?: number;
 }
 
@@ -103,7 +104,15 @@ export class BouncerSystem {
   spawnGrenadeShot(owner: Damageable, from: Vec3, target: Vec3, damageMultiplier: number, options: NewBouncerOptions = {}): number {
     const adjustedTarget = copyVec3(target);
     adjustedTarget.z += magnitude(subtract(target, from)) / 8;
-    const visualOrigin = options.visualOrigin ?? hudgunorigin(from, target, owner, options.local ?? true);
+    const firstPerson = options.firstPerson ?? false;
+    const visualOrigin = copyVec3(options.visualOrigin ?? hudgunorigin(from, target, owner, firstPerson));
+    if (firstPerson) {
+      const offset = subtract(visualOrigin, owner.position);
+      rescale(offset, 16);
+      visualOrigin.x = owner.position.x + offset.x;
+      visualOrigin.y = owner.position.y + offset.y;
+      visualOrigin.z = owner.position.z + offset.z;
+    }
     return this.newbouncer(from, adjustedTarget, owner, BouncerType.BNC_GRENADE, WEAPONS[Gun.Grenade].projectileLifetime,
       WEAPONS[Gun.Grenade].projectileSpeed, { ...options, visualOrigin, damageMultiplier }).id;
   }
@@ -339,9 +348,7 @@ export function hudgunorigin(from: Vec3, to: Vec3, owner: Damageable, firstPerso
     const right = { x: front.y, y: -front.x, z: 0 };
     normalize(right);
     addScaled(result, right, 0.8);
-    const offset = subtract(result, owner.position);
-    rescale(offset, 16);
-    return { x: owner.position.x + offset.x, y: owner.position.y + offset.y, z: owner.position.z + offset.z };
+    return result;
   }
   addScaled(result, front, owner.radius + 1);
   result.z += (owner.aboveEye + owner.eyeHeight) * 0.75 - owner.eyeHeight;

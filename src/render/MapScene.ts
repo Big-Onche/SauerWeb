@@ -232,6 +232,13 @@ export class MapScene {
     this.weaponHUD.setVisible(runtimeMode === "game");
     this.crosshairHUD.setVisible(runtimeMode === "game");
     this.weaponRenderer = new WeaponRenderer(this.scene, this.weapons.events, this.playerCamera, this.weapons.controller);
+    this.weapons.controller.projectileVisualOrigin = () => {
+      const firstPerson = this.cameraMode === "player" && !this.thirdperson;
+      const clientNumber = this.fpsClient.multiplayer.clientNumber;
+      const position = firstPerson ? this.weaponRenderer.muzzlePosition()
+        : clientNumber < 0 ? undefined : this.playerRenderer.muzzlePosition(clientNumber);
+      return { position, firstPerson };
+    };
     this.particleRenderer = new ParticleRenderer(this.scene, this.weapons.events, this.playerCamera, (event) => {
       if (event.type === "shot") return this.weaponRenderer.muzzlePosition();
       if (event.type !== "shot-effect") return undefined;
