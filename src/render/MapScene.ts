@@ -81,7 +81,7 @@ export interface ViewportTuning {
   vibrance: number;
 }
 
-export const DEFAULT_VIEWPORT_TUNING: Readonly<ViewportTuning> = { contrast: 1.1, gamma: 1.4, vibrance: 1.15 };
+export const DEFAULT_VIEWPORT_TUNING: Readonly<ViewportTuning> = { contrast: 1.3, gamma: 1.85, vibrance: 1.65 };
 
 export class MapScene {
   readonly engine: Engine;

@@ -60,16 +60,16 @@ app.innerHTML = `
           <button id="settings-reset" type="button">Reset</button>
         </header>
         <label class="setting-row" for="contrast">
-          <span><strong>Contrast</strong><output id="contrast-value" for="contrast">110%</output></span>
-          <input id="contrast" type="range" min="0.5" max="1.5" value="1.1" step="0.01" />
+          <span><strong>Contrast</strong><output id="contrast-value" for="contrast">130%</output></span>
+          <input id="contrast" type="range" min="0.5" max="1.5" value="1.3" step="0.01" />
         </label>
         <label class="setting-row" for="gamma">
-          <span><strong>Gamma</strong><output id="gamma-value" for="gamma">1.40</output></span>
-          <input id="gamma" type="range" min="0.5" max="2" value="1.4" step="0.01" />
+          <span><strong>Gamma</strong><output id="gamma-value" for="gamma">1.85</output></span>
+          <input id="gamma" type="range" min="0.5" max="2" value="1.85" step="0.01" />
         </label>
         <label class="setting-row" for="vibrance">
-          <span><strong>Vibrance</strong><output id="vibrance-value" for="vibrance">115%</output></span>
-          <input id="vibrance" type="range" min="0" max="2" value="1.15" step="0.01" />
+          <span><strong>Vibrance</strong><output id="vibrance-value" for="vibrance">165%</output></span>
+          <input id="vibrance" type="range" min="0" max="2" value="1.65" step="0.01" />
         </label>
         <label class="setting-check" for="thirdperson">
           <span><strong>Third-person view</strong><small>Show your player model</small></span>
