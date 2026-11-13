@@ -103,6 +103,7 @@ export interface MaterialVolume {
   origin: Vec3;
   size: number;
   cubeKind: CubeKind;
+  solidFaceMask?: number;
   rawMaterial: number;
   volume: MaterialVolumeType;
   volumeIndex: number;

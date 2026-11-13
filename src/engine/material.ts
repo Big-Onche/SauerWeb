@@ -49,6 +49,7 @@ function visitMaterialLeaves(cube: OctreeCube, volumes: MaterialVolume[]): void 
     origin: { ...cube.origin },
     size: cube.size,
     cubeKind: cube.kind,
+    solidFaceMask: cubeSolidFaceMask(cube),
     rawMaterial: cube.material,
     volume: materialVolumeType(cube.material),
     volumeIndex: cube.material & MATF_INDEX,
@@ -56,4 +57,24 @@ function visitMaterialLeaves(cube: OctreeCube, volumes: MaterialVolume[]): void 
     death: (cube.material & MAT_DEATH) !== 0,
     alpha: (cube.material & MAT_ALPHA) !== 0,
   });
+}
+
+const FACE_EDGE_INDICES = [
+  [4, 5, 8, 10], [6, 7, 9, 11],
+  [8, 9, 0, 2], [10, 11, 1, 3],
+  [0, 1, 4, 6], [2, 3, 5, 7],
+];
+
+export function cubeSolidFaceMask(cube: OctreeCube): number {
+  let mask = 0;
+  for (let orientation = 0; orientation < FACE_EDGE_INDICES.length; orientation++) {
+    const dimension = Math.floor(orientation / 2);
+    const dimensionEdges = cube.edges.slice(dimension * 4, dimension * 4 + 4);
+    const touchesBoundary = orientation & 1
+      ? dimensionEdges.every((edge) => (edge & 0xf0) === 0x80)
+      : dimensionEdges.every((edge) => (edge & 0x0f) === 0);
+    const solidEdges = FACE_EDGE_INDICES[orientation].every((index) => cube.edges[index] === 0x80);
+    if (touchesBoundary && solidEdges) mask |= 1 << orientation;
+  }
+  return mask;
 }

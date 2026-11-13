@@ -1,6 +1,6 @@
 import type { ResolvedTexture } from "../assets/types";
 import type { OctreeCube, SauerMap, SurfaceVertex, Vec3, VSlot } from "./octa";
-import { MAT_ALPHA } from "./material";
+import { cubeSolidFaceMask, MAT_ALPHA } from "./material";
 
 export interface GeometryBatch {
   name: string;
@@ -14,6 +14,15 @@ export interface GeometryBatch {
   uv2s: number[];
   colors: number[];
   faceCount: number;
+}
+
+export interface WorldFaceOccluder {
+  axis: number;
+  plane: number;
+  u0: number;
+  u1: number;
+  v0: number;
+  v1: number;
 }
 
 const FACE_CORNERS: Array<Array<[number, number, number]>> = [
@@ -49,6 +58,71 @@ export function generateGeometry(map: SauerMap, textures: ResolvedTexture[] = []
     visitLeaves(root, (cube) => appendCube(map, cube, rootIndex, textures, batches, coincidentFaces.get(cube) ?? 0, emittedTriangles));
   });
   return [...batches.values()].filter((batch) => batch.indices.length > 0);
+}
+
+/** Returns opaque, axis-aligned world surface areas that can cover a coplanar material face. */
+export function collectWorldFaceOccluders(map: SauerMap): WorldFaceOccluder[] {
+  const occluders: WorldFaceOccluder[] = [];
+  const coincidentFaces = findCoincidentFaces(map.world);
+  map.world.forEach((root) => visitLeaves(root, (cube) => {
+    if (cube.material & MAT_ALPHA) return;
+    // A boundary with four solid touching edges occludes liquid even on a deformed
+    // ("normal") cube. This mirrors visibleface() rather than relying on cube.kind.
+    const solidFaceMask = cubeSolidFaceMask(cube);
+    for (let orientation = 0; orientation < FACE_CORNERS.length; orientation++) {
+      if (solidFaceMask & (1 << orientation)) occluders.push(solidCubeFaceRectangle(cube, orientation));
+    }
+    const coincidentMask = coincidentFaces.get(cube) ?? 0;
+    for (let orientation = 0; orientation < FACE_CORNERS.length; orientation++) {
+      if (coincidentMask & (1 << orientation) || cube.textures[orientation] === DEFAULT_SKY) continue;
+      const surface = cube.surfaces[orientation];
+      const layerCount = surface ? surface.vertexCount & 0x0f : 4;
+      const merged = (cube.merged & (1 << orientation)) !== 0;
+      if (merged && (!surface || layerCount === 0)) continue;
+      if (!merged && !isFaceVisible(map, cube, orientation)) continue;
+      const source = surface && layerCount > 0
+        ? surface.vertices.slice(0, layerCount)
+        : FACE_CORNERS[orientation].map((corner) => generatedVertex(cube, corner));
+      const rectangle = axisAlignedFaceRectangle(source.map((vertex) => decodeVertex(cube, vertex)), Math.floor(orientation / 2));
+      if (rectangle) occluders.push(rectangle);
+    }
+  }));
+  return occluders;
+}
+
+function solidCubeFaceRectangle(cube: OctreeCube, orientation: number): WorldFaceOccluder {
+  const axis = Math.floor(orientation / 2);
+  const [uAxis, vAxis] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
+  const origin = [cube.origin.x, cube.origin.y, cube.origin.z];
+  return {
+    axis,
+    plane: origin[axis] + (orientation & 1 ? cube.size : 0),
+    u0: origin[uAxis],
+    u1: origin[uAxis] + cube.size,
+    v0: origin[vAxis],
+    v1: origin[vAxis] + cube.size,
+  };
+}
+
+function axisAlignedFaceRectangle(vertices: Vec3[], axis: number): WorldFaceOccluder | undefined {
+  if (vertices.length < 3) return undefined;
+  const [uAxis, vAxis] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
+  const coordinates = vertices.map((vertex) => [vertex.x, vertex.y, vertex.z]);
+  const plane = coordinates[0][axis];
+  if (!coordinates.every((position) => Math.abs(position[axis] - plane) < 1e-6)) return undefined;
+  const u0 = Math.min(...coordinates.map((position) => position[uAxis]));
+  const u1 = Math.max(...coordinates.map((position) => position[uAxis]));
+  const v0 = Math.min(...coordinates.map((position) => position[vAxis]));
+  const v1 = Math.max(...coordinates.map((position) => position[vAxis]));
+  if (u0 >= u1 || v0 >= v1) return undefined;
+  let twiceArea = 0;
+  for (let index = 0; index < coordinates.length; index++) {
+    const current = coordinates[index], next = coordinates[(index + 1) % coordinates.length];
+    twiceArea += current[uAxis] * next[vAxis] - next[uAxis] * current[vAxis];
+  }
+  const rectangleArea = (u1 - u0) * (v1 - v0);
+  if (Math.abs(Math.abs(twiceArea) / 2 - rectangleArea) > 1e-6) return undefined;
+  return { axis, plane, u0, u1, v0, v1 };
 }
 
 function visitLeaves(cube: OctreeCube, callback: (cube: OctreeCube) => void): void {

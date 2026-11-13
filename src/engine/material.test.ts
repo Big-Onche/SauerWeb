@@ -28,6 +28,15 @@ describe("collectMaterialVolumes", () => {
       ["water", 3, "none"],
     ]);
   });
+
+  it("records solid cube faces that suppress liquid material surfaces", () => {
+    const cube = materialCube(MAT_WATER);
+    cube.kind = "normal";
+    cube.edges.fill(0x80);
+    const [volume] = collectMaterialVolumes([cube]);
+
+    expect(volume.solidFaceMask).toBe(0x3f);
+  });
 });
 
 function materialCube(material: number): OctreeCube {
