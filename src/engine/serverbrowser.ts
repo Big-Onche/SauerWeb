@@ -4,6 +4,9 @@
 
 import { PacketReader, PacketWriter } from "../network/protocol";
 
+const SERVER_QUERY_TIMEOUT_MILLISECONDS = 1_800;
+const SERVER_QUERY_RETRY_MILLISECONDS = 600;
+
 export interface ServerListItem {
   host: string;
   port: number;
@@ -44,24 +47,31 @@ async function queryserver(server: ServerListItem): Promise<ServerListItem> {
     url.searchParams.set("info", "1");
     const socket = new WebSocket(url);
     let result: ServerListItem | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let started = 0;
     const offline = (): ServerListItem => ({ ...server, ping: null, online: false });
     const finish = (value: ServerListItem): void => {
       if (result) return;
       result = value;
       clearTimeout(timeout);
+      clearTimeout(retry);
       if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) resolve(value);
       else socket.close();
     };
-    const timeout = setTimeout(() => finish(offline()), 1200);
+    const timeout = setTimeout(() => finish(offline()), SERVER_QUERY_TIMEOUT_MILLISECONDS);
     socket.binaryType = "arraybuffer";
     socket.addEventListener("open", () => {
-      const started = performance.now();
       socket.addEventListener("message", (event) => {
         if (!(event.data instanceof ArrayBuffer)) return;
         try { finish(decodeServerInfo(new Uint8Array(event.data), performance.now() - started, server)); }
         catch { finish(offline()); }
-      }, { once: true });
-      socket.send(new PacketWriter().putInt(Math.trunc(started)).finish());
+      });
+      const sendQuery = (): void => {
+        started = performance.now();
+        socket.send(new PacketWriter().putInt(Math.trunc(started)).finish());
+      };
+      sendQuery();
+      retry = setTimeout(sendQuery, SERVER_QUERY_RETRY_MILLISECONDS);
     }, { once: true });
     socket.addEventListener("error", () => finish(offline()), { once: true });
     socket.addEventListener("close", () => resolve(result ?? offline()), { once: true });

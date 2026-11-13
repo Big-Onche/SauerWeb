@@ -15,6 +15,7 @@ const RETRIEVELIMIT = 20_000;
 const MAX_MASTER_RESPONSE_BYTES = 1_048_576;
 const MAX_CONNECTIONS = 64;
 const MAX_CONNECTIONS_PER_ADDRESS = 4;
+const MAX_INFO_CONNECTIONS_PER_ADDRESS = 8;
 const MAX_PACKETS_PER_SECOND = 256;
 const MAX_BYTES_PER_SECOND = 1_048_576;
 const DEFAULT_MASTER_NAME = "master.sauerbraten.org";
@@ -93,7 +94,8 @@ export function attachSauerRelay(httpServer, options = {}) {
       target = servers.find((server) => `${server.host}:${server.port}` === key);
     }
     const remoteConnections = connectionsByAddress.get(remoteAddress) || 0;
-    if (!target || connectionCount >= MAX_CONNECTIONS || remoteConnections >= MAX_CONNECTIONS_PER_ADDRESS ||
+    const addressConnectionLimit = serverInfo ? MAX_INFO_CONNECTIONS_PER_ADDRESS : MAX_CONNECTIONS_PER_ADDRESS;
+    if (!target || connectionCount >= MAX_CONNECTIONS || remoteConnections >= addressConnectionLimit ||
         (allowedOrigins.size && !allowedOrigins.has(origin)) || socket.destroyed) {
       if (socket.destroyed) return;
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
