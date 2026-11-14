@@ -1,6 +1,7 @@
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Vector2, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Matrix, Vector2, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Plane } from "@babylonjs/core/Maths/math.plane";
+import { Frustum } from "@babylonjs/core/Maths/math.frustum";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { Constants } from "@babylonjs/core/Engines/constants";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
@@ -100,6 +101,11 @@ interface WaterReflectionPlane {
   readonly height: number;
   readonly texture: MirrorTexture;
   readonly meshes: Set<Mesh>;
+  readonly projectiveMatrix: Matrix;
+  readonly renderMeshes: AbstractMesh[];
+  readonly frustumPlanes: Plane[];
+  initialized: boolean;
+  distanceSquared: number;
 }
 
 export class MapScene {
@@ -176,6 +182,8 @@ export class MapScene {
   private waterDistortionTexture?: Texture;
   private readonly waterReflections = new Map<number, WaterReflectionPlane>();
   private readonly activeWaterReflections = new Set<WaterReflectionPlane>();
+  private readonly waterReflectionCandidates: WaterReflectionPlane[] = [];
+  private selectedWaterReflection?: WaterReflectionPlane;
   private mapCaustics?: MapCausticResources;
   private waterParameters: MapWaterMaterial[] = [];
   private mapFog?: MapFog;
@@ -893,6 +901,7 @@ export class MapScene {
         uniform mat4 world;
         uniform mat4 view;
         uniform mat4 worldViewProjection;
+        uniform mat4 reflectionProjectiveMatrix;
         uniform float time;
         varying vec3 worldPosition;
         varying vec3 worldNormal;
@@ -918,7 +927,7 @@ export class MapScene {
           surfaceUv = uv;
           cameraSpaceDepth = (view * worldVertex).z;
           gl_Position = worldViewProjection * vec4(animatedPosition, 1.0);
-          reflectionClipPosition = gl_Position;
+          reflectionClipPosition = reflectionProjectiveMatrix * worldVertex;
         }
       `,
       fragmentSource: `
@@ -1007,8 +1016,8 @@ export class MapScene {
       `,
     }, {
       attributes: ["position", "normal", "uv", "waveData"],
-      uniforms: ["world", "view", "worldViewProjection", "cameraPosition", "waterColor", "waterfallColor", "waterSpecular", "time",
-        "waterFogEnd", "hasReflection", "screenSize"],
+      uniforms: ["world", "view", "worldViewProjection", "reflectionProjectiveMatrix", "cameraPosition", "waterColor", "waterfallColor",
+        "waterSpecular", "time", "waterFogEnd", "hasReflection", "screenSize"],
       samplers: ["normalSampler", "distortionSampler", "depthSampler", "refractionSampler", "reflectionSampler"],
       needAlphaBlending: true,
     });
@@ -1042,6 +1051,7 @@ export class MapScene {
       if (this.waterRefractionTexture) material.setTexture("refractionSampler", this.waterRefractionTexture);
       const reflectionActive = reflection !== undefined && this.activeWaterReflections.has(reflection);
       material.setFloat("hasReflection", reflectionActive ? 1 : 0);
+      if (reflectionActive) material.setMatrix("reflectionProjectiveMatrix", reflection.projectiveMatrix);
     };
     this.waterMaterials.set(`${materialIndex}:${reflectionHeight ?? "none"}`, material);
     return material;
@@ -1055,7 +1065,6 @@ export class MapScene {
     // Babylon's mirror pass reflects the active view matrix and injects this plane into every compatible material shader. The downward
     // normal retains geometry above the water and clips everything below it, including objects outside the main camera frustum.
     texture.mirrorPlane = new Plane(0, -1, 0, height);
-    texture.renderListPredicate = (mesh) => this.isWaterRenderTargetMesh(mesh);
     texture.renderParticles = false;
     texture.renderSprites = false;
     texture.enableBoundingBoxRendering = false;
@@ -1063,6 +1072,7 @@ export class MapScene {
     texture.ignoreCameraViewport = true;
     texture.gammaSpace = false;
     texture.clearColor = this.scene.clearColor.clone();
+    let reflection!: WaterReflectionPlane;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
     texture.onBeforeRenderObservable.add(() => {
       const fog = this.mapFog;
@@ -1078,17 +1088,31 @@ export class MapScene {
       texture.clearColor.copyFrom(this.scene.clearColor);
     });
     texture.onAfterRenderObservable.add(() => {
-      if (!previousFog) return;
-      this.scene.fogEnabled = previousFog.enabled;
-      this.scene.fogMode = previousFog.mode;
-      this.scene.fogStart = previousFog.start;
-      this.scene.fogEnd = previousFog.end;
-      this.scene.fogColor.copyFrom(previousFog.color);
-      this.scene.clearColor.copyFrom(previousFog.clearColor);
-      previousFog = undefined;
+      if (previousFog) {
+        this.scene.fogEnabled = previousFog.enabled;
+        this.scene.fogMode = previousFog.mode;
+        this.scene.fogStart = previousFog.start;
+        this.scene.fogEnd = previousFog.end;
+        this.scene.fogColor.copyFrom(previousFog.color);
+        this.scene.clearColor.copyFrom(previousFog.clearColor);
+        previousFog = undefined;
+      }
+      // MirrorTexture's own observer has restored the main view at this point. Capture that exact frame's matrix after the reflected image
+      // is complete, matching Sauerbraten's saved watermatrix and avoiding a one-frame mismatch with camera input processed by Scene.render.
+      reflection.projectiveMatrix.copyFrom(this.scene.getTransformMatrix());
     });
-    const reflection: WaterReflectionPlane = {
-      height, texture, meshes: new Set(),
+    reflection = {
+      height, texture, meshes: new Set(), projectiveMatrix: Matrix.Identity(), renderMeshes: [],
+      frustumPlanes: Array.from({ length: 6 }, () => new Plane(0, 0, 0, 0)), initialized: false,
+      distanceSquared: Number.POSITIVE_INFINITY,
+    };
+    texture.getCustomRenderList = () => {
+      Frustum.GetPlanesToRef(this.scene.getTransformMatrix(), reflection.frustumPlanes);
+      reflection.renderMeshes.length = 0;
+      for (const mesh of this.scene.meshes) {
+        if (this.isWaterRenderTargetMesh(mesh) && mesh.isInFrustum(reflection.frustumPlanes)) reflection.renderMeshes.push(mesh);
+      }
+      return reflection.renderMeshes;
     };
     this.waterReflections.set(height, reflection);
     return reflection;
@@ -1112,21 +1136,56 @@ export class MapScene {
     camera.getWorldMatrix();
     const cameraPosition = camera.globalPosition;
     let anyWaterSurface = false;
+    this.waterReflectionCandidates.length = 0;
     for (const reflection of this.waterReflections.values()) {
-      let enabled = false;
+      let visible = false;
+      reflection.distanceSquared = Number.POSITIVE_INFINITY;
       for (const mesh of reflection.meshes) {
         if (!mesh.isEnabled() || !mesh.isVisible) continue;
         anyWaterSurface = true;
-        enabled = true;
-        break;
+        const bounds = mesh.getBoundingInfo().boundingBox;
+        const dx = Math.max(bounds.minimumWorld.x - cameraPosition.x, 0, cameraPosition.x - bounds.maximumWorld.x);
+        const dy = Math.max(bounds.minimumWorld.y - cameraPosition.y, 0, cameraPosition.y - bounds.maximumWorld.y);
+        const dz = Math.max(bounds.minimumWorld.z - cameraPosition.z, 0, cameraPosition.z - bounds.maximumWorld.z);
+        reflection.distanceSquared = Math.min(reflection.distanceSquared, dx * dx + dy * dy + dz * dz);
+        if (camera.isInFrustum(mesh)) visible = true;
       }
-      if (enabled && cameraPosition.y >= reflection.height - 0.5) {
-        this.activeWaterReflections.add(reflection);
-        this.scene.customRenderTargets.push(reflection.texture);
-      }
+      if (visible && cameraPosition.y >= reflection.height - 0.5) this.waterReflectionCandidates.push(reflection);
     }
-    // Keep every applicable elevation current. A single active plane made reflections disappear from the rest of multi-level maps. The
-    // fixed preset sizes bound fill cost, while Babylon reuses each target and its render list for all coplanar surfaces at that height.
+    if (!this.waterReflectionCandidates.length) {
+      // Coarse material-volume bounds can miss a grazing water surface. Fall back to the nearest plane rather than freezing a previously
+      // rendered image at an obsolete viewpoint.
+      let nearest: WaterReflectionPlane | undefined;
+      for (const reflection of this.waterReflections.values()) {
+        if (cameraPosition.y < reflection.height - 0.5 || !Number.isFinite(reflection.distanceSquared)) continue;
+        if (!nearest || reflection.distanceSquared < nearest.distanceSquared) nearest = reflection;
+      }
+      if (nearest) this.waterReflectionCandidates.push(nearest);
+    }
+    // Keep one relevant plane live on consecutive frames. Time-slicing planes makes players and other dynamic entities visibly update at a
+    // fraction of the scene frame rate. Cached planes retain the projective matrix from their render, so they remain world-anchored until
+    // they become the live plane again.
+    if (this.waterReflectionCandidates.length) {
+      this.waterReflectionCandidates.sort((first, second) => first.distanceSquared - second.distanceSquared);
+      const nearest = this.waterReflectionCandidates[0];
+      const selected = this.selectedWaterReflection && this.waterReflectionCandidates.includes(this.selectedWaterReflection) &&
+        this.selectedWaterReflection.distanceSquared <= nearest.distanceSquared * 1.21 ? this.selectedWaterReflection : nearest;
+      this.selectedWaterReflection = selected;
+      if (selected !== nearest) {
+        const nearestIndex = this.waterReflectionCandidates.indexOf(nearest);
+        const selectedIndex = this.waterReflectionCandidates.indexOf(selected);
+        this.waterReflectionCandidates[nearestIndex] = selected;
+        this.waterReflectionCandidates[selectedIndex] = nearest;
+      }
+      // Sauerbraten's maxreflect defaults to two. Keep both relevant planes synchronized, but never submit every map elevation.
+      const reflectionCount = Math.min(2, this.waterReflectionCandidates.length);
+      for (let index = 0; index < reflectionCount; index++) {
+        const liveReflection = this.waterReflectionCandidates[index];
+        liveReflection.initialized = true;
+        this.activeWaterReflections.add(liveReflection);
+        this.scene.customRenderTargets.push(liveReflection.texture);
+      }
+    } else this.selectedWaterReflection = undefined;
     if (anyWaterSurface && this.waterRefractionTexture) this.scene.customRenderTargets.push(this.waterRefractionTexture);
   }
 
@@ -1141,6 +1200,7 @@ export class MapScene {
       reflection.texture.dispose();
     }
     this.waterReflections.clear();
+    this.selectedWaterReflection = undefined;
   }
 
   private disposeWaterRenderTargets(): void {
