@@ -415,6 +415,13 @@ export class MapScene {
         mapModelIssues: loadedMapModels.issues,
       };
     }
+    if (this.mapCaustics) {
+      const materials = new Set<StandardMaterial>();
+      loadedMapModels.meshes.forEach((mesh) => {
+        if (mesh.material instanceof StandardMaterial) materials.add(mesh.material);
+      });
+      materials.forEach((material) => new StandardMaterialCaustics(material, this.mapCaustics!));
+    }
     this.mapModelResources = loadedMapModels.resources;
     this.physics.setMapModels(loadedMapModels.collisions);
     this.mapModelMeshes.push(...loadedMapModels.meshes);
@@ -988,6 +995,29 @@ export class MapScene {
     refraction.renderListPredicate = (mesh) => mesh.metadata?.materialKind !== "water";
     refraction.renderParticles = false;
     refraction.ignoreCameraViewport = true;
+    let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
+    refraction.onBeforeRenderObservable.add(() => {
+      const fog = this.mapFog;
+      if (!fog) return;
+      previousFog = { enabled: this.scene.fogEnabled, mode: this.scene.fogMode, start: this.scene.fogStart, end: this.scene.fogEnd,
+        color: this.scene.fogColor.clone(), clearColor: this.scene.clearColor.clone() };
+      this.scene.fogEnabled = true;
+      this.scene.fogMode = Scene.FOGMODE_LINEAR;
+      this.scene.fogStart = fog.start;
+      this.scene.fogEnd = fog.distance;
+      this.scene.fogColor.copyFromFloats(...fog.color);
+      this.scene.clearColor.copyFromFloats(...fog.color, 1);
+    });
+    refraction.onAfterRenderObservable.add(() => {
+      if (!previousFog) return;
+      this.scene.fogEnabled = previousFog.enabled;
+      this.scene.fogMode = previousFog.mode;
+      this.scene.fogStart = previousFog.start;
+      this.scene.fogEnd = previousFog.end;
+      this.scene.fogColor.copyFrom(previousFog.color);
+      this.scene.clearColor.copyFrom(previousFog.clearColor);
+      previousFog = undefined;
+    });
     this.scene.customRenderTargets.push(refraction);
     this.waterRefractionTexture = refraction;
   }
@@ -1087,10 +1117,25 @@ export class MapScene {
       waterVolume.size, time, this.waterQuality >= 1) : Number.NEGATIVE_INFINITY;
     const waterBlend = waterVolume ? underwaterFogBlend(surfaceHeight, sauerPosition.z) : 0;
     const waterIndex = waterVolume && waterBlend > 0 ? waterVolume.material & MATF_INDEX : -1;
+    const water = waterIndex >= 0 ? this.waterParameters[waterIndex] ?? this.waterParameters[0] : undefined;
+    if (this.mapCaustics) {
+      const logBlend = water ? Math.log(1 + 255 * waterBlend) / Math.log(256) : 0;
+      const waterFogEnd = water ? Math.min(fog.distance, Math.max(water.fogDistance * 4, 32)) : 1;
+      this.mapCaustics.setWaterFog(water?.color ?? [0, 0, 0], 0, waterFogEnd, logBlend);
+      if (waterIndex === this.fogWaterIndex && Math.abs(waterBlend - this.fogWaterBlend) < 1e-3) return;
+      this.fogWaterIndex = waterIndex;
+      this.fogWaterBlend = waterBlend;
+      this.scene.fogEnabled = true;
+      this.scene.fogMode = Scene.FOGMODE_LINEAR;
+      this.scene.fogStart = fog.start;
+      this.scene.fogEnd = fog.distance;
+      this.scene.fogColor.copyFromFloats(...fog.color);
+      this.scene.clearColor.copyFromFloats(...fog.color, 1);
+      return;
+    }
     if (waterIndex === this.fogWaterIndex && Math.abs(waterBlend - this.fogWaterBlend) < 1e-3) return;
     this.fogWaterIndex = waterIndex;
     this.fogWaterBlend = waterBlend;
-    const water = waterIndex >= 0 ? this.waterParameters[waterIndex] ?? this.waterParameters[0] : undefined;
     if (water) {
       const logBlend = Math.log(1 + 255 * waterBlend) / Math.log(256);
       const waterFogEnd = Math.min(fog.distance, Math.max(water.fogDistance * 4, 32));

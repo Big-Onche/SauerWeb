@@ -172,6 +172,9 @@ export class MaterialCache {
     const fragmentSource = this.caustics
       ? SAUER_BUMP_FRAGMENT_SHADER.replace("precision highp float;", `precision highp float;\n${CAUSTIC_SHADER_DEFINITIONS}`)
         .replace("color *= bakedLight;", "color *= bakedLight;\n    color *= mapCausticMultiplier(vWorldPosition);")
+        .replace("gl_FragColor = vec4(mix(fogColor, color, fog), outputAlpha);",
+          `vec3 airFogged = mix(fogColor, color, fog);
+    gl_FragColor = vec4(mapApplyWaterFog(color, airFogged, vWorldPosition, vFogDistance), outputAlpha);`)
       : SAUER_BUMP_FRAGMENT_SHADER;
     const material = new ShaderMaterial(`map-bump-material-${index}`, this.scene, {
       vertexSource: SAUER_BUMP_VERTEX_SHADER,
@@ -180,7 +183,8 @@ export class MaterialCache {
       attributes: ["position", "normal", "tangent", "uv", "uv2", "color"],
       uniforms: ["world", "worldViewProjection", "cameraPosition", "ambientColor", "specularScale", "textureScale", "textureOffset",
         "glowScale", "alpha", "hasNormalMap", "hasSpecular", "hasSpecularMap", "hasGlowMap", "hasOpacityMap", "alphaCutoff", "fogColor",
-        "fogStart", "fogEnd", ...(this.caustics ? ["causticLookupInfo", "causticFrameInfo"] : [])],
+        "fogStart", "fogEnd", ...(this.caustics
+          ? ["causticLookupInfo", "causticFrameInfo", "waterFogColorBlend", "waterFogRange"] : [])],
       samplers: ["diffuseSampler", "normalSampler", "specularSampler", "lightmapSampler", "directionSampler", "glowSampler", "opacitySampler",
         ...(this.caustics ? ["waterLookupSampler", "firstCausticSampler", "secondCausticSampler"] : [])],
       needAlphaBlending: descriptor.surfaceMode === "transparent" || descriptor.useLightmapAlpha,

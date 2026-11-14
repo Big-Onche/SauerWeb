@@ -41,6 +41,8 @@ uniform sampler2D firstCausticSampler;
 uniform sampler2D secondCausticSampler;
 uniform vec4 causticLookupInfo;
 uniform vec4 causticFrameInfo;
+uniform vec4 waterFogColorBlend;
+uniform vec2 waterFogRange;
 
 float decodeCausticHeight(vec2 encoded) {
   vec2 bytes = floor(encoded * 255.0 + 0.5);
@@ -56,7 +58,7 @@ float causticWaterCell(vec2 cell, float height) {
   return step(0.5, top) * step(bottom - 0.02, height) * step(height, top + 0.02);
 }
 
-float mapCausticMultiplier(vec3 worldPosition) {
+float mapWaterSubmerged(vec3 worldPosition) {
   // World faces commonly lie exactly on an octree water-cell edge. Sampling a small distance on all four sides keeps floating-point
   // interpolation from alternating between the wet and dry texels and producing an acne-like seam on vertical polygons.
   vec2 lookupPosition = worldPosition.xz / causticLookupInfo.y;
@@ -65,6 +67,11 @@ float mapCausticMultiplier(vec3 worldPosition) {
   submerged = max(submerged, causticWaterCell(floor(lookupPosition + vec2(seam.x, -seam.y)), worldPosition.y));
   submerged = max(submerged, causticWaterCell(floor(lookupPosition + vec2(-seam.x, seam.y)), worldPosition.y));
   submerged = max(submerged, causticWaterCell(floor(lookupPosition - vec2(seam.x, seam.y)), worldPosition.y));
+  return submerged;
+}
+
+float mapCausticMultiplier(vec3 worldPosition) {
+  float submerged = mapWaterSubmerged(worldPosition);
   vec2 causticUv = vec2(worldPosition.x * 0.011 + worldPosition.y * 0.0066,
     worldPosition.z * 0.011 + worldPosition.y * 0.0066) * causticLookupInfo.z;
   float first = texture2D(firstCausticSampler, causticUv).r;
@@ -72,11 +79,22 @@ float mapCausticMultiplier(vec3 worldPosition) {
   float pattern = mix(first, second, causticFrameInfo.x);
   return mix(1.0, pattern, causticFrameInfo.y * submerged);
 }
+
+vec3 mapApplyWaterFog(vec3 unfogged, vec3 airFogged, vec3 worldPosition, float fogDistance) {
+  float range = max(waterFogRange.y - waterFogRange.x, 0.0001);
+  float fog = clamp((waterFogRange.y - fogDistance) / range, 0.0, 1.0);
+  vec3 waterFogged = mix(waterFogColorBlend.rgb, unfogged, fog);
+  return mix(airFogged, waterFogged, mapWaterSubmerged(worldPosition) * waterFogColorBlend.a);
+}
 `;
 
 export class MapCausticResources {
   readonly lookup: RawTexture;
   readonly frames: Texture[];
+  private waterFogColor: [number, number, number] = [0, 0, 0];
+  private waterFogStart = 0;
+  private waterFogEnd = 1;
+  private waterFogBlend = 0;
 
   constructor(scene: Scene, readonly parameters: MapCaustics, readonly lookupData: WaterLookupData) {
     this.lookup = RawTexture.CreateRGBATexture(lookupData.data, lookupData.resolution, lookupData.resolution, scene, false, false,
@@ -104,6 +122,15 @@ export class MapCausticResources {
     effect.setFloat4("causticLookupInfo", this.lookupData.resolution, this.lookupData.cellSize, 100 / this.parameters.scale,
       this.lookupData.heightScale);
     effect.setFloat4("causticFrameInfo", frame.fraction, this.parameters.contrast, 0, 0);
+    effect.setFloat4("waterFogColorBlend", ...this.waterFogColor, this.waterFogBlend);
+    effect.setFloat2("waterFogRange", this.waterFogStart, this.waterFogEnd);
+  }
+
+  setWaterFog(color: [number, number, number], start: number, end: number, blend: number): void {
+    this.waterFogColor = color;
+    this.waterFogStart = start;
+    this.waterFogEnd = end;
+    this.waterFogBlend = blend;
   }
 
   dispose(): void {
@@ -123,7 +150,7 @@ export class StandardMaterialCaustics extends MaterialPluginBase {
   }
 
   override getUniforms() {
-    return { externalUniforms: ["causticLookupInfo", "causticFrameInfo"] };
+    return { externalUniforms: ["causticLookupInfo", "causticFrameInfo", "waterFogColorBlend", "waterFogRange"] };
   }
 
   override bindForSubMesh(_uniformBuffer: UniformBuffer, _scene: Scene, _engine: AbstractEngine, subMesh: SubMesh): void {
@@ -135,6 +162,12 @@ export class StandardMaterialCaustics extends MaterialPluginBase {
     return {
       CUSTOM_FRAGMENT_DEFINITIONS: CAUSTIC_SHADER_DEFINITIONS,
       CUSTOM_FRAGMENT_UPDATE_DIFFUSE: "baseColor.rgb *= mapCausticMultiplier(vPositionW);",
+      CUSTOM_FRAGMENT_BEFORE_FOG: "vec3 mapUnfoggedColor = color.rgb;",
+      CUSTOM_FRAGMENT_BEFORE_FRAGCOLOR: `
+        #ifdef FOG
+          color.rgb = mapApplyWaterFog(mapUnfoggedColor, color.rgb, vPositionW, abs(vFogDistance.z));
+        #endif
+      `,
     };
   }
 }
