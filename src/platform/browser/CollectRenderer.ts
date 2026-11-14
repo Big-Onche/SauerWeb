@@ -13,6 +13,11 @@ import { type CollectBase, type CollectToken, collectTeamBase } from "../../fpsg
 import { GameModeFlag, gameModeHas } from "../../fpsgame/game";
 import { toBabylonPosition } from "../../render/coordinates";
 
+const SAUER_MODEL_UNIT_SCALE = 0.25;
+export const COLLECT_BASE_MODEL_SCALE = SAUER_MODEL_UNIT_SCALE * 0.75;
+export const COLLECT_SKULL_MODEL_SCALE = SAUER_MODEL_UNIT_SCALE * 2.5;
+const COLLECT_SKULL_TRANSLATE_Z = 3.25;
+
 // Original: src/fpsgame/collect.h, collectclientmode::rendergame().
 export class CollectRenderer {
   private baseGeometry?: Geometry;
@@ -117,8 +122,8 @@ export class CollectRenderer {
         fetch(packageAssetUrl("models/skull/skull.obj")!, { cache: "no-cache" }),
       ]);
       if (!baseResponse.ok || !skullResponse.ok) throw new Error("Could not load native Collect models.");
-      this.baseGeometry = flatten(parseMd3(await baseResponse.arrayBuffer()), 0.75);
-      this.skullGeometry = flatten(parseObj(await skullResponse.text()), 2.5);
+      this.baseGeometry = flatten(parseMd3(await baseResponse.arrayBuffer()), COLLECT_BASE_MODEL_SCALE);
+      this.skullGeometry = flatten(parseObj(await skullResponse.text()), COLLECT_SKULL_MODEL_SCALE, COLLECT_SKULL_TRANSLATE_Z);
     })().catch((error) => { console.warn(error); });
     return this.loading;
   }
@@ -128,15 +133,25 @@ export class CollectRenderer {
 
 interface Geometry { positions: number[]; uvs: number[]; indices: number[]; height: number }
 
-function flatten(model: ModelGeometry, scale: number): Geometry {
+function flatten(model: ModelGeometry, scale: number, translateZ = 0): Geometry {
   const positions: number[] = [], uvs: number[] = [], indices: number[] = [];
   for (const source of model.meshes) {
     const offset = positions.length / 3;
-    positions.push(...source.positions.map((value) => value * scale));
+    positions.push(...collectModelPositions(source.positions, scale, translateZ));
     uvs.push(...source.uvs);
     indices.push(...source.indices.map((index) => index + offset));
   }
   let height = 0;
   for (let index = 1; index < positions.length; index += 3) height = Math.max(height, positions[index]);
   return { positions, uvs, indices, height };
+}
+
+export function collectModelPositions(source: readonly number[], scale: number, translateZ = 0): number[] {
+  const positions = new Array<number>(source.length);
+  for (let index = 0; index < source.length; index += 3) {
+    positions[index] = source[index] * scale;
+    positions[index + 1] = (source[index + 1] + translateZ) * scale;
+    positions[index + 2] = source[index + 2] * scale;
+  }
+  return positions;
 }
