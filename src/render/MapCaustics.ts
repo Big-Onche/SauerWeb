@@ -58,6 +58,16 @@ float causticWaterCell(vec2 cell, float height) {
   return step(0.5, top) * step(bottom - 0.02, height) * step(height, top + 0.02);
 }
 
+float causticWaterCellFade(vec2 cell, float height) {
+  if (any(lessThan(cell, vec2(0.0))) || any(greaterThanEqual(cell, vec2(causticLookupInfo.x)))) return 0.0;
+  vec2 lookupUv = (cell + vec2(0.5)) / causticLookupInfo.x;
+  vec4 water = texture2D(waterLookupSampler, lookupUv);
+  float bottom = decodeCausticHeight(water.rg);
+  float top = decodeCausticHeight(water.ba);
+  float submerged = step(0.5, top) * step(bottom - 0.02, height) * step(height, top + 0.02);
+  return submerged * smoothstep(0.0, 4.0, top - height);
+}
+
 float mapWaterSubmerged(vec3 worldPosition) {
   // World faces commonly lie exactly on an octree water-cell edge. Sampling a small distance on all four sides keeps floating-point
   // interpolation from alternating between the wet and dry texels and producing an acne-like seam on vertical polygons.
@@ -71,12 +81,19 @@ float mapWaterSubmerged(vec3 worldPosition) {
 }
 
 float mapCausticMultiplier(vec3 worldPosition) {
-  float submerged = mapWaterSubmerged(worldPosition);
+  vec2 lookupPosition = worldPosition.xz / causticLookupInfo.y;
+  vec2 seam = vec2(0.01 / causticLookupInfo.y);
+  float submerged = causticWaterCellFade(floor(lookupPosition + vec2(seam.x, seam.y)), worldPosition.y);
+  submerged = max(submerged, causticWaterCellFade(floor(lookupPosition + vec2(seam.x, -seam.y)), worldPosition.y));
+  submerged = max(submerged, causticWaterCellFade(floor(lookupPosition + vec2(-seam.x, seam.y)), worldPosition.y));
+  submerged = max(submerged, causticWaterCellFade(floor(lookupPosition - vec2(seam.x, seam.y)), worldPosition.y));
   vec2 causticUv = vec2(worldPosition.x * 0.011 + worldPosition.y * 0.0066,
     worldPosition.z * 0.011 + worldPosition.y * 0.0066) * causticLookupInfo.z;
   float first = texture2D(firstCausticSampler, causticUv).r;
   float second = texture2D(secondCausticSampler, causticUv).r;
-  float pattern = mix(first, second, causticFrameInfo.x);
+  // The 32 native frames average 0.7104. Normalizing that level to neutral prevents the linear-light web blend from creating a
+  // dark shoreline band while retaining both the bright and dark detail within the animated caustic pattern.
+  float pattern = mix(first, second, causticFrameInfo.x) / 0.7104;
   return mix(1.0, pattern, causticFrameInfo.y * submerged);
 }
 

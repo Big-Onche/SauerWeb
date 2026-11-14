@@ -1,5 +1,7 @@
 # SauerWeb
 
+For opt-in Chrome DevTools performance traces, see [the profiling guide](docs/PROFILING.md).
+
 ### Cube 2: Sauerbraten. In your browser.
 
 **The classic open-source FPS, brought to the modern web.**

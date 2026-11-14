@@ -909,5 +909,6 @@ export default defineConfig(({ mode }) => {
     define: { __SAUERWEB_VERSION__: JSON.stringify(applicationVersion) },
     plugins: [sauerMapsPlugin()],
     server: { host: "127.0.0.1" },
+    build: { sourcemap: process.env.SAUERWEB_SOURCEMAP === "1" },
   };
 });

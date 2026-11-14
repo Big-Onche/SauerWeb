@@ -3,6 +3,8 @@ import { Matrix, Vector2, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Plane } from "@babylonjs/core/Maths/math.plane";
 import { Frustum } from "@babylonjs/core/Maths/math.frustum";
 import { Engine } from "@babylonjs/core/Engines/engine";
+import { EngineInstrumentation } from "@babylonjs/core/Instrumentation/engineInstrumentation";
+import { SceneInstrumentation } from "@babylonjs/core/Instrumentation/sceneInstrumentation";
 import { Constants } from "@babylonjs/core/Engines/constants";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
@@ -69,9 +71,7 @@ import { AiStateType, AiTargetType, BotManager, type AiInterest, type BotActor }
 import { MATF_INDEX, MATF_VOLUME, MAT_WATER } from "../engine/material";
 import { GameModeFlag, gameModeHas } from "../fpsgame/game";
 import { SIGHTMIN } from "../fpsgame/waypoint";
-import { RendererPerformanceOverlay, type RendererDiagnosticState, type RendererResourceCounters,
-  type RendererResourceOwner } from "../platform/browser/RendererPerformanceOverlay";
-import { FrameProfiler } from "../platform/browser/FrameProfiler";
+import { DevToolsProfiler } from "../platform/browser/DevToolsProfiler";
 import { TouchControls } from "../platform/browser/TouchControls";
 import { KillFeed } from "../platform/browser/KillFeed";
 
@@ -94,6 +94,10 @@ export interface ViewportTuning {
   contrast: number;
   gamma: number;
   vibrance: number;
+}
+
+interface MemoryPerformance extends Performance {
+  memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
 }
 
 export const DEFAULT_VIEWPORT_TUNING: Readonly<ViewportTuning> = { contrast: 1.3, gamma: 1.85, vibrance: 1.65 };
@@ -213,10 +217,13 @@ export class MapScene {
   private spectatorPitchOffset = 0;
   private lastBotNetworkUpdate = 0;
   private readonly resizeObserver: ResizeObserver;
-  private readonly performanceOverlay: RendererPerformanceOverlay;
-  private readonly frameProfiler = new FrameProfiler();
-  private readonly renderDiagnostics: RendererDiagnosticState = { particles: true, bots: true, world: true };
-  private particleUpdateStartedAt = 0;
+  private readonly profiler = new DevToolsProfiler();
+  private sceneInstrumentation?: SceneInstrumentation;
+  private engineInstrumentation?: EngineInstrumentation;
+  private activeMeshesStartedAt = 0;
+  private animationsStartedAt = 0;
+  private particlesStartedAt = 0;
+  private drawPhaseStartedAt = 0;
   private readonly botUpdatePlayers: Damageable[] = [];
   private readonly onWaterQualityChanged = (event: Event): void => {
     const quality = (event as CustomEvent<WaterQuality>).detail;
@@ -250,13 +257,21 @@ export class MapScene {
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.touchControls = new TouchControls(viewport, this.physicsInput, this.weaponInput);
-    this.performanceOverlay = new RendererPerformanceOverlay(viewport, this.engine, this.scene, this.frameProfiler,
-      () => this.resourceCounters(), () => ({ ...this.renderDiagnostics }), (diagnostic) => this.toggleRenderDiagnostic(diagnostic));
-    this.physics.raycastPerformanceRecorder = (milliseconds) => this.frameProfiler.recordRaycast(milliseconds);
-    this.physics.raycastPerformanceEnabled = () => this.frameProfiler.enabled;
+    this.initializeRendererProfiling();
+    this.physics.raycastPerformanceRecorder = (milliseconds) => this.profiler.recordRaycast(milliseconds);
+    this.physics.raycastPerformanceEnabled = () => this.profiler.enabled;
     this.bots.performanceRecorder = (phase, operation) => {
-      const key = phase === "ai" ? "botAi" : phase === "physics" ? "botPhysics" : "weaponSimulation";
-      this.frameProfiler.measure(key, operation);
+      if (!this.profiler.enabled) {
+        operation();
+        return;
+      }
+      const startedAt = performance.now();
+      try {
+        operation();
+      } finally {
+        const counter = phase === "ai" ? "botAi" : phase === "physics" ? "botPhysics" : "botWeapons";
+        this.profiler.record(counter, performance.now() - startedAt);
+      }
     };
     this.weaponHUD = new WeaponHUD(viewport, this.weapons.controller, this.weapons.events, this.fpsClient.multiplayer);
     this.crosshairHUD = new CrosshairHUD(viewport, this.weapons.controller, this.weapons.events);
@@ -275,7 +290,7 @@ export class MapScene {
       }
       return hit ? { position: { x: hit.position.x, y: hit.position.z, z: hit.position.y },
         normal: { x: hit.normal.x, y: hit.normal.z, z: hit.normal.y } } : undefined;
-    }, (milliseconds) => this.frameProfiler.record("playerGeometry", milliseconds), () => this.frameProfiler.enabled);
+    }, (milliseconds) => this.profiler.record("playerGeometry", milliseconds), () => this.profiler.enabled);
     this.ctfRenderer = new CtfRenderer(this.scene);
     this.collectRenderer = new CollectRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
@@ -296,12 +311,6 @@ export class MapScene {
       if (event.type !== "shot-effect") return undefined;
       if (event.clientNumber === this.fpsClient.multiplayer.clientNumber) return this.weaponRenderer.muzzlePosition();
       return event.clientNumber === undefined ? undefined : this.playerRenderer.muzzlePosition(event.clientNumber);
-    });
-    this.scene.onBeforeParticlesRenderingObservable.add(() => {
-      if (this.frameProfiler.enabled) this.particleUpdateStartedAt = performance.now();
-    });
-    this.scene.onAfterParticlesRenderingObservable.add(() => {
-      if (this.frameProfiler.enabled) this.frameProfiler.record("particleUpdates", performance.now() - this.particleUpdateStartedAt);
     });
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
     this.gameAudio = new WeaponAudio(this.weapons.events, this.fpsClient.multiplayer, this.physics.player);
@@ -326,15 +335,31 @@ export class MapScene {
 
     this.engine.runRenderLoop(() => {
       const frameStartedAt = performance.now();
-      this.updatePhysics(frameStartedAt);
-      this.updateCameraFog(frameStartedAt / 1000);
-      this.gameAudio.update(this.physics.player.position, this.physics.player.yaw);
-      const gameLogicFinishedAt = performance.now();
-      this.updateWaterRenderTargets();
-      this.scene.render();
-      const frameFinishedAt = performance.now();
-      const profile = this.frameProfiler.finishFrame();
-      this.performanceOverlay.recordFrame(gameLogicFinishedAt - frameStartedAt, frameFinishedAt - frameStartedAt, frameFinishedAt, profile);
+      try {
+        const gameUpdateStartedAt = this.profiler.start();
+        try {
+          this.updatePhysics(frameStartedAt);
+        } finally {
+          this.profiler.finish("gameUpdate", gameUpdateStartedAt);
+        }
+        const sceneUpdateStartedAt = this.profiler.start();
+        try {
+          this.updateCameraFog(frameStartedAt / 1000);
+          this.gameAudio.update(this.physics.player.position, this.physics.player.yaw);
+          this.updateWaterRenderTargets();
+        } finally {
+          this.profiler.finish("sceneUpdate", sceneUpdateStartedAt);
+        }
+        const sceneRenderStartedAt = this.profiler.start();
+        try {
+          this.scene.render();
+        } finally {
+          this.profiler.finish("sceneRender", sceneRenderStartedAt);
+        }
+        if (this.profiler.shouldSampleFrame()) this.sampleRendererDiagnostics();
+      } finally {
+        if (this.profiler.enabled) this.profiler.finish("frame", frameStartedAt);
+      }
     });
     window.addEventListener("resize", this.resize);
     this.resizeObserver = new ResizeObserver(this.resize);
@@ -391,8 +416,10 @@ export class MapScene {
     this.fpsClient.multiplayer.setMapEntities(map.entityRegistry);
     this.gameAudio.setMap(map.entityRegistry, mapSounds);
     await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
-    const batches = generateGeometry(map, textures);
-    const materialBatches = generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug");
+    const { batches, materialBatches } = this.profiler.measure("mapGeometry", () => ({
+      batches: generateGeometry(map, textures),
+      materialBatches: generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug"),
+    }));
     let faces = 0;
     let triangles = 0;
     let vertices = 0;
@@ -466,7 +493,6 @@ export class MapScene {
     this.placeCamera(map, batches);
     this.fpsClient.multiplayer.synchronizeLocalState();
     this.syncPlayerView();
-    this.applyRenderDiagnostics();
     return {
       meshes: batches.length + materialBatches.length + loadedMapModels.meshes.length,
       faces,
@@ -677,7 +703,8 @@ export class MapScene {
     window.removeEventListener("resize", this.resize);
     if (document.pointerLockElement === this.canvas) void document.exitPointerLock();
     this.engine.stopRenderLoop();
-    this.performanceOverlay.dispose();
+    this.sceneInstrumentation?.dispose();
+    this.engineInstrumentation?.dispose();
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
     this.collectRenderer.clear();
@@ -1538,8 +1565,13 @@ export class MapScene {
   }
 
   private updatePhysics(nowMilliseconds: number): void {
-    animateEntityModels(this.entityModelAnimations, nowMilliseconds,
-      (entity) => entity.type < 8 || entity.type > 18 || this.fpsClient.multiplayer.entities.isSpawned(entity.index));
+    const entityUpdatesStartedAt = this.profiler.start();
+    try {
+      animateEntityModels(this.entityModelAnimations, nowMilliseconds,
+        (entity) => entity.type < 8 || entity.type > 18 || this.fpsClient.multiplayer.entities.isSpawned(entity.index));
+    } finally {
+      this.profiler.finish("entityUpdates", entityUpdatesStartedAt);
+    }
     if (this.bots.waypoints.showWaypoints && nowMilliseconds - this.lastWaypointDebugUpdate >= 500) {
       this.lastWaypointDebugUpdate = nowMilliseconds;
       this.syncWaypointDebug(true);
@@ -1570,13 +1602,13 @@ export class MapScene {
       player.move = player.strafe = 0;
       player.physicsState = PhysicsState.Float;
       renderPosition = player.position;
-    } else renderPosition = this.frameProfiler.measure("playerPhysics", () => this.physics.update(nowMilliseconds, input));
+    } else renderPosition = this.profiler.measure("playerPhysics", () => this.physics.update(nowMilliseconds, input));
     this.updatePlayerCamera(renderPosition);
-    const aimTarget = this.frameProfiler.measure("weaponSimulation", () => this.aimTarget());
-    this.frameProfiler.measure("hud", () => this.crosshairHUD.update(this.aimingAtTeammate(aimTarget)));
+    const aimTarget = this.profiler.measure("weaponSimulation", () => this.aimTarget());
+    this.profiler.measure("hud", () => this.crosshairHUD.update(this.aimingAtTeammate(aimTarget)));
     this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
     const hudPlayer = followed ?? this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
-    this.frameProfiler.measure("hud", () => this.weaponHUD.render(hudPlayer ? {
+    this.profiler.measure("hud", () => this.weaponHUD.render(hudPlayer ? {
       health: hudPlayer.health, maxHealth: hudPlayer.maxHealth, armour: hudPlayer.armour, armourType: hudPlayer.armourType,
       selectedGun: hudPlayer.selectedGun, ammo: hudPlayer.ammo, state: hudPlayer.state, flags: hudPlayer.flags, tokens: hudPlayer.tokens,
       clientNumber: hudPlayer.clientNumber,
@@ -1585,13 +1617,13 @@ export class MapScene {
       armourType: this.physics.player.armourType, selectedGun: this.weapons.controller.inventory.selectedGun,
       ammo: this.weapons.controller.inventory.ammo, state: this.physics.player.clientState, flags: 0, tokens: 0,
     }));
-    this.frameProfiler.measure("weaponSimulation", () => this.weapons.update(nowMilliseconds, aimTarget));
+    this.profiler.measure("weaponSimulation", () => this.weapons.update(nowMilliseconds, aimTarget));
     this.botUpdatePlayers.length = 0;
     for (const player of this.fpsClient.multiplayer.players.values()) {
       if (player.aiType === 0 || player.ownerNumber >= 0) this.botUpdatePlayers.push(player);
     }
-    this.bots.update(nowMilliseconds, this.botUpdatePlayers, !dead);
-    this.frameProfiler.measure("networking", () => {
+    this.profiler.measure("botUpdate", () => this.bots.update(nowMilliseconds, this.botUpdatePlayers, !dead));
+    this.profiler.measure("networking", () => {
       for (const bot of this.bots.bots.values()) if (bot.ownerNumber < 0) this.fpsClient.multiplayer.syncLocalBot(bot);
       this.syncBotTargets();
       if (nowMilliseconds - this.lastBotNetworkUpdate >= 33) {
@@ -1610,47 +1642,49 @@ export class MapScene {
         }
       }
     });
-    this.frameProfiler.measure("hud", () => this.multiplayerHUD.render());
-    this.updateNetworkPlayers(renderPosition);
+    this.profiler.measure("hud", () => this.multiplayerHUD.render());
+    this.profiler.measure("networking", () => this.updateNetworkPlayers(renderPosition));
   }
 
-  private toggleRenderDiagnostic(diagnostic: keyof RendererDiagnosticState): void {
-    this.renderDiagnostics[diagnostic] = !this.renderDiagnostics[diagnostic];
-    this.applyRenderDiagnostics();
+  private initializeRendererProfiling(): void {
+    if (!this.profiler.enabled) return;
+    this.sceneInstrumentation = new SceneInstrumentation(this.scene);
+    this.engineInstrumentation = new EngineInstrumentation(this.engine);
+    if (this.engine.getCaps().timerQuery) this.engineInstrumentation.captureGPUFrameTime = true;
+    this.installSceneProfilingObservers();
   }
 
-  private applyRenderDiagnostics(): void {
-    this.particleRenderer.setRenderingEnabled(this.renderDiagnostics.particles);
-    for (const mesh of this.scene.meshes) {
-      const owner = this.resourceOwner(mesh.name);
-      if (owner === "world" || owner === "mapmodels") mesh.isVisible = this.renderDiagnostics.world;
+  private installSceneProfilingObservers(): void {
+    if (!this.profiler.enabled) return;
+    this.scene.onBeforeActiveMeshesEvaluationObservable.add(() => { this.activeMeshesStartedAt = this.profiler.start(); });
+    this.scene.onAfterActiveMeshesEvaluationObservable.add(() => this.profiler.finish("activeMeshes", this.activeMeshesStartedAt));
+    this.scene.onBeforeAnimationsObservable.add(() => { this.animationsStartedAt = this.profiler.start(); });
+    this.scene.onAfterAnimationsObservable.add(() => this.profiler.finish("animations", this.animationsStartedAt));
+    this.scene.onBeforeParticlesRenderingObservable.add(() => { this.particlesStartedAt = this.profiler.start(); });
+    this.scene.onAfterParticlesRenderingObservable.add(() => this.profiler.finish("particles", this.particlesStartedAt));
+    this.scene.onBeforeDrawPhaseObservable.add(() => { this.drawPhaseStartedAt = this.profiler.start(); });
+    this.scene.onAfterDrawPhaseObservable.add(() => this.profiler.finish("drawPhase", this.drawPhaseStartedAt));
+  }
+
+  private sampleRendererDiagnostics(): void {
+    const properties: [string, string][] = [
+      ["FPS", this.engine.getFps().toFixed(1)],
+      ["Frame wall time", `${this.engine.getDeltaTime().toFixed(2)} ms`],
+      ["Draw calls", this.sceneInstrumentation?.drawCallsCounter.current.toLocaleString() ?? "unavailable"],
+      ["Meshes active / total", `${this.scene.getActiveMeshes().length.toLocaleString()} / ${this.scene.meshes.length.toLocaleString()}`],
+      ["Triangles rendered", Math.floor(this.scene.getActiveIndices() / 3).toLocaleString()],
+      ["Vertices total", this.scene.getTotalVertices().toLocaleString()],
+      ["Materials / textures", `${this.scene.materials.length.toLocaleString()} / ${this.scene.textures.length.toLocaleString()}`],
+      ["Particle systems / lights", `${this.scene.particleSystems.length.toLocaleString()} / ${this.scene.lights.length.toLocaleString()}`],
+      ["Scene / engine observers", `${sceneObserverCount(this.scene).toLocaleString()} / ${engineObserverCount(this.engine).toLocaleString()}`],
+    ];
+    const heap = (performance as MemoryPerformance).memory;
+    if (heap) properties.push(["JS heap used / limit", `${formatMegabytes(heap.usedJSHeapSize)} / ${formatMegabytes(heap.jsHeapSizeLimit)}`]);
+    const gpuNanoseconds = this.engineInstrumentation?.gpuFrameTimeCounter.current;
+    if (this.engineInstrumentation?.captureGPUFrameTime && gpuNanoseconds !== undefined && gpuNanoseconds > 0) {
+      properties.push(["GPU frame time (asynchronous)", `${(gpuNanoseconds * 0.000001).toFixed(2)} ms`]);
     }
-  }
-
-  private resourceCounters(): RendererResourceCounters {
-    const counters: RendererResourceCounters = {
-      world: { meshes: 0, materials: 0 },
-      mapmodels: { meshes: 0, materials: 0 },
-      players: { meshes: 0, materials: 0 },
-      weapons: { meshes: 0, materials: 0 },
-      particles: { meshes: 0, materials: 0 },
-      debugging: { meshes: 0, materials: 0 },
-    };
-    for (const mesh of this.scene.meshes) counters[this.resourceOwner(mesh.name)].meshes++;
-    for (const material of this.scene.materials) counters[this.resourceOwner(material.name)].materials++;
-    return counters;
-  }
-
-  private resourceOwner(name: string): RendererResourceOwner {
-    if (name.startsWith("mapmodel-")) return "mapmodels";
-    if (name.startsWith("player-") || name.startsWith("ragdoll-")) return "players";
-    if (name.startsWith("hudgun-") || name.startsWith("weapon-projectile-")) return "weapons";
-    if (name.includes("particle") || name.startsWith("map-flame") || name.startsWith("map-smoke") || name.startsWith("beam-")) {
-      return "particles";
-    }
-    if (name.startsWith("entity-") || name.startsWith("waypoint-") || name.startsWith("material-volume-") ||
-        name.startsWith("volume-material-")) return "debugging";
-    return "world";
+    this.profiler.sampleFrame(properties);
   }
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
@@ -1787,7 +1821,6 @@ export class MapScene {
     for (const [clientNumber, player] of multiplayer.players) {
       const ownedBot = this.bots.bots.get(clientNumber);
       if (ownedBot && isBotLocallySimulated(ownedBot.ownerNumber, multiplayer.clientNumber)) continue;
-      if (!this.renderDiagnostics.bots && player.aiType !== 0) continue;
       const local = clientNumber === multiplayer.clientNumber;
       if (!local) interpolateNetworkEntity(player, nowMilliseconds);
       if (local && !thirdPersonView) continue;
@@ -1826,7 +1859,6 @@ export class MapScene {
       });
     }
     for (const bot of this.bots.bots.values()) {
-      if (!this.renderDiagnostics.bots) continue;
       if (multiplayer.players.has(bot.clientNumber) && !isBotLocallySimulated(bot.ownerNumber, multiplayer.clientNumber)) continue;
       players.push({
         id: bot.clientNumber, model: bot.model % 5, team: bot.team, local: false,
@@ -2377,4 +2409,22 @@ async function canvasObjectUrl(canvas: HTMLCanvasElement): Promise<string> {
 function squaredDistance(left: RegisteredMapEntity["position"], right: RegisteredMapEntity["position"]): number {
   const x = left.x - right.x, y = left.y - right.y, z = left.z - right.z;
   return x * x + y * y + z * z;
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function sceneObserverCount(scene: Scene): number {
+  return scene.onBeforeRenderObservable.observers.length + scene.onAfterRenderObservable.observers.length +
+    scene.onBeforeAnimationsObservable.observers.length + scene.onAfterAnimationsObservable.observers.length +
+    scene.onBeforeDrawPhaseObservable.observers.length + scene.onAfterDrawPhaseObservable.observers.length +
+    scene.onBeforeActiveMeshesEvaluationObservable.observers.length + scene.onAfterActiveMeshesEvaluationObservable.observers.length +
+    scene.onBeforeParticlesRenderingObservable.observers.length + scene.onAfterParticlesRenderingObservable.observers.length;
+}
+
+function engineObserverCount(engine: Engine): number {
+  return engine.onBeginFrameObservable.observers.length + engine.onEndFrameObservable.observers.length +
+    engine.onResizeObservable.observers.length + engine.onContextLostObservable.observers.length +
+    engine.onContextRestoredObservable.observers.length + engine.onDisposeObservable.observers.length;
 }
