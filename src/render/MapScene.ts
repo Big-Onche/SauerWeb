@@ -20,10 +20,8 @@ import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
-import type { DepthRenderer } from "@babylonjs/core/Rendering/depthRenderer";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
 import { PostProcess } from "@babylonjs/core/PostProcesses/postProcess";
-import "@babylonjs/core/Rendering/depthRendererSceneComponent";
 import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import "@babylonjs/core/Shaders/postprocess.vertex";
@@ -190,8 +188,12 @@ export class MapScene {
   private waterLodCameraPosition = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
   private readonly volumeMaterials = new Map<string, Material>();
   private readonly waterMaterials = new Map<string, ShaderMaterial>();
-  private readonly waterDepthRenderers = new Map<Camera, DepthRenderer>();
   private waterRefractionTexture?: RenderTargetTexture;
+  private waterRefractionProjectedBounds?: ProjectedBounds;
+  private waterRefractionScissor?: PixelScissor;
+  private readonly waterRefractionRenderMeshes: AbstractMesh[] = [];
+  private readonly waterRefractionFrustumPlanes = Array.from({ length: 6 }, () => new Plane(0, 0, 0, 0));
+  private readonly waterRefractionProjectionScratch: ProjectedBounds = { minX: 0, minY: 0, maxX: 0, maxY: 0, minW: 0 };
   private waterNormalTexture?: Texture;
   private waterDistortionTexture?: Texture;
   private readonly waterReflections = new Map<number, WaterReflectionPlane>();
@@ -1000,10 +1002,12 @@ export class MapScene {
         uniform float hasReflection;
         uniform sampler2D normalSampler;
         uniform sampler2D distortionSampler;
-        uniform sampler2D depthSampler;
+        uniform sampler2D refractionDepthSampler;
         uniform sampler2D refractionSampler;
         uniform sampler2D reflectionSampler;
         uniform vec2 screenSize;
+        uniform vec2 cameraDepthRange;
+        uniform float hasRefractionDepth;
 
         void main(void) {
           vec3 viewDirection = normalize(cameraPosition - worldPosition);
@@ -1048,7 +1052,9 @@ export class MapScene {
           float blendAlpha = 1.0 - nativeSourceAlpha;
           #if WATER_QUALITY >= 1
             vec2 screenUv = gl_FragCoord.xy / screenSize;
-            float sceneDepth = abs(texture2D(depthSampler, screenUv).r);
+            float depthSample = hasRefractionDepth > 0.5 ? texture2D(refractionDepthSampler, screenUv).r : 1.0;
+            float sceneDepth = cameraDepthRange.x * cameraDepthRange.y /
+              max(cameraDepthRange.y - depthSample * (cameraDepthRange.y - cameraDepthRange.x), 0.0001);
             float depthBehindWater = sceneDepth - abs(cameraSpaceDepth);
             float shorelineFade = sceneDepth < 0.0001 ? 1.0 : smoothstep(0.0, 4.0, depthBehindWater);
             float horizontalSurface = smoothstep(0.5, 0.9, abs(worldNormal.y));
@@ -1070,8 +1076,8 @@ export class MapScene {
     }, {
       attributes: ["position", "normal", "uv", "waveData"],
       uniforms: ["world", "view", "worldViewProjection", "reflectionProjectiveMatrix", "cameraPosition", "waterColor", "waterfallColor",
-        "waterSpecular", "time", "waterFogEnd", "hasReflection", "screenSize"],
-      samplers: ["normalSampler", "distortionSampler", "depthSampler", "refractionSampler", "reflectionSampler"],
+        "waterSpecular", "time", "waterFogEnd", "hasReflection", "screenSize", "cameraDepthRange", "hasRefractionDepth"],
+      samplers: ["normalSampler", "distortionSampler", "refractionDepthSampler", "refractionSampler", "reflectionSampler"],
       needAlphaBlending: true,
     });
     material.backFaceCulling = false;
@@ -1099,8 +1105,10 @@ export class MapScene {
       material.setFloat("time", performance.now() / 1000);
       material.setFloat("waterFogEnd", Math.min(this.mapFog?.distance ?? Number.MAX_VALUE, Math.max(parameters.fogDistance * 4, 32)));
       material.setVector2("screenSize", new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()));
-      const depthRenderer = camera ? this.waterDepthRenderers.get(camera) : undefined;
-      if (depthRenderer) material.setTexture("depthSampler", depthRenderer.getDepthMap());
+      material.setVector2("cameraDepthRange", new Vector2(camera?.minZ ?? 0.1, camera?.maxZ ?? 1000));
+      const hasRefractionDepth = Boolean(this.waterRefractionTexture?.depthStencilTexture);
+      material.setFloat("hasRefractionDepth", hasRefractionDepth ? 1 : 0);
+      if (hasRefractionDepth) material.getEffect()?.setDepthStencilTexture("refractionDepthSampler", this.waterRefractionTexture ?? null);
       if (this.waterRefractionTexture) material.setTexture("refractionSampler", this.waterRefractionTexture);
       const reflectionActive = reflection !== undefined && this.activeWaterReflections.has(reflection);
       material.setFloat("hasReflection", reflectionActive ? 1 : 0);
@@ -1200,6 +1208,8 @@ export class MapScene {
     for (const reflection of this.waterReflections.values()) this.removeCustomRenderTarget(reflection.texture);
     if (this.waterRefractionTexture) this.removeCustomRenderTarget(this.waterRefractionTexture);
     this.activeWaterReflections.clear();
+    this.waterRefractionProjectedBounds = undefined;
+    this.waterRefractionScissor = undefined;
     if (this.waterQuality === 0) return;
     const camera = this.scene.activeCamera;
     if (!camera) return;
@@ -1208,7 +1218,6 @@ export class MapScene {
     camera.getWorldMatrix();
     const cameraPosition = camera.globalPosition;
     this.updateWaterLod(cameraPosition);
-    let anyWaterSurface = false;
     this.waterReflectionCandidates.length = 0;
     for (const reflection of this.waterReflections.values()) {
       let visible = false;
@@ -1216,7 +1225,6 @@ export class MapScene {
       reflection.distanceSquared = Number.POSITIVE_INFINITY;
       for (const mesh of reflection.meshes) {
         if (!mesh.isEnabled() || !mesh.isVisible) continue;
-        anyWaterSurface = true;
         const bounds = mesh.getBoundingInfo().boundingBox;
         const dx = Math.max(bounds.minimumWorld.x - cameraPosition.x, 0, cameraPosition.x - bounds.maximumWorld.x);
         const dy = Math.max(bounds.minimumWorld.y - cameraPosition.y, 0, cameraPosition.y - bounds.maximumWorld.y);
@@ -1236,6 +1244,9 @@ export class MapScene {
       reflection.projectedBounds = projectedBounds ? expandProjectedBounds(projectedBounds, reflectionPadding) : undefined;
       reflection.scissor = reflection.projectedBounds ? projectedBoundsToScissor(reflection.projectedBounds, reflection.texture.getRenderWidth(),
         reflection.texture.getRenderHeight()) : undefined;
+      if (reflection.projectedBounds) {
+        this.waterRefractionProjectedBounds = mergeProjectedBounds(this.waterRefractionProjectedBounds, reflection.projectedBounds);
+      }
       if (visible && cameraPosition.y >= reflection.height - 0.5) this.waterReflectionCandidates.push(reflection);
     }
     if (!this.waterReflectionCandidates.length) {
@@ -1272,7 +1283,11 @@ export class MapScene {
         this.scene.customRenderTargets.push(liveReflection.texture);
       }
     } else this.selectedWaterReflection = undefined;
-    if (anyWaterSurface && this.waterRefractionTexture) this.scene.customRenderTargets.push(this.waterRefractionTexture);
+    if (this.waterRefractionProjectedBounds && this.waterRefractionTexture) {
+      this.waterRefractionScissor = projectedBoundsToScissor(this.waterRefractionProjectedBounds,
+        this.waterRefractionTexture.getRenderWidth(), this.waterRefractionTexture.getRenderHeight());
+      this.scene.customRenderTargets.push(this.waterRefractionTexture);
+    }
   }
 
   private removeCustomRenderTarget(target: RenderTargetTexture): void {
@@ -1296,21 +1311,16 @@ export class MapScene {
       this.waterRefractionTexture.dispose();
       this.waterRefractionTexture = undefined;
     }
-    for (const camera of this.waterDepthRenderers.keys()) this.scene.disableDepthRenderer(camera);
-    this.waterDepthRenderers.clear();
+    this.waterRefractionProjectedBounds = undefined;
+    this.waterRefractionScissor = undefined;
   }
 
   private initializeWaterRenderTargets(): void {
-    [this.freeCamera, this.playerCamera].forEach((camera) => {
-      const renderer = this.scene.enableDepthRenderer(camera, false, true, Texture.NEAREST_SAMPLINGMODE, true);
-      renderer.useOnlyInActiveCamera = true;
-      renderer.getDepthMap().renderListPredicate = (mesh) => mesh.metadata?.isHudGun !== true;
-      this.waterDepthRenderers.set(camera, renderer);
-    });
     const refraction = new RenderTargetTexture("water-refraction", { ratio: this.waterQuality >= 3 ? 1 : 0.5 }, this.scene, {
       generateMipMaps: false, samplingMode: Texture.BILINEAR_SAMPLINGMODE, generateDepthBuffer: true, gammaSpace: false,
     });
-    refraction.renderListPredicate = (mesh) => this.isWaterRenderTargetMesh(mesh);
+    this.configureWaterRefractionDepthTexture(refraction);
+    refraction.onResizeObservable.add(() => this.configureWaterRefractionDepthTexture(refraction));
     refraction.renderParticles = false;
     refraction.ignoreCameraViewport = true;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
@@ -1328,6 +1338,7 @@ export class MapScene {
       this.scene.clearColor.copyFromFloats(...fog.color, 1);
     });
     refraction.onAfterRenderObservable.add(() => {
+      this.engine.disableScissor();
       this.mapCaustics?.popCausticBlend();
       if (!previousFog) return;
       this.scene.fogEnabled = previousFog.enabled;
@@ -1338,7 +1349,35 @@ export class MapScene {
       this.scene.clearColor.copyFrom(previousFog.clearColor);
       previousFog = undefined;
     });
+    refraction.onClearObservable.add(() => {
+      const scissor = this.waterRefractionScissor;
+      if (scissor) this.engine.enableScissor(scissor.x, scissor.y, scissor.width, scissor.height);
+      else this.engine.disableScissor();
+      this.engine.clear(refraction.clearColor ?? this.scene.clearColor, true, true, true);
+    });
+    refraction.getCustomRenderList = () => {
+      const transform = this.scene.getTransformMatrix();
+      Frustum.GetPlanesToRef(transform, this.waterRefractionFrustumPlanes);
+      this.waterRefractionRenderMeshes.length = 0;
+      for (const mesh of this.scene.meshes) {
+        if (!this.isWaterRenderTargetMesh(mesh) || !mesh.isInFrustum(this.waterRefractionFrustumPlanes)) continue;
+        if (!this.waterRefractionProjectedBounds || mesh.infiniteDistance) {
+          this.waterRefractionRenderMeshes.push(mesh);
+          continue;
+        }
+        const box = mesh.getBoundingInfo().boundingBox;
+        const projected = projectWorldBounds(box.minimumWorld, box.maximumWorld, transform, this.waterRefractionProjectionScratch);
+        if (projected && projectedBoundsIntersect(projected, this.waterRefractionProjectedBounds)) {
+          this.waterRefractionRenderMeshes.push(mesh);
+        }
+      }
+      return this.waterRefractionRenderMeshes;
+    };
     this.waterRefractionTexture = refraction;
+  }
+
+  private configureWaterRefractionDepthTexture(refraction: RenderTargetTexture): void {
+    refraction.createDepthStencilTexture(0, false, false, 1, Constants.TEXTUREFORMAT_DEPTH32_FLOAT, "water-refraction-depth");
   }
 
   private createRepeatingWaterTexture(path: string): Texture {
