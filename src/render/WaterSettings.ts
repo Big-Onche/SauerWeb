@@ -4,7 +4,7 @@ export const WATER_QUALITY_LABELS = ["low", "medium", "high", "ultra"] as const;
 const WATER_QUALITY_KEY = "sauerweb.water-quality";
 export const WATER_QUALITY_CHANGED = "sauerweb-water-quality-changed";
 
-export const WATER_REFLECTION_SIZES: Readonly<Record<WaterQuality, number>> = { 0: 0, 1: 128, 2: 192, 3: 256 };
+export const WATER_REFLECTION_SIZES: Readonly<Record<WaterQuality, number>> = { 0: 0, 1: 128, 2: 256, 3: 512 };
 
 export function loadWaterQuality(): WaterQuality {
   try {
