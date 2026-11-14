@@ -992,12 +992,13 @@ export class MapScene {
     [this.freeCamera, this.playerCamera].forEach((camera) => {
       const renderer = this.scene.enableDepthRenderer(camera, false, true, Texture.NEAREST_SAMPLINGMODE, true);
       renderer.useOnlyInActiveCamera = true;
+      renderer.getDepthMap().renderListPredicate = (mesh) => mesh.metadata?.isHudGun !== true;
       this.waterDepthRenderers.set(camera, renderer);
     });
     const refraction = new RenderTargetTexture("water-refraction", { ratio: this.waterQuality >= 3 ? 1 : 0.5 }, this.scene, {
       generateMipMaps: false, samplingMode: Texture.BILINEAR_SAMPLINGMODE, generateDepthBuffer: true, gammaSpace: false,
     });
-    refraction.renderListPredicate = (mesh) => mesh.metadata?.materialKind !== "water";
+    refraction.renderListPredicate = (mesh) => mesh.metadata?.materialKind !== "water" && mesh.metadata?.isHudGun !== true;
     refraction.renderParticles = false;
     refraction.ignoreCameraViewport = true;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;

@@ -205,6 +205,7 @@ export class WeaponRenderer {
     this.meshVertexBuffers.set(mesh, buffers);
     mesh.material = this.createHudMaterial(asset, selectHudSkin(asset.skins ?? [], source.name), `${gun}-${asset.name}-${source.name}`);
     mesh.parent = this.hudRoot;
+    mesh.metadata = { isHudGun: true };
     mesh.renderingGroupId = 3;
     mesh.isPickable = false;
     mesh.alwaysSelectAsActiveMesh = true;
