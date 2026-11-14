@@ -32,7 +32,7 @@ import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverri
   ResolvedTexture } from "../assets/types";
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "../engine/renderva";
-import { generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
+import { buildWaterLodIndices, generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
 import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
 import { toBabylonDirection, toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 import { resolveMapLighting } from "./MapLighting";
@@ -179,6 +179,8 @@ export class MapScene {
   private wireframe = false;
   private materialDebug = false;
   private readonly volumeMeshes: Mesh[] = [];
+  private readonly waterLodMeshes: Array<{ mesh: Mesh; batch: MaterialGeometryBatch; signature: string }> = [];
+  private waterLodCameraPosition = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
   private readonly volumeMaterials = new Map<string, Material>();
   private readonly waterMaterials = new Map<string, ShaderMaterial>();
   private readonly waterDepthRenderers = new Map<Camera, DepthRenderer>();
@@ -383,6 +385,8 @@ export class MapScene {
     this.mapModelResources?.dispose();
     this.mapModelResources = undefined;
     this.volumeMeshes.length = 0;
+    this.waterLodMeshes.length = 0;
+    this.waterLodCameraPosition.copyFromFloats(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     this.volumeMaterials.forEach((material) => material.dispose(true, true));
     this.volumeMaterials.clear();
     this.waterMaterials.clear();
@@ -851,6 +855,7 @@ export class MapScene {
     mesh.isPickable = false;
     mesh.alwaysSelectAsActiveMesh = true;
     mesh.freezeWorldMatrix();
+    if (batch.waterLod) this.waterLodMeshes.push({ mesh, batch, signature: "" });
     if (batch.reflectionHeight !== undefined) this.waterReflections.get(batch.reflectionHeight)?.meshes.add(mesh);
     return mesh;
   }
@@ -859,6 +864,8 @@ export class MapScene {
     if (!this.currentMap) return;
     this.volumeMeshes.forEach((mesh) => mesh.dispose());
     this.volumeMeshes.length = 0;
+    this.waterLodMeshes.length = 0;
+    this.waterLodCameraPosition.copyFromFloats(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     this.volumeMaterials.forEach((material) => material.dispose(true, true));
     this.volumeMaterials.clear();
     this.waterMaterials.clear();
@@ -1165,6 +1172,7 @@ export class MapScene {
     // explicitly instead of relying on an unrelated frustum query to update it as a side effect.
     camera.getWorldMatrix();
     const cameraPosition = camera.globalPosition;
+    this.updateWaterLod(cameraPosition);
     let anyWaterSurface = false;
     this.waterReflectionCandidates.length = 0;
     for (const reflection of this.waterReflections.values()) {
@@ -1415,6 +1423,19 @@ export class MapScene {
     this.scene.fogEnd = fog.distance;
     this.scene.fogColor = new Color3(...fog.color);
     this.scene.clearColor = new Color4(...fog.color, 1);
+  }
+
+  private updateWaterLod(cameraPosition: Vector3): void {
+    if (this.waterQuality < 3 || !this.waterLodMeshes.length ||
+        Vector3.DistanceSquared(cameraPosition, this.waterLodCameraPosition) < 64) return;
+    this.waterLodCameraPosition.copyFrom(cameraPosition);
+    const sauerCamera = { x: cameraPosition.x, y: cameraPosition.z, z: cameraPosition.y };
+    for (const entry of this.waterLodMeshes) {
+      const lod = buildWaterLodIndices(entry.batch, sauerCamera);
+      if (lod.signature === entry.signature) continue;
+      entry.mesh.setIndices(lod.indices, entry.batch.positions.length / 3, true);
+      entry.signature = lod.signature;
+    }
   }
 
   private updateUnderwaterEffects(camera: Camera, water: MapWaterMaterial | undefined, blend: number, time: number): void {

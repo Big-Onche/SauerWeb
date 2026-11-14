@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MaterialVolume, OctreeCube, SauerMap } from "../engine/octa";
 import { MAT_GLASS, MAT_LAVA, MAT_WATER } from "../engine/material";
-import { generateMaterialGeometry } from "./materialGeometry";
+import { buildWaterLodIndices, generateMaterialGeometry } from "./materialGeometry";
 
 describe("generateMaterialGeometry", () => {
   it("creates dedicated visible and debug-only handlers", () => {
@@ -136,6 +136,18 @@ describe("generateMaterialGeometry", () => {
     expect(ultra.faceCount).toBe(5);
     expect(ultra.indices).toHaveLength(48);
     expect(ultra.waveData).toHaveLength(ultra.positions.length / 3 * 2);
+  });
+
+  it("applies the native distance-based LOD bands to ultra water", () => {
+    const [ultra] = generateMaterialGeometry(mapWith([volume({ volume: "water", size: 64 })]), 3);
+    const near = buildWaterLodIndices(ultra, { x: 32, y: 32, z: 64 });
+    const middle = buildWaterLodIndices(ultra, { x: 32, y: 32, z: 160 });
+    const far = buildWaterLodIndices(ultra, { x: 32, y: 32, z: 512 });
+
+    expect(near.indices.length).toBe(ultra.indices.length);
+    expect(middle.indices.length).toBeLessThan(near.indices.length);
+    expect(far.indices.length).toBe(30);
+    expect(new Set([near.signature, middle.signature, far.signature])).toHaveLength(3);
   });
 
   it("applies the native inward bias to vertical water polygons", () => {
