@@ -1031,6 +1031,10 @@ export class MapScene {
           float waterDepth = 0.6;
           vec3 baseColor = mix(waterfallColor, waterColor, abs(worldNormal.y));
           vec3 color = baseColor * waterDepth * mix(0.6, 1.0, tintWeight);
+          #if WATER_QUALITY == 0
+            // Low has no reflected or refracted scene color. Keep its linear tint bright enough to survive the viewport contrast pass.
+            color = baseColor * mix(0.8, 1.0, tintWeight);
+          #endif
           #if WATER_QUALITY >= 1
             if (hasReflection > 0.5) {
               float reflectionW = max(abs(reflectionClipPosition.w), 0.0001);
@@ -1049,6 +1053,10 @@ export class MapScene {
           // Native Sauer uses glBlendFunc(GL_ONE, GL_SRC_ALPHA), producing color + background * sourceAlpha.
           // Express the same result through Babylon's standard source-alpha blend mode.
           float nativeSourceAlpha = facing * (1.0 - waterDepth);
+          #if WATER_QUALITY == 0
+            // Refraction normally supplies the scene beneath the surface. Low keeps a small direct background contribution instead.
+            nativeSourceAlpha = mix(0.2, 1.0 - waterDepth, facing);
+          #endif
           float blendAlpha = 1.0 - nativeSourceAlpha;
           #if WATER_QUALITY >= 1
             vec2 screenUv = gl_FragCoord.xy / screenSize;
