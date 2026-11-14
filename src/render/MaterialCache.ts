@@ -171,10 +171,12 @@ export class MaterialCache {
   private createBumpMaterial(descriptor: SauerMaterialDescriptor, index: number): ShaderMaterial {
     const fragmentSource = this.caustics
       ? SAUER_BUMP_FRAGMENT_SHADER.replace("precision highp float;", `precision highp float;\n${CAUSTIC_SHADER_DEFINITIONS}`)
-        .replace("color *= bakedLight;", "color *= bakedLight;\n    color *= mapCausticMultiplier(vWorldPosition);")
+        .replace("color *= bakedLight;", `color *= bakedLight;
+    vec2 waterEffects = mapWaterEffects(vWorldPosition);
+    color *= mapCausticMultiplier(vWorldPosition, waterEffects.y);`)
         .replace("gl_FragColor = vec4(mix(fogColor, color, fog), outputAlpha);",
           `vec3 airFogged = mix(fogColor, color, fog);
-    gl_FragColor = vec4(mapApplyWaterFog(color, airFogged, vWorldPosition, vFogDistance), outputAlpha);`)
+    gl_FragColor = vec4(mapApplyWaterFog(color, airFogged, waterEffects.x, vFogDistance), outputAlpha);`)
       : SAUER_BUMP_FRAGMENT_SHADER;
     const material = new ShaderMaterial(`map-bump-material-${index}`, this.scene, {
       vertexSource: SAUER_BUMP_VERTEX_SHADER,

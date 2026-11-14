@@ -49,44 +49,22 @@ float decodeCausticHeight(vec2 encoded) {
   return (bytes.x * 256.0 + bytes.y) * causticLookupInfo.w;
 }
 
-float causticWaterCell(vec2 cell, float height) {
-  if (any(lessThan(cell, vec2(0.0))) || any(greaterThanEqual(cell, vec2(causticLookupInfo.x)))) return 0.0;
+vec2 mapWaterEffects(vec3 worldPosition) {
+  if (causticFrameInfo.y <= 0.0 && waterFogColorBlend.a <= 0.0) return vec2(0.0);
+  // Bias exact cell edges consistently instead of sampling all four neighboring cells. Water volumes and world geometry share the same
+  // octree grid, so this retains stable shoreline classification with one lookup rather than four.
+  vec2 cell = floor((worldPosition.xz + vec2(0.01)) / causticLookupInfo.y);
+  if (any(lessThan(cell, vec2(0.0))) || any(greaterThanEqual(cell, vec2(causticLookupInfo.x)))) return vec2(0.0);
   vec2 lookupUv = (cell + vec2(0.5)) / causticLookupInfo.x;
   vec4 water = texture2D(waterLookupSampler, lookupUv);
   float bottom = decodeCausticHeight(water.rg);
   float top = decodeCausticHeight(water.ba);
-  return step(0.5, top) * step(bottom - 0.02, height) * step(height, top + 0.02);
+  float submerged = step(0.5, top) * step(bottom - 0.02, worldPosition.y) * step(worldPosition.y, top + 0.02);
+  return vec2(submerged, submerged * smoothstep(0.0, 4.0, top - worldPosition.y));
 }
 
-float causticWaterCellFade(vec2 cell, float height) {
-  if (any(lessThan(cell, vec2(0.0))) || any(greaterThanEqual(cell, vec2(causticLookupInfo.x)))) return 0.0;
-  vec2 lookupUv = (cell + vec2(0.5)) / causticLookupInfo.x;
-  vec4 water = texture2D(waterLookupSampler, lookupUv);
-  float bottom = decodeCausticHeight(water.rg);
-  float top = decodeCausticHeight(water.ba);
-  float submerged = step(0.5, top) * step(bottom - 0.02, height) * step(height, top + 0.02);
-  return submerged * smoothstep(0.0, 4.0, top - height);
-}
-
-float mapWaterSubmerged(vec3 worldPosition) {
-  // World faces commonly lie exactly on an octree water-cell edge. Sampling a small distance on all four sides keeps floating-point
-  // interpolation from alternating between the wet and dry texels and producing an acne-like seam on vertical polygons.
-  vec2 lookupPosition = worldPosition.xz / causticLookupInfo.y;
-  vec2 seam = vec2(0.01 / causticLookupInfo.y);
-  float submerged = causticWaterCell(floor(lookupPosition + vec2(seam.x, seam.y)), worldPosition.y);
-  submerged = max(submerged, causticWaterCell(floor(lookupPosition + vec2(seam.x, -seam.y)), worldPosition.y));
-  submerged = max(submerged, causticWaterCell(floor(lookupPosition + vec2(-seam.x, seam.y)), worldPosition.y));
-  submerged = max(submerged, causticWaterCell(floor(lookupPosition - vec2(seam.x, seam.y)), worldPosition.y));
-  return submerged;
-}
-
-float mapCausticMultiplier(vec3 worldPosition) {
-  vec2 lookupPosition = worldPosition.xz / causticLookupInfo.y;
-  vec2 seam = vec2(0.01 / causticLookupInfo.y);
-  float submerged = causticWaterCellFade(floor(lookupPosition + vec2(seam.x, seam.y)), worldPosition.y);
-  submerged = max(submerged, causticWaterCellFade(floor(lookupPosition + vec2(seam.x, -seam.y)), worldPosition.y));
-  submerged = max(submerged, causticWaterCellFade(floor(lookupPosition + vec2(-seam.x, seam.y)), worldPosition.y));
-  submerged = max(submerged, causticWaterCellFade(floor(lookupPosition - vec2(seam.x, seam.y)), worldPosition.y));
+float mapCausticMultiplier(vec3 worldPosition, float submerged) {
+  if (causticFrameInfo.y <= 0.0 || submerged <= 0.0) return 1.0;
   vec2 causticUv = vec2(worldPosition.x * 0.011 + worldPosition.y * 0.0066,
     worldPosition.z * 0.011 + worldPosition.y * 0.0066) * causticLookupInfo.z;
   float first = texture2D(firstCausticSampler, causticUv).r;
@@ -97,12 +75,15 @@ float mapCausticMultiplier(vec3 worldPosition) {
   return mix(1.0, pattern, causticFrameInfo.y * submerged);
 }
 
-vec3 mapApplyWaterFog(vec3 unfogged, vec3 airFogged, vec3 worldPosition, float fogDistance) {
+vec3 mapApplyWaterFog(vec3 unfogged, vec3 airFogged, float submerged, float fogDistance) {
+  if (waterFogColorBlend.a <= 0.0 || submerged <= 0.0) return airFogged;
   float range = max(waterFogRange.y - waterFogRange.x, 0.0001);
   float fog = clamp((waterFogRange.y - fogDistance) / range, 0.0, 1.0);
   vec3 waterFogged = mix(waterFogColorBlend.rgb, unfogged, fog);
-  return mix(airFogged, waterFogged, mapWaterSubmerged(worldPosition) * waterFogColorBlend.a);
+  return mix(airFogged, waterFogged, submerged * waterFogColorBlend.a);
 }
+
+vec2 mapWaterEffectsValue;
 `;
 
 export class MapCausticResources {
@@ -112,6 +93,8 @@ export class MapCausticResources {
   private waterFogStart = 0;
   private waterFogEnd = 1;
   private waterFogBlend = 0;
+  private causticBlend = 0;
+  private readonly causticBlendOverrides: number[] = [];
 
   constructor(scene: Scene, readonly parameters: MapCaustics, readonly lookupData: WaterLookupData) {
     this.lookup = RawTexture.CreateRGBATexture(lookupData.data, lookupData.resolution, lookupData.resolution, scene, false, false,
@@ -132,13 +115,18 @@ export class MapCausticResources {
   }
 
   bind(effect: Effect): void {
-    const frame = causticFrame(performance.now(), this.parameters.frameMilliseconds);
-    effect.setTexture("waterLookupSampler", this.lookup);
-    effect.setTexture("firstCausticSampler", this.frames[frame.first]);
-    effect.setTexture("secondCausticSampler", this.frames[frame.second]);
+    const causticBlend = this.causticBlendOverrides.at(-1) ?? this.causticBlend;
+    const causticIntensity = this.parameters.contrast * causticBlend;
+    const frame = causticIntensity > 0 ? causticFrame(performance.now(), this.parameters.frameMilliseconds)
+      : { first: 0, second: 1, fraction: 0 };
+    if (causticIntensity > 0 || this.waterFogBlend > 0) effect.setTexture("waterLookupSampler", this.lookup);
+    if (causticIntensity > 0) {
+      effect.setTexture("firstCausticSampler", this.frames[frame.first]);
+      effect.setTexture("secondCausticSampler", this.frames[frame.second]);
+    }
     effect.setFloat4("causticLookupInfo", this.lookupData.resolution, this.lookupData.cellSize, 100 / this.parameters.scale,
       this.lookupData.heightScale);
-    effect.setFloat4("causticFrameInfo", frame.fraction, this.parameters.contrast, 0, 0);
+    effect.setFloat4("causticFrameInfo", frame.fraction, causticIntensity, 0, 0);
     effect.setFloat4("waterFogColorBlend", ...this.waterFogColor, this.waterFogBlend);
     effect.setFloat2("waterFogRange", this.waterFogStart, this.waterFogEnd);
   }
@@ -148,6 +136,18 @@ export class MapCausticResources {
     this.waterFogStart = start;
     this.waterFogEnd = end;
     this.waterFogBlend = blend;
+  }
+
+  setCausticBlend(blend: number): void {
+    this.causticBlend = Math.max(0, Math.min(1, blend));
+  }
+
+  pushCausticBlend(blend: number): void {
+    this.causticBlendOverrides.push(Math.max(0, Math.min(1, blend)));
+  }
+
+  popCausticBlend(): void {
+    this.causticBlendOverrides.pop();
   }
 
   dispose(): void {
@@ -178,11 +178,14 @@ export class StandardMaterialCaustics extends MaterialPluginBase {
     if (shaderType !== "fragment") return null;
     return {
       CUSTOM_FRAGMENT_DEFINITIONS: CAUSTIC_SHADER_DEFINITIONS,
-      CUSTOM_FRAGMENT_UPDATE_DIFFUSE: "baseColor.rgb *= mapCausticMultiplier(vPositionW);",
+      CUSTOM_FRAGMENT_UPDATE_DIFFUSE: `
+        mapWaterEffectsValue = mapWaterEffects(vPositionW);
+        baseColor.rgb *= mapCausticMultiplier(vPositionW, mapWaterEffectsValue.y);
+      `,
       CUSTOM_FRAGMENT_BEFORE_FOG: "vec3 mapUnfoggedColor = color.rgb;",
       CUSTOM_FRAGMENT_BEFORE_FRAGCOLOR: `
         #ifdef FOG
-          color.rgb = mapApplyWaterFog(mapUnfoggedColor, color.rgb, vPositionW, abs(vFogDistance.z));
+          color.rgb = mapApplyWaterFog(mapUnfoggedColor, color.rgb, mapWaterEffectsValue.x, abs(vFogDistance.z));
         #endif
       `,
     };

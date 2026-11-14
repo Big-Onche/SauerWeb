@@ -1112,6 +1112,7 @@ export class MapScene {
     let reflection!: WaterReflectionPlane;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
     texture.onBeforeRenderObservable.add(() => {
+      this.mapCaustics?.pushCausticBlend(0);
       const fog = this.mapFog;
       if (!fog) return;
       previousFog = { enabled: this.scene.fogEnabled, mode: this.scene.fogMode, start: this.scene.fogStart, end: this.scene.fogEnd,
@@ -1125,6 +1126,7 @@ export class MapScene {
       texture.clearColor.copyFrom(this.scene.clearColor);
     });
     texture.onAfterRenderObservable.add(() => {
+      this.mapCaustics?.popCausticBlend();
       if (previousFog) {
         this.scene.fogEnabled = previousFog.enabled;
         this.scene.fogMode = previousFog.mode;
@@ -1267,6 +1269,7 @@ export class MapScene {
     refraction.ignoreCameraViewport = true;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
     refraction.onBeforeRenderObservable.add(() => {
+      this.mapCaustics?.pushCausticBlend(1);
       const fog = this.mapFog;
       if (!fog) return;
       previousFog = { enabled: this.scene.fogEnabled, mode: this.scene.fogMode, start: this.scene.fogStart, end: this.scene.fogEnd,
@@ -1279,6 +1282,7 @@ export class MapScene {
       this.scene.clearColor.copyFromFloats(...fog.color, 1);
     });
     refraction.onAfterRenderObservable.add(() => {
+      this.mapCaustics?.popCausticBlend();
       if (!previousFog) return;
       this.scene.fogEnabled = previousFog.enabled;
       this.scene.fogMode = previousFog.mode;
@@ -1388,6 +1392,7 @@ export class MapScene {
       const logBlend = water ? Math.log(1 + 255 * waterBlend) / Math.log(256) : 0;
       const waterFogEnd = water ? Math.min(fog.distance, Math.max(water.fogDistance * 4, 32)) : 1;
       this.mapCaustics.setWaterFog(water?.color ?? [0, 0, 0], 0, waterFogEnd, logBlend);
+      this.mapCaustics.setCausticBlend(waterBlend);
       if (waterIndex === this.fogWaterIndex && Math.abs(waterBlend - this.fogWaterBlend) < 1e-3) return;
       this.fogWaterIndex = waterIndex;
       this.fogWaterBlend = waterBlend;

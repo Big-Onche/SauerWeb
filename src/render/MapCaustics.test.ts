@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SauerMap } from "../engine/octa";
-import { buildWaterLookupData, causticFrame, resolveMapCaustics, shouldUseCaustics } from "./MapCaustics";
+import { buildWaterLookupData, CAUSTIC_SHADER_DEFINITIONS, causticFrame, resolveMapCaustics, shouldUseCaustics } from "./MapCaustics";
 import { WATER_OFFSET } from "./MapWater";
 
 describe("map caustics", () => {
@@ -39,6 +39,12 @@ describe("map caustics", () => {
     expect(decodeLookup(lookup!, 0)[1]).toBeCloseTo(8 - WATER_OFFSET, 3);
     expect(decodeLookup(lookup!, 0)[1]).toBeLessThan(8);
     expect(decodeLookup(lookup!, 1)).toEqual([0, 0]);
+  });
+
+  it("uses one gated water lookup shared by caustics and underwater fog", () => {
+    expect(CAUSTIC_SHADER_DEFINITIONS.match(/texture2D\(waterLookupSampler/g)).toHaveLength(1);
+    expect(CAUSTIC_SHADER_DEFINITIONS).toContain("causticFrameInfo.y <= 0.0 && waterFogColorBlend.a <= 0.0");
+    expect(CAUSTIC_SHADER_DEFINITIONS).toContain("causticFrameInfo.y <= 0.0 || submerged <= 0.0");
   });
 });
 
