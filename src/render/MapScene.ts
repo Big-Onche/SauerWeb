@@ -37,7 +37,8 @@ import { resolveMapLighting } from "./MapLighting";
 import { animateEntityModels, loadMapModels, type EntityModelAnimation, type MapModelResources } from "./MapModelLoader";
 import { resolveMapSky, skyFaceCandidates, skyTextureRotationRadians, type MapSky } from "./MapSky";
 import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
-import { animatedWaterSurfaceHeight, resolveMapWater, underwaterFogBlend, type MapWaterMaterial } from "./MapWater";
+import { animatedWaterSurfaceHeight, resolveMapWater, underwaterFogBlend, underwaterOverlay, underwaterViewport,
+  type MapWaterMaterial } from "./MapWater";
 import { loadWaterQuality, waterReflectionSize, WATER_QUALITY_CHANGED, type WaterQuality } from "./WaterSettings";
 import { createMapCausticResources, shouldUseCaustics, StandardMaterialCaustics, type MapCausticResources } from "./MapCaustics";
 import { installSauerFogDistance } from "./SauerFogShader";
@@ -190,6 +191,8 @@ export class MapScene {
   private waterQuality: WaterQuality = loadWaterQuality();
   private fogWaterIndex = -2;
   private fogWaterBlend = -1;
+  private underwaterColor: [number, number, number] = [1, 1, 1];
+  private underwaterProjectionCamera?: Camera;
   private entityDebug = false;
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
@@ -1333,9 +1336,8 @@ export class MapScene {
   }
 
   private updateCameraFog(time: number): void {
-    const fog = this.mapFog;
     const camera = this.scene.activeCamera;
-    if (!fog || !camera) return;
+    if (!camera) return;
     const position = camera.globalPosition;
     const sauerPosition = { x: position.x, y: position.z, z: position.y };
     const waterVolume = this.waterVolumeAtCamera(sauerPosition);
@@ -1344,6 +1346,9 @@ export class MapScene {
     const waterBlend = waterVolume ? underwaterFogBlend(surfaceHeight, sauerPosition.z) : 0;
     const waterIndex = waterVolume && waterBlend > 0 ? waterVolume.material & MATF_INDEX : -1;
     const water = waterIndex >= 0 ? this.waterParameters[waterIndex] ?? this.waterParameters[0] : undefined;
+    this.updateUnderwaterEffects(camera, water, waterBlend, time);
+    const fog = this.mapFog;
+    if (!fog) return;
     if (this.mapCaustics) {
       const logBlend = water ? Math.log(1 + 255 * waterBlend) / Math.log(256) : 0;
       const waterFogEnd = water ? Math.min(fog.distance, Math.max(water.fogDistance * 4, 32)) : 1;
@@ -1383,6 +1388,24 @@ export class MapScene {
     this.scene.fogEnd = fog.distance;
     this.scene.fogColor = new Color3(...fog.color);
     this.scene.clearColor = new Color4(...fog.color, 1);
+  }
+
+  private updateUnderwaterEffects(camera: Camera, water: MapWaterMaterial | undefined, blend: number, time: number): void {
+    this.underwaterColor = water ? underwaterOverlay(water.color, blend) : [1, 1, 1];
+    if (!water || blend <= 0) {
+      this.underwaterProjectionCamera?.unfreezeProjectionMatrix();
+      this.underwaterProjectionCamera = undefined;
+      return;
+    }
+    if (this.underwaterProjectionCamera && this.underwaterProjectionCamera !== camera) {
+      this.underwaterProjectionCamera.unfreezeProjectionMatrix();
+    }
+    const viewport = underwaterViewport(camera.fov, this.engine.getAspectRatio(camera), time, blend);
+    const reverseDepth = this.engine.useReverseDepthBuffer;
+    const projection = Matrix.PerspectiveFovRH(viewport.fov, viewport.aspect, reverseDepth ? camera.maxZ : camera.minZ,
+      reverseDepth ? camera.minZ : camera.maxZ, this.engine.isNDCHalfZRange, camera.projectionPlaneTilt, reverseDepth);
+    camera.freezeProjectionMatrix(projection);
+    this.underwaterProjectionCamera = camera;
   }
 
   private waterVolumeAtCamera(position: RegisteredMapEntity["position"]): { material: number; surfaceZ: number; size: number } | undefined {
@@ -1491,6 +1514,7 @@ export class MapScene {
       uniform float contrast;
       uniform float gamma;
       uniform float vibrance;
+      uniform vec3 underwaterColor;
 
       void main(void) {
         vec4 source = texture2D(textureSampler, vUV);
@@ -1500,14 +1524,16 @@ export class MapScene {
         float chroma = max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b));
         float saturation = 1.0 + (vibrance - 1.0) * (1.0 - clamp(chroma, 0.0, 1.0));
         color = mix(vec3(luminance), color, saturation);
-        gl_FragColor = vec4(clamp(color, 0.0, 1.0), source.a);
+        gl_FragColor = vec4(clamp(color, 0.0, 1.0) * underwaterColor, source.a);
       }
     `;
-    const postProcess = new PostProcess("viewport-tuning", "viewportTuning", ["contrast", "gamma", "vibrance"], null, 1, camera);
+    const postProcess = new PostProcess("viewport-tuning", "viewportTuning", ["contrast", "gamma", "vibrance", "underwaterColor"],
+      null, 1, camera);
     postProcess.onApply = (effect) => {
       effect.setFloat("contrast", this.viewportTuning.contrast);
       effect.setFloat("gamma", this.viewportTuning.gamma);
       effect.setFloat("vibrance", this.viewportTuning.vibrance);
+      effect.setFloat3("underwaterColor", ...this.underwaterColor);
     };
   }
 

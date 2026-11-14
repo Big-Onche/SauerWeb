@@ -9,6 +9,11 @@ export interface MapWaterMaterial {
   waterfallColor: [number, number, number];
 }
 
+export interface UnderwaterViewport {
+  fov: number;
+  aspect: number;
+}
+
 const DEFAULT_WATER_COLOR = 0x144650;
 const DEFAULT_WATER_FOG = 150;
 const DEFAULT_WATER_SPECULAR = 150;
@@ -50,6 +55,19 @@ export function underwaterFogBlend(surfaceHeight: number, cameraHeight: number):
   return clamp(surfaceHeight - cameraHeight, 0, 1);
 }
 
+export function underwaterViewport(baseFov: number, baseAspect: number, time: number, blend: number): UnderwaterViewport {
+  const wave = Math.sin(time) * clamp(blend, 0, 1);
+  return { fov: baseFov + wave * 2 * Math.PI / 180, aspect: baseAspect - wave * 0.1 };
+}
+
+export function underwaterOverlay(color: MapWaterMaterial["color"], blend: number): [number, number, number] {
+  const srgb = color.map(linearToSrgb);
+  const maximum = Math.max(...srgb) * 255;
+  const divisor = Math.min(32 + maximum * 7 / 8, 255) / 255;
+  const amount = clamp(blend, 0, 1);
+  return srgb.map((component) => 1 + (Math.max(component / divisor, 0.4) - 1) * amount) as [number, number, number];
+}
+
 function resetDefaultColor(value: number): number {
   return value === 0 ? DEFAULT_WATER_COLOR : value;
 }
@@ -60,6 +78,10 @@ function normalizedColor(value: number): [number, number, number] {
 
 function srgbToLinear(component: number): number {
   return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+}
+
+function linearToSrgb(component: number): number {
+  return component <= 0.0031308 ? component * 12.92 : 1.055 * component ** (1 / 2.4) - 0.055;
 }
 
 function numericVariable(map: SauerMap, name: string): number | undefined {

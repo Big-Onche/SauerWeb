@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SauerMap } from "../engine/octa";
-import { animatedWaterSurfaceHeight, resolveMapWater, underwaterFogBlend, WATER_AMPLITUDE, WATER_OFFSET } from "./MapWater";
+import { animatedWaterSurfaceHeight, resolveMapWater, underwaterFogBlend, underwaterOverlay, underwaterViewport, WATER_AMPLITUDE,
+  WATER_OFFSET } from "./MapWater";
 
 describe("resolveMapWater", () => {
   it("uses native defaults and indexed OGZ variables", () => {
@@ -41,6 +42,28 @@ describe("resolveMapWater", () => {
       expect(surface).toBeGreaterThanOrEqual(materialTop - WATER_OFFSET - WATER_AMPLITUDE);
       expect(surface).toBeLessThanOrEqual(materialTop - WATER_OFFSET + WATER_AMPLITUDE);
     }
+  });
+
+  it("reproduces the native underwater projection oscillation", () => {
+    const baseFov = 70 * Math.PI / 180;
+    expect(underwaterViewport(baseFov, 16 / 9, 0, 1)).toEqual({ fov: baseFov, aspect: 16 / 9 });
+    expect(underwaterViewport(baseFov, 16 / 9, Math.PI / 2, 1)).toEqual({
+      fov: baseFov + 2 * Math.PI / 180,
+      aspect: 16 / 9 - 0.1,
+    });
+    expect(underwaterViewport(baseFov, 16 / 9, Math.PI / 2, 0.25)).toEqual({
+      fov: baseFov + 0.5 * Math.PI / 180,
+      aspect: 16 / 9 - 0.025,
+    });
+  });
+
+  it("builds the native multiplicative water-color overlay", () => {
+    const color = [linearByte(20), linearByte(70), linearByte(80)] as [number, number, number];
+    expect(underwaterOverlay(color, 0)).toEqual([1, 1, 1]);
+    const overlay = underwaterOverlay(color, 1);
+    expect(overlay[0]).toBeCloseTo(0.4);
+    expect(overlay[1]).toBeCloseTo(70 / 102);
+    expect(overlay[2]).toBeCloseTo(80 / 102);
   });
 });
 
