@@ -116,6 +116,17 @@ describe("generateMaterialGeometry", () => {
     expect(batches.map((batch) => batch.materialIndex)).toEqual([0, 1]);
   });
 
+  it("shares planar reflections only between water surfaces at the same elevation", () => {
+    const batches = generateMaterialGeometry(mapWith([
+      volume({ volume: "water", origin: { x: 0, y: 0, z: 0 }, size: 8 }),
+      volume({ volume: "water", origin: { x: 16, y: 0, z: 0 }, size: 8 }),
+      volume({ volume: "water", origin: { x: 32, y: 0, z: 8 }, size: 8 }),
+    ]));
+    const water = batches.filter((batch) => batch.kind === "water");
+    expect(water).toHaveLength(2);
+    expect(water.map((batch) => batch.reflectionHeight).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([6.9, 14.9]);
+  });
+
   it("tessellates high-quality water tops for vertex waves without changing logical face counts", () => {
     const [low] = generateMaterialGeometry(mapWith([volume({ volume: "water" })]), 0);
     const [ultra] = generateMaterialGeometry(mapWith([volume({ volume: "water" })]), 3);

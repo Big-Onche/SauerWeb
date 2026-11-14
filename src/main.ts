@@ -329,7 +329,7 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
   if (tab === "gfx") return optionGroup("graphics", [
     optionInfo("renderer", "WebGL"), optionSlider("water quality", "water-quality", loadWaterQuality(), 0, 3,
       waterQualityLabel(loadWaterQuality())), optionInfo("dynamic lights", "enabled"),
-    optionNote("Low and medium favor frame rate. High adds sky reflection; ultra improves the animated wave detail."),
+    optionNote("Low disables planar reflections. Medium, high and ultra use progressively sharper real-time water reflections."),
   ]);
   if (tab === "display") return optionGroup("display", [
     `<button class="option-action" type="button" data-action="fullscreen"><span><strong>fullscreen</strong><small>Toggle browser fullscreen mode</small></span><b>toggle</b></button>`,

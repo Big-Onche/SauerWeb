@@ -1,6 +1,7 @@
 import type { MaterialVolume, SauerMap } from "../engine/octa";
 import { worldFaceOccluder } from "../engine/renderva";
 import { cubeSolidFaceMask, materialVolumeType } from "../engine/material";
+import { WATER_OFFSET } from "./MapWater";
 
 export type MaterialRenderKind = "water" | "lava" | "glass" | "clip" | "noclip" | "gameclip" | "death" | "alpha";
 
@@ -15,6 +16,8 @@ export interface MaterialGeometryBatch {
   waveData: number[];
   faceCount: number;
   materialIndex: number;
+  /** Babylon-space Y coordinate of the planar reflection shared by this water batch. */
+  reflectionHeight?: number;
 }
 
 const FACE_CORNERS: Array<Array<[number, number, number]>> = [
@@ -63,11 +66,12 @@ export function generateMaterialGeometry(map: SauerMap, waterQuality = 0, includ
 function appendVolume(batches: Map<string, MaterialGeometryBatch>, volume: MaterialVolume, kind: MaterialRenderKind,
                       debugOnly: boolean, waterQuality = 0, map?: SauerMap, coveredFaceMask = 0): void {
   const materialIndex = kind === "water" || kind === "lava" ? volume.volumeIndex : 0;
-  const key = `${kind}:${materialIndex}`;
+  const reflectionHeight = kind === "water" ? volume.origin.z + volume.size - WATER_OFFSET : undefined;
+  const key = `${kind}:${materialIndex}${reflectionHeight === undefined ? "" : `:${reflectionHeight}`}`;
   let batch = batches.get(key);
   if (!batch) {
     batch = { name: `material-volume-${kind}-${materialIndex}`, kind, debugOnly, positions: [], indices: [], colors: [], uvs: [],
-      waveData: [], faceCount: 0, materialIndex };
+      waveData: [], faceCount: 0, materialIndex, reflectionHeight };
     batches.set(key, batch);
   }
   for (let orientation = 0; orientation < FACE_CORNERS.length; orientation++) {
