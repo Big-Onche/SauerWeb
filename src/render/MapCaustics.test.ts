@@ -38,7 +38,7 @@ describe("map caustics", () => {
     expect(decodeLookup(lookup!, 0)[0]).toBe(0);
     expect(decodeLookup(lookup!, 0)[1]).toBeCloseTo(8 - WATER_OFFSET, 3);
     expect(decodeLookup(lookup!, 0)[1]).toBeLessThan(8);
-    expect(decodeLookup(lookup!.data, 1)).toEqual([0, 0]);
+    expect(decodeLookup(lookup!, 1)).toEqual([0, 0]);
   });
 });
 

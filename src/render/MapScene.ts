@@ -1,9 +1,10 @@
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Vector2, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { Constants } from "@babylonjs/core/Engines/constants";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
+import { RenderTargetTexture } from "@babylonjs/core/Materials/Textures/renderTargetTexture";
 import { Material } from "@babylonjs/core/Materials/material";
 import { CubeTexture } from "@babylonjs/core/Materials/Textures/cubeTexture";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
@@ -13,8 +14,10 @@ import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
+import type { DepthRenderer } from "@babylonjs/core/Rendering/depthRenderer";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
 import { PostProcess } from "@babylonjs/core/PostProcesses/postProcess";
+import "@babylonjs/core/Rendering/depthRendererSceneComponent";
 import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import "@babylonjs/core/Shaders/postprocess.vertex";
@@ -158,6 +161,8 @@ export class MapScene {
   private readonly volumeMeshes: Mesh[] = [];
   private readonly volumeMaterials = new Map<string, Material>();
   private readonly waterMaterials = new Map<number, ShaderMaterial>();
+  private readonly waterDepthRenderers = new Map<Camera, DepthRenderer>();
+  private waterRefractionTexture?: RenderTargetTexture;
   private waterNormalTexture?: Texture;
   private waterDistortionTexture?: Texture;
   private waterReflectionTexture?: CubeTexture;
@@ -213,6 +218,7 @@ export class MapScene {
     this.createViewportTuningPostProcess(this.playerCamera);
     this.cameraMode = runtimeMode === "debug" ? "free" : "player";
     this.scene.activeCamera = runtimeMode === "debug" ? this.freeCamera : this.playerCamera;
+    if (this.waterQuality >= 1) this.initializeWaterRenderTargets();
     this.physicsInput = new BrowserPhysicsInput(canvas);
     this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
     const viewport = canvas.parentElement;
@@ -816,7 +822,7 @@ export class MapScene {
   }
 
   // Original: src/engine/water.cpp and data/glsl.cfg water shaders. The WebGL port keeps the native two scrolling normal fields,
-  // Fresnel blend, map-controlled tint/specularity, and cheap environment reflection without adding a second world render pass.
+  // Fresnel blend, map-controlled tint/specularity, depth-faded shoreline, and cheap environment reflection.
   private createWaterMaterial(materialIndex: number): ShaderMaterial {
     const quality = this.waterQuality;
     const parameters = this.waterParameters[materialIndex] ?? this.waterParameters[0];
@@ -829,11 +835,13 @@ export class MapScene {
         attribute vec2 uv;
         attribute vec2 waveData;
         uniform mat4 world;
+        uniform mat4 view;
         uniform mat4 worldViewProjection;
         uniform float time;
         varying vec3 worldPosition;
         varying vec3 worldNormal;
         varying vec2 surfaceUv;
+        varying float cameraSpaceDepth;
 
         void main(void) {
           vec3 animatedPosition = position;
@@ -851,6 +859,7 @@ export class MapScene {
           worldPosition = worldVertex.xyz;
           worldNormal = normalize(mat3(world) * normal);
           surfaceUv = uv;
+          cameraSpaceDepth = (view * worldVertex).z;
           gl_Position = worldViewProjection * vec4(animatedPosition, 1.0);
         }
       `,
@@ -860,6 +869,7 @@ export class MapScene {
         varying vec3 worldPosition;
         varying vec3 worldNormal;
         varying vec2 surfaceUv;
+        varying float cameraSpaceDepth;
         uniform vec3 cameraPosition;
         uniform vec3 waterColor;
         uniform vec3 waterfallColor;
@@ -868,7 +878,10 @@ export class MapScene {
         uniform float hasReflection;
         uniform sampler2D normalSampler;
         uniform sampler2D distortionSampler;
+        uniform sampler2D depthSampler;
+        uniform sampler2D refractionSampler;
         uniform samplerCube reflectionSampler;
+        uniform vec2 screenSize;
 
         void main(void) {
           vec3 viewDirection = normalize(cameraPosition - worldPosition);
@@ -907,13 +920,24 @@ export class MapScene {
           // Express the same result through Babylon's standard source-alpha blend mode.
           float nativeSourceAlpha = facing * (1.0 - waterDepth);
           float blendAlpha = 1.0 - nativeSourceAlpha;
+          #if WATER_QUALITY >= 1
+            vec2 screenUv = gl_FragCoord.xy / screenSize;
+            float sceneDepth = abs(texture2D(depthSampler, screenUv).r);
+            float depthBehindWater = sceneDepth - abs(cameraSpaceDepth);
+            float shorelineFade = sceneDepth < 0.0001 ? 1.0 : smoothstep(0.0, 4.0, depthBehindWater);
+            float horizontalSurface = smoothstep(0.5, 0.9, abs(worldNormal.y));
+            shorelineFade = mix(1.0, shorelineFade, horizontalSurface);
+            vec3 sceneColor = texture2D(refractionSampler, screenUv).rgb;
+            color = mix(sceneColor * blendAlpha, color, shorelineFade);
+          #endif
           gl_FragColor = vec4(color / blendAlpha, blendAlpha);
         }
       `,
     }, {
       attributes: ["position", "normal", "uv", "waveData"],
-      uniforms: ["world", "worldViewProjection", "cameraPosition", "waterColor", "waterfallColor", "waterSpecular", "time", "hasReflection"],
-      samplers: ["normalSampler", "distortionSampler", "reflectionSampler"],
+      uniforms: ["world", "view", "worldViewProjection", "cameraPosition", "waterColor", "waterfallColor", "waterSpecular", "time",
+        "hasReflection", "screenSize"],
+      samplers: ["normalSampler", "distortionSampler", "depthSampler", "refractionSampler", "reflectionSampler"],
       needAlphaBlending: true,
     });
     material.backFaceCulling = false;
@@ -935,11 +959,32 @@ export class MapScene {
       material.setFloat("hasReflection", 1);
     }
     material.onBind = () => {
-      material.setVector3("cameraPosition", this.scene.activeCamera?.globalPosition ?? Vector3.Zero());
+      const camera = this.scene.activeCamera;
+      material.setVector3("cameraPosition", camera?.globalPosition ?? Vector3.Zero());
       material.setFloat("time", performance.now() / 1000);
+      material.setVector2("screenSize", new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()));
+      const depthRenderer = camera ? this.waterDepthRenderers.get(camera) : undefined;
+      if (depthRenderer) material.setTexture("depthSampler", depthRenderer.getDepthMap());
+      if (this.waterRefractionTexture) material.setTexture("refractionSampler", this.waterRefractionTexture);
     };
     this.waterMaterials.set(materialIndex, material);
     return material;
+  }
+
+  private initializeWaterRenderTargets(): void {
+    [this.freeCamera, this.playerCamera].forEach((camera) => {
+      const renderer = this.scene.enableDepthRenderer(camera, false, true, Texture.NEAREST_SAMPLINGMODE, true);
+      renderer.useOnlyInActiveCamera = true;
+      this.waterDepthRenderers.set(camera, renderer);
+    });
+    const refraction = new RenderTargetTexture("water-refraction", { ratio: this.waterQuality >= 3 ? 1 : 0.5 }, this.scene, {
+      generateMipMaps: false, samplingMode: Texture.BILINEAR_SAMPLINGMODE, generateDepthBuffer: true, gammaSpace: false,
+    });
+    refraction.renderListPredicate = (mesh) => mesh.metadata?.materialKind !== "water";
+    refraction.renderParticles = false;
+    refraction.ignoreCameraViewport = true;
+    this.scene.customRenderTargets.push(refraction);
+    this.waterRefractionTexture = refraction;
   }
 
   private createRepeatingWaterTexture(path: string): Texture {
