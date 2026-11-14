@@ -881,6 +881,7 @@ export class MapScene {
         uniform vec3 waterColor;
         uniform vec3 waterfallColor;
         uniform float waterSpecular;
+        uniform float waterFogEnd;
         uniform float time;
         uniform float hasReflection;
         uniform sampler2D normalSampler;
@@ -940,6 +941,9 @@ export class MapScene {
             float underwaterView = step(cameraPosition.y, worldPosition.y) * horizontalSurface;
             vec2 refractedUv = clamp(screenUv + distortion * 0.007, vec2(0.001), vec2(0.999));
             vec3 refractedColor = texture2D(refractionSampler, refractedUv).rgb;
+            float distanceToSurface = length(cameraPosition - worldPosition);
+            float waterFog = clamp((waterFogEnd - distanceToSurface) / max(waterFogEnd, 0.0001), 0.0, 1.0);
+            refractedColor = mix(waterColor, refractedColor, waterFog);
             color = mix(color, refractedColor * blendAlpha, underwaterView);
           #endif
           gl_FragColor = vec4(color / blendAlpha, blendAlpha);
@@ -948,7 +952,7 @@ export class MapScene {
     }, {
       attributes: ["position", "normal", "uv", "waveData"],
       uniforms: ["world", "view", "worldViewProjection", "cameraPosition", "waterColor", "waterfallColor", "waterSpecular", "time",
-        "hasReflection", "screenSize"],
+        "waterFogEnd", "hasReflection", "screenSize"],
       samplers: ["normalSampler", "distortionSampler", "depthSampler", "refractionSampler", "reflectionSampler"],
       needAlphaBlending: true,
     });
@@ -974,6 +978,7 @@ export class MapScene {
       const camera = this.scene.activeCamera;
       material.setVector3("cameraPosition", camera?.globalPosition ?? Vector3.Zero());
       material.setFloat("time", performance.now() / 1000);
+      material.setFloat("waterFogEnd", Math.min(this.mapFog?.distance ?? Number.MAX_VALUE, Math.max(parameters.fogDistance * 4, 32)));
       material.setVector2("screenSize", new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()));
       const depthRenderer = camera ? this.waterDepthRenderers.get(camera) : undefined;
       if (depthRenderer) material.setTexture("depthSampler", depthRenderer.getDepthMap());
