@@ -929,6 +929,11 @@ export class MapScene {
             shorelineFade = mix(1.0, shorelineFade, horizontalSurface);
             vec3 sceneColor = texture2D(refractionSampler, screenUv).rgb;
             color = mix(sceneColor * blendAlpha, color, shorelineFade);
+            // The native underwater shaders show the refraction render directly through the underside of horizontal water.
+            float underwaterView = step(cameraPosition.y, worldPosition.y) * horizontalSurface;
+            vec2 refractedUv = clamp(screenUv + distortion * 0.007, vec2(0.001), vec2(0.999));
+            vec3 refractedColor = texture2D(refractionSampler, refractedUv).rgb;
+            color = mix(color, refractedColor * blendAlpha, underwaterView);
           #endif
           gl_FragColor = vec4(color / blendAlpha, blendAlpha);
         }
