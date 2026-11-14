@@ -290,7 +290,9 @@ export class BotManager {
       const bot = actors[index];
       this.profile("weapons", () => this.syncWeaponState(bot));
       if (!bot.alive) {
-        const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) ? 5000 : 500;
+        const delayedCtf = gameModeHas(this.gameMode, GameModeFlag.Hold) || gameModeHas(this.gameMode, GameModeFlag.Protect) &&
+          gameModeHas(this.gameMode, GameModeFlag.Efficiency);
+        const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) || delayedCtf ? 5000 : 500;
         if (now - bot.deadAt >= respawnDelay && bot.respawned !== bot.lifeSequence) {
           bot.respawned = bot.lifeSequence;
           if (bot.ownerNumber >= 0) this.callbacks.spawnRequest?.(bot);
@@ -682,8 +684,9 @@ export class BotManager {
   }
 
   private chooseSpawn(team: string): RegisteredMapEntity {
-    const candidates = this.entities.filter((entity) => entity.type === 3 && (!team || !gameModeHas(this.gameMode, GameModeFlag.Team) ||
-      (entity.attributes[1] ?? 0) === (team === "good" ? 1 : 2)));
+    const spawnGroup = gameModeHas(this.gameMode, GameModeFlag.Hold) ? 0 : team === "good" ? 1 : team === "evil" ? 2 : 0;
+    const grouped = gameModeHas(this.gameMode, GameModeFlag.Team);
+    const candidates = this.entities.filter((entity) => entity.type === 3 && (!grouped || (entity.attributes[1] ?? 0) === spawnGroup));
     const starts = candidates.length ? candidates : this.entities.filter((entity) => entity.type === 3);
     const occupants: Damageable[] = [this.localPlayer, ...this.bots.values()].filter((actor) => actor.alive);
     const safest = starts.map((start) => ({ start, distance: occupants.length

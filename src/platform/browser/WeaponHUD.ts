@@ -155,6 +155,10 @@ export class WeaponHUD {
       this.drawIcon(context, objective, objectiveX, ICON_Y);
       if (gameModeHas(this.multiplayer?.gameMode ?? 0, GameModeFlag.Collect)) {
         this.drawNativeText(context, String(player.tokens ?? 0), objectiveX + ICON_SIZE + ICON_SPACE, ICON_TEXT_Y, "#ffffff", 2);
+      } else if (gameModeHas(this.multiplayer?.gameMode ?? 0, GameModeFlag.Hold) && player.clientNumber !== undefined) {
+        const remaining = this.multiplayer?.ctfMode.holdSecondsRemaining(player.clientNumber);
+        if (remaining !== undefined) this.drawNativeText(context, String(remaining), objectiveX + ICON_SIZE + ICON_SPACE, ICON_TEXT_Y,
+          "#ffffff", 2);
       }
     }
   }

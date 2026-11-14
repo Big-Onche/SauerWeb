@@ -1910,7 +1910,17 @@ export class MapScene {
       }
       const proximity = this.nativeProximityScore(minimumDistance, 80, maximumRange);
       let weight = 1 - proximity;
-      if (clientMode) weight = weight > 0 ? 2 * weight / (weight + 1) : 0;
+      if (gameModeHas(mode, GameModeFlag.Hold)) {
+        let minimumFlagDistance = Number.POSITIVE_INFINITY;
+        for (const flag of multiplayer.ctfMode.flags) {
+          if (flag.spawnIndex < 0 || flag.owner < 0 && !flag.dropped) continue;
+          const owner = flag.owner >= 0 ? multiplayer.players.get(flag.owner) : undefined;
+          const flagPosition = owner?.position ?? flag.dropLoc;
+          minimumFlagDistance = Math.min(minimumFlagDistance, magnitude(subtract(start.position, flagPosition)));
+        }
+        const flagWeight = Number.isFinite(minimumFlagDistance) ? this.nativeProximityScore(minimumFlagDistance, 400, 800) : 1;
+        weight = weight + flagWeight > 0 ? 2 * weight * flagWeight / (weight + flagWeight) : 0;
+      } else if (clientMode) weight = weight > 0 ? 2 * weight / (weight + 1) : 0;
       return { start, weight };
     });
     const total = weighted.reduce((sum, candidate) => sum + candidate.weight, 0);
@@ -2063,21 +2073,31 @@ export class MapScene {
       }
       return interests.length > 0;
     }
-    if (!multiplayer.isLocalGame) return false;
-    if (!gameModeHas(multiplayer.gameMode, GameModeFlag.Ctf) ||
-        gameModeHas(multiplayer.gameMode, GameModeFlag.Protect) || gameModeHas(multiplayer.gameMode, GameModeFlag.Hold)) return false;
-    const team = ctfTeamFlag(bot.team), carrying = multiplayer.ctfMode.flags.find((flag) => flag.owner === bot.clientNumber);
-    const ownFlag = multiplayer.ctfMode.flags.find((flag) => flag.team === team);
-    if (!carrying && (!ownFlag || ownFlag.owner < 0 && !ownFlag.dropped)) return false;
-    const target = ownFlag;
-    if (!target) return false;
-    const owner = target.owner >= 0 ? multiplayer.players.get(target.owner) : undefined;
-    const position = owner?.position ?? (target.dropped ? target.dropLoc : target.spawnLoc);
-    const node = this.bots.waypoints.closestwaypoint(position, SIGHTMIN, true);
-    if (!this.bots.waypoints.iswaypoint(node)) return false;
-    interests.push({ state: AiStateType.Pursue, node, target: target.id, targetType: AiTargetType.Affinity,
-      score: magnitude(subtract(bot.position, position)) / 10 });
-    return true;
+    if (!gameModeHas(multiplayer.gameMode, GameModeFlag.Ctf)) return false;
+    const team = ctfTeamFlag(bot.team), hold = gameModeHas(multiplayer.gameMode, GameModeFlag.Hold);
+    const carrying = multiplayer.ctfMode.flags.find((flag) => flag.owner === bot.clientNumber);
+    if (carrying && (hold || gameModeHas(multiplayer.gameMode, GameModeFlag.Protect))) {
+      for (const teammate of multiplayer.players.values()) {
+        if (teammate.clientNumber === bot.clientNumber || teammate.team !== bot.team || teammate.state !== ClientState.Alive) continue;
+        const node = this.bots.waypoints.closestwaypoint(teammate.position, SIGHTMIN, true);
+        if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Defend, node, target: teammate.clientNumber,
+          targetType: AiTargetType.Player, score: squaredDistance(bot.position, teammate.position) / 100 });
+      }
+      return true;
+    }
+    for (const flag of multiplayer.ctfMode.flags) {
+      if (flag.spawnIndex < 0 && hold || flag.owner === bot.clientNumber || flag.invisible) continue;
+      const home = !hold && flag.team === team;
+      const owner = flag.owner >= 0 ? multiplayer.players.get(flag.owner) : undefined;
+      const position = owner?.position ?? (flag.dropped ? flag.dropLoc : flag.spawnLoc);
+      const node = this.bots.waypoints.closestwaypoint(position, SIGHTMIN, true);
+      if (!this.bots.waypoints.iswaypoint(node)) continue;
+      const friendlyCarrier = owner?.team === bot.team;
+      const state = owner && friendlyCarrier ? AiStateType.Defend : home && !owner && !flag.dropped ? AiStateType.Defend : AiStateType.Pursue;
+      interests.push({ state, node, target: owner?.clientNumber ?? flag.id, targetType: owner ? AiTargetType.Player : AiTargetType.Affinity,
+        score: squaredDistance(bot.position, position) / (state === AiStateType.Pursue ? 10 : 4) });
+    }
+    return interests.length > 0;
   }
 
   private downloadWaypoints(mapName: string): void {

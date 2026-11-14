@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Material } from "@babylonjs/core/Materials/material";
 import { describe, expect, it } from "vitest";
 import { loadSauerbratenDirectory } from "../../../sauerbratenDirectory";
 import { parseMd2 } from "../../engine/rendermodel";
-import { flagModelPositions } from "./CtfRenderer";
+import { FLAG_TRANSPARENCY_MODE, flagModelPositions, flagVisibility } from "./CtfRenderer";
 
 const sauerbratenDirectory = loadSauerbratenDirectory("test");
 
@@ -18,6 +19,14 @@ describe("CTF flag rendering", () => {
     expect(bounds[1]).toBeGreaterThan(18);
     expect(bounds[1]).toBeGreaterThan(bounds[0] * 2);
     expect(bounds[1]).toBeGreaterThan(bounds[2] * 10);
+  });
+
+  it("keeps protect flags ghosted while invisible and fades them in like the native client", () => {
+    expect(FLAG_TRANSPARENCY_MODE).toBe(Material.MATERIAL_ALPHATESTANDBLEND);
+    expect(flagVisibility(true, 1_000, 5_000)).toBe(0.3);
+    expect(flagVisibility(false, 5_000, 5_000)).toBe(0.3);
+    expect(flagVisibility(false, 5_000, 5_500)).toBeCloseTo(0.65);
+    expect(flagVisibility(false, 5_000, 6_000)).toBe(1);
   });
 });
 

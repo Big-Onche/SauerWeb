@@ -15,6 +15,8 @@ import type { NetworkPlayer } from "../../fpsgame/client";
 import { GameModeFlag, gameModeHas } from "../../fpsgame/game";
 import { toBabylonPosition } from "../../render/coordinates";
 
+export const FLAG_TRANSPARENCY_MODE = Material.MATERIAL_ALPHATESTANDBLEND;
+
 // Original: src/fpsgame/ctf.h, ctfclientmode::rendergame().
 export class CtfRenderer {
   private geometry?: { positions: number[]; uvs: number[]; indices: number[] };
@@ -26,12 +28,12 @@ export class CtfRenderer {
 
   render(flags: readonly CtfFlag[], players: ReadonlyMap<number, NetworkPlayer>, localClientNumber: number, localTeam: string,
          localPosition: Vec3, localAboveEye: number, localYaw: number, mode: number,
-         playerAttachment: (clientNumber: number) => Vector3 | undefined): void {
+         playerAttachment: (clientNumber: number) => Vector3 | undefined, now = performance.now()): void {
     if (!gameModeHas(mode, GameModeFlag.Ctf)) { this.setAllEnabled(false); return; }
     if (!this.geometry) { void this.load(); return; }
     const active = new Set<number>();
     for (const flag of flags) {
-      if (flag.invisible || gameModeHas(mode, GameModeFlag.Hold) && flag.spawnIndex < 0) continue;
+      if (gameModeHas(mode, GameModeFlag.Hold) && flag.spawnIndex < 0) continue;
       const owner = flag.owner >= 0 ? players.get(flag.owner) : undefined;
       if (flag.owner >= 0 && !owner && flag.owner !== -1) continue;
       const mesh = this.meshes.get(flag.id) ?? this.createMesh(flag.id);
@@ -44,9 +46,10 @@ export class CtfRenderer {
       } else mesh.position.copyFrom(toBabylonPosition(flag.dropped ? flag.dropLoc : flag.spawnLoc));
       const yaw = flag.owner === localClientNumber ? localYaw : owner?.yaw ?? flag.yaw;
       mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(-yaw * Math.PI / 180, 0, 0);
-      const displayTeam = gameModeHas(mode, GameModeFlag.Hold) ? owner ? ctfTeamFlag(owner.team) : 0 : flag.team;
+      const displayTeam = gameModeHas(mode, GameModeFlag.Hold) ? owner && now % 1000 >= 500 ? ctfTeamFlag(owner.team) : 0 : flag.team;
       const color = !displayTeam ? "neutral" : displayTeam === ctfTeamFlag(localTeam) ? "blue" : "red";
       mesh.material = this.material(color);
+      mesh.visibility = flagVisibility(flag.invisible, flag.invisibleTime, now);
       mesh.setEnabled(true);
       active.add(flag.id);
     }
@@ -101,7 +104,9 @@ export class CtfRenderer {
     material.emissiveTexture = skin;
     material.emissiveColor = Color3.White();
     material.specularTexture = new Texture(packageAssetUrl("models/flags/masks.jpg")!, this.scene, false, false);
-    material.transparencyMode = Material.MATERIAL_ALPHATEST;
+    // Native Protect keeps an unavailable flag visible as a 30%-opaque ghost. Alpha-test-only materials discard partial mesh visibility,
+    // so retain the model's cutout test while enabling blending for the per-flag visibility transition.
+    material.transparencyMode = FLAG_TRANSPARENCY_MODE;
     material.alphaCutOff = 0.9;
     this.materials.set(color, material);
     return material;
@@ -114,4 +119,9 @@ export class CtfRenderer {
 
 export function flagModelPositions(source: readonly number[], scale = 0.25): number[] {
   return source.map((value) => value * scale);
+}
+
+export function flagVisibility(invisible: boolean, transitionTime: number, now: number): number {
+  if (invisible) return 0.3;
+  return transitionTime > 0 ? 0.3 + 0.7 * Math.min(Math.max((now - transitionTime) / 1000, 0), 1) : 1;
 }

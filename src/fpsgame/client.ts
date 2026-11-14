@@ -4,7 +4,7 @@ import { copyVec3, magnitude } from "../engine/physics/vector";
 import type { RegisteredMapEntity, Vec3 } from "../engine/octa";
 import { EnetClient, type EnetEvent, ENET_PACKET_FLAG_UNSEQUENCED } from "../network/enet";
 import { PacketReader, PacketWriter } from "../network/protocol";
-import { CtfClientMode, ctfTeamFlag, type LocalCtfEvent } from "./ctf";
+import { CtfClientMode, CTFFLAGLIMIT, CTFFLAGRADIUS, CTFRESPAWNSECONDS, ctfTeamFlag, type LocalCtfEvent } from "./ctf";
 import { CollectClientMode, COLLECT_RESPAWN_SECONDS, COLLECT_SCORE_LIMIT, collectTeamBase, type CollectLocalEvent } from "./collect";
 import { DMF, DNF, DVELF, GameModeFlag, gameModeHas, gameModeName, NetworkMessage, PROTOCOL_VERSION } from "./game";
 import { WeaponSystem } from "./weapon";
@@ -199,6 +199,8 @@ export class MultiplayerClient extends EventTarget {
   // scoreboard, spectator and client-mode code serve both local and remote games.
   startLocalGame(playerName: string, playerModel = 0): void {
     this.disconnect();
+    this.ctfMode.setup(this.mapEntities, this.gameMode);
+    this.ctfMode.initializeLocal(this.gameMode);
     this.collectMode.setup(this.mapEntities);
     this.localGame = true;
     this.clientNumber = 0;
@@ -230,6 +232,7 @@ export class MultiplayerClient extends EventTarget {
     this.mapInfoPending = Boolean(this.loadedMapName);
     this.weapons.controller.serverAuthoritative = false;
     this.weapons.clear();
+    this.ctfMode.reset();
     this.collectMode.reset();
     this.localIntermission = false;
     this.syncTargets();
@@ -264,6 +267,10 @@ export class MultiplayerClient extends EventTarget {
       this.syncLocalPlayer();
       this.timeLeftSeconds = this.localIntermission ? 0 : Math.max(0, 10 * 60 - Math.trunc((nowMilliseconds - this.mapStarted) / 1000));
       if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
+        this.ctfMode.updateLocal(this.players, this.gameMode, nowMilliseconds, Math.random, (player, event) => {
+          this.announceLocalFlag(player ? this.players.get(player.clientNumber) : undefined, event);
+          this.emit({ type: "players" });
+        });
         for (const player of this.players.values()) {
           if (player.state !== ClientState.Alive) continue;
           const feet = { ...player.position, z: player.position.z - player.eyeHeight };
@@ -336,7 +343,10 @@ export class MultiplayerClient extends EventTarget {
     const localPlayer = this.players.get(this.clientNumber);
     const respawnReady = !gameModeHas(this.gameMode, GameModeFlag.Collect) || !localPlayer ||
       nowMilliseconds - localPlayer.deadAt >= COLLECT_RESPAWN_SECONDS * 1000;
-    if (!this.isSpectator && !this.physics.player.alive && respawnReady && (this.respawnRequested || this.weapons.controller.attacking) &&
+    const ctfRespawnReady = !gameModeHas(this.gameMode, GameModeFlag.Ctf) || !localPlayer || !this.ctfRespawnDelayed() ||
+      nowMilliseconds - localPlayer.deadAt >= CTFRESPAWNSECONDS * 1000;
+    if (!this.isSpectator && !this.physics.player.alive && respawnReady && ctfRespawnReady &&
+        (this.respawnRequested || this.weapons.controller.attacking) &&
         nowMilliseconds - this.lastSpawnAttempt >= 1000) {
       this.transport.send(1, new PacketWriter().putInt(NetworkMessage.TrySpawn).finish(), true);
       this.lastSpawnAttempt = nowMilliseconds;
@@ -365,6 +375,14 @@ export class MultiplayerClient extends EventTarget {
           depositTokens: (base) => this.sendOwnedCollectRequest(player.clientNumber, NetworkMessage.DepositTokens, base),
           lookupMaterial: (position) => this.physics.lookupMaterial(position), gameClipMask: MATF_CLIP, gameClipValue: MAT_GAMECLIP,
         });
+      }
+    }
+    if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
+      for (const player of this.players.values()) {
+        if (player.aiType === 0 || player.ownerNumber !== this.clientNumber || player.state !== ClientState.Alive) continue;
+        const feet = { ...player.position, z: player.position.z - player.eyeHeight };
+        this.ctfMode.checkItems(player, feet, this.gameMode,
+          (flag, version) => this.sendOwnedCtfTakeRequest(player.clientNumber, flag, version));
       }
     }
     const bytes = messages.finish();
@@ -449,6 +467,7 @@ export class MultiplayerClient extends EventTarget {
   clearLocalBots(): void {
     for (const [clientNumber, player] of this.players) {
       if (player.aiType === 0 || player.ownerNumber >= 0) continue;
+      if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) this.dropLocalFlags(player);
       if (gameModeHas(this.gameMode, GameModeFlag.Collect)) this.collectMode.leaveGameLocal(player, true,
         (event) => this.announceLocalCollect(event));
       this.players.delete(clientNumber);
@@ -472,7 +491,8 @@ export class MultiplayerClient extends EventTarget {
     victim.state = ClientState.Dead;
     victim.alive = false;
     victim.deadAt = performance.now();
-    this.dropLocalFlags(victim);
+    const teamkillDrop = actor !== victim && Boolean(actor.team && actor.team === victim.team);
+    this.dropLocalFlags(victim, true, teamkillDrop ? actor.clientNumber : victim.clientNumber, teamkillDrop);
     if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
       const origin = victimNumber === this.clientNumber ? this.physics.player.position : victim.position;
       this.collectMode.dropTokensLocal(victim, origin, !actor || actor.team === victim.team, performance.now(), Math.random,
@@ -546,6 +566,8 @@ export class MultiplayerClient extends EventTarget {
       const player = this.players.get(this.clientNumber);
       if (gameModeHas(this.gameMode, GameModeFlag.Collect) && player &&
           performance.now() - player.deadAt < COLLECT_RESPAWN_SECONDS * 1000) return false;
+      if (gameModeHas(this.gameMode, GameModeFlag.Ctf) && this.ctfRespawnDelayed() && player &&
+          performance.now() - player.deadAt < CTFRESPAWNSECONDS * 1000) return false;
       this.spawnLocalPlayer();
       return true;
     }
@@ -568,6 +590,8 @@ export class MultiplayerClient extends EventTarget {
   setMapEntities(entities: readonly RegisteredMapEntity[]): void {
     this.mapEntities = entities.map((entity) => ({ ...entity, position: { ...entity.position }, attributes: [...entity.attributes] }));
     this.ctfMode.setup(entities, this.gameMode);
+    this.ctfMode.groundDroppedFlags((position) => this.groundFlagDrop(position));
+    if (this.localGame && gameModeHas(this.gameMode, GameModeFlag.Ctf)) this.ctfMode.initializeLocal(this.gameMode);
     this.collectMode.setup(entities);
     this.entities.setMap(entities, this.gameMode, this.localGame, performance.now(), Math.max(1, this.players.size));
   }
@@ -577,6 +601,11 @@ export class MultiplayerClient extends EventTarget {
     this.gameMode = gameMode;
     this.entities.setGameMode(gameMode);
     if (changed) {
+      this.ctfMode.reset();
+      if (gameModeHas(gameMode, GameModeFlag.Ctf)) {
+        this.ctfMode.setup(this.mapEntities, gameMode);
+        if (this.localGame) this.ctfMode.initializeLocal(gameMode);
+      }
       this.collectMode.reset();
       if (gameModeHas(gameMode, GameModeFlag.Collect)) this.collectMode.setup(this.mapEntities);
     }
@@ -930,12 +959,20 @@ export class MultiplayerClient extends EventTarget {
           this.announceItem(packet.getInt());
           break;
         }
-        case NetworkMessage.InitFlags: this.ctfMode.parseInitFlags(packet, this.gameMode); this.emit({ type: "players" }); break;
+        case NetworkMessage.InitFlags:
+          this.ctfMode.parseInitFlags(packet, this.gameMode);
+          if (this.objectiveMapReady()) this.ctfMode.groundDroppedFlags((position) => this.groundFlagDrop(position));
+          this.emit({ type: "players" });
+          break;
         case NetworkMessage.DropFlag: this.parseDropFlag(packet); break;
         case NetworkMessage.TakeFlag: this.parseTakeFlag(packet); break;
         case NetworkMessage.ReturnFlag: this.parseReturnFlag(packet); break;
         case NetworkMessage.ResetFlag: this.parseResetFlag(packet); break;
-        case NetworkMessage.InvisibleFlag: this.ctfMode.setInvisible(packet.getInt(), packet.getInt() > 0); break;
+        case NetworkMessage.InvisibleFlag: {
+          const flag = packet.getInt(), invisible = packet.getInt() > 0;
+          if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) this.ctfMode.setInvisible(flag, invisible);
+          break;
+        }
         case NetworkMessage.ScoreFlag: this.parseScoreFlag(packet); break;
         case NetworkMessage.InitTokens: this.parseInitTokens(packet); break;
         case NetworkMessage.TakeToken: this.parseTakeToken(packet); break;
@@ -1537,26 +1574,29 @@ export class MultiplayerClient extends EventTarget {
   private parseDropFlag(packet: PacketReader): void {
     const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
     const location = { x: packet.getInt() / DMF, y: packet.getInt() / DMF, z: packet.getInt() / DMF };
+    if (!gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
     const player = this.playerFor(clientNumber);
     const flagName = this.flagName(flag);
-    this.ctfMode.dropFlag(flag, version, location, player.yaw);
+    this.ctfMode.dropFlag(flag, version, this.objectiveMapReady() ? this.groundFlagDrop(location) : location, player.yaw);
     this.console(`${this.displayName(player)} dropped ${flagName}`, "game-info");
     this.emit({ type: "playsound", sound: GameSound.FlagDrop, position: clientNumber === this.clientNumber ? undefined : player.position });
   }
 
   private parseTakeFlag(packet: PacketReader): void {
     const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
+    if (!gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
     const player = this.playerFor(clientNumber), state = this.ctfMode.flags[flag];
     const action = gameModeHas(this.gameMode, GameModeFlag.Hold) ? "picked up the flag for"
       : gameModeHas(this.gameMode, GameModeFlag.Protect) || state?.dropped ? "picked up" : "stole";
     const suffix = gameModeHas(this.gameMode, GameModeFlag.Hold) ? ` ${this.teamName(player.team)}` : ` ${this.flagName(flag)}`;
-    this.ctfMode.takeFlag(clientNumber, flag, version);
+    this.ctfMode.takeFlag(clientNumber, flag, version, this.gameMode, ctfTeamFlag(player.team));
     this.console(`${this.displayName(player)} ${action}${suffix}`, "game-info");
     this.emit({ type: "playsound", sound: GameSound.FlagPickup, position: clientNumber === this.clientNumber ? undefined : player.position });
   }
 
   private parseReturnFlag(packet: PacketReader): void {
     const clientNumber = packet.getInt(), flag = packet.getInt(), version = packet.getInt();
+    if (!gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
     const name = this.flagName(flag);
     this.ctfMode.returnFlag(flag, version);
     this.console(`${this.displayName(this.playerFor(clientNumber))} returned ${name}`, "game-info");
@@ -1566,6 +1606,7 @@ export class MultiplayerClient extends EventTarget {
 
   private parseResetFlag(packet: PacketReader): void {
     const flag = packet.getInt(), version = packet.getInt(), spawnIndex = packet.getInt(), team = packet.getInt(), score = packet.getInt();
+    if (!gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
     const state = this.ctfMode.flags[flag], shouldLog = !gameModeHas(this.gameMode, GameModeFlag.Hold) || (state?.spawnIndex ?? -1) >= 0;
     const name = this.flagName(flag);
     this.ctfMode.resetFlag(flag, version, spawnIndex, team, score, this.gameMode);
@@ -1577,6 +1618,7 @@ export class MultiplayerClient extends EventTarget {
   private parseScoreFlag(packet: PacketReader): void {
     const clientNumber = packet.getInt(), relay = packet.getInt(), relayVersion = packet.getInt(), goal = packet.getInt(),
       goalVersion = packet.getInt(), goalSpawn = packet.getInt(), team = packet.getInt(), score = packet.getInt(), flags = packet.getInt();
+    if (!gameModeHas(this.gameMode, GameModeFlag.Ctf)) return;
     const player = this.playerFor(clientNumber);
     this.ctfMode.scoreFlag(player, relay, relayVersion, goal, goalVersion, goalSpawn, team, score, flags, this.gameMode);
     const localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? "");
@@ -1784,41 +1826,71 @@ export class MultiplayerClient extends EventTarget {
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber).putInt(type).putInt(value).finish(), true);
   }
 
+  private sendOwnedCtfTakeRequest(clientNumber: number, flag: number, version: number): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber).putInt(NetworkMessage.TakeFlag)
+      .putInt(flag).putInt(version).finish(), true);
+  }
+
+  private ctfRespawnDelayed(): boolean {
+    if (gameModeHas(this.gameMode, GameModeFlag.Hold)) return true;
+    return gameModeHas(this.gameMode, GameModeFlag.Protect) && gameModeHas(this.gameMode, GameModeFlag.Efficiency);
+  }
+
+  private objectiveMapReady(): boolean {
+    return Boolean(this.loadedMapName && this.loadedMapName.toLocaleLowerCase() === this.mapName.toLocaleLowerCase());
+  }
+
   private emit(detail: MultiplayerEvent): void { this.dispatchEvent(new CustomEvent<MultiplayerEvent>("multiplayer", { detail })); }
 
   private console(text: string, consoleType: ConsoleLineType = "info"): void { this.emit({ type: "console", text, consoleType }); }
 
-  private dropLocalFlags(player: NetworkPlayer): boolean {
+  private dropLocalFlags(player: NetworkPlayer, death = false, dropper = player.clientNumber, penalty = false): boolean {
     const position = player.clientNumber === this.clientNumber ? this.physics.player.position : player.position;
+    const feet = { ...position, z: position.z - player.eyeHeight };
     const yaw = player.clientNumber === this.clientNumber ? this.physics.player.yaw : player.yaw;
-    return this.ctfMode.dropFlags(player.clientNumber, position, yaw,
-      (event) => this.announceLocalFlag(player, event));
+    return this.ctfMode.dropFlags(player.clientNumber, this.groundFlagDrop(feet), yaw, this.gameMode,
+      (event) => this.announceLocalFlag(player, event), performance.now(), death, dropper, penalty);
+  }
+
+  // Original: ctfclientmode::dropflag() raises the server position by FLAGRADIUS/4 and calls droptofloor(..., radius 4).
+  private groundFlagDrop(position: Vec3): Vec3 {
+    const raised = { ...position, z: position.z + CTFFLAGRADIUS / 4 };
+    const floor = this.physics.raycast(raised, { x: 0, y: 0, z: -1 }, 4096, CTFFLAGRADIUS / 4, true);
+    return floor ? { ...raised, z: raised.z - floor.distance } : raised;
   }
 
   // Original: src/fpsgame/ctf.h, ctfclientmode flag event console output.
-  private announceLocalFlag(player: NetworkPlayer, event: LocalCtfEvent): void {
+  private announceLocalFlag(player: NetworkPlayer | undefined, event: LocalCtfEvent): void {
     const name = this.displayName(player);
-    const position = player.clientNumber === this.clientNumber ? undefined : player.position;
+    const position = player?.clientNumber === this.clientNumber ? undefined : player?.position;
     if (event.type === "drop") {
       this.console(`${name} dropped ${this.flagName(event.flag.id)}`, "game-info");
       this.emit({ type: "playsound", sound: GameSound.FlagDrop, position });
     } else if (event.type === "return") {
       this.console(`${name} returned ${this.flagName(event.flag.id)}`, "game-info");
       this.emit({ type: "playsound", sound: GameSound.FlagReturn, position });
-    }
-    else if (event.type === "take") {
+    } else if (event.type === "reset") {
+      this.console(`${this.flagName(event.flag.id)} reset`, "game-info");
+      this.emit({ type: "playsound", sound: GameSound.FlagReset });
+    } else if (event.type === "take" && player) {
       const action = gameModeHas(this.gameMode, GameModeFlag.Hold) ? "picked up the flag for"
         : gameModeHas(this.gameMode, GameModeFlag.Protect) || event.wasDropped ? "picked up" : "stole";
       const suffix = gameModeHas(this.gameMode, GameModeFlag.Hold) ? ` ${this.teamName(player.team)}`
         : ` ${this.flagName(event.flag.id)}`;
       this.console(`${name} ${action}${suffix}`, "game-info");
       this.emit({ type: "playsound", sound: GameSound.FlagPickup, position });
-    } else {
+    } else if (player) {
       const localTeam = ctfTeamFlag(this.players.get(this.clientNumber)?.team ?? ""), team = ctfTeamFlag(player.team);
       const teamName = team === localTeam ? "your team" : "the enemy team", score = this.ctfMode.scores[team - 1] ?? 0;
       this.console(`${name} scored for ${teamName}`, "game-info");
       this.emit({ type: "playsound", sound: team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
-      if (score >= 10) this.console(`${teamName} captured ${score} flags`, "game-info");
+      if (score >= CTFFLAGLIMIT) this.console(`${teamName} captured ${score} flags`, "game-info");
+      if (score >= CTFFLAGLIMIT && !this.localIntermission) {
+        this.localIntermission = true;
+        this.timeLeftSeconds = 0;
+        this.logIntermission();
+      }
     }
   }
 
