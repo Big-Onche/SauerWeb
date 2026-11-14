@@ -74,6 +74,8 @@ import { SIGHTMIN } from "../fpsgame/waypoint";
 import { DevToolsProfiler } from "../platform/browser/DevToolsProfiler";
 import { TouchControls } from "../platform/browser/TouchControls";
 import { KillFeed } from "../platform/browser/KillFeed";
+import { expandProjectedBounds, mergeProjectedBounds, projectWorldBounds, projectedBoundsIntersect, projectedBoundsToScissor,
+  type PixelScissor, type ProjectedBounds } from "./ReflectionBounds";
 
 export type CameraMode = "free" | "player";
 
@@ -101,14 +103,19 @@ interface MemoryPerformance extends Performance {
 }
 
 export const DEFAULT_VIEWPORT_TUNING: Readonly<ViewportTuning> = { contrast: 1.3, gamma: 1.85, vibrance: 1.65 };
+const VIEWPORT_PROJECTED_BOUNDS: Readonly<ProjectedBounds> = { minX: -1, minY: -1, maxX: 1, maxY: 1, minW: 0 };
 
 interface WaterReflectionPlane {
   readonly height: number;
   readonly texture: MirrorTexture;
   readonly meshes: Set<Mesh>;
+  readonly surfaces: Array<{ minimum: Vector3; maximum: Vector3 }>;
   readonly projectiveMatrix: Matrix;
   readonly renderMeshes: AbstractMesh[];
   readonly frustumPlanes: Plane[];
+  readonly projectionScratch: ProjectedBounds;
+  projectedBounds?: ProjectedBounds;
+  scissor?: PixelScissor;
   initialized: boolean;
   distanceSquared: number;
 }
@@ -856,7 +863,16 @@ export class MapScene {
     mesh.alwaysSelectAsActiveMesh = true;
     mesh.freezeWorldMatrix();
     if (batch.waterLod) this.waterLodMeshes.push({ mesh, batch, signature: "" });
-    if (batch.reflectionHeight !== undefined) this.waterReflections.get(batch.reflectionHeight)?.meshes.add(mesh);
+    if (batch.reflectionHeight !== undefined) {
+      const reflection = this.waterReflections.get(batch.reflectionHeight);
+      reflection?.meshes.add(mesh);
+      for (const surface of batch.waterSurfaces ?? []) {
+        reflection?.surfaces.push({
+          minimum: new Vector3(surface.x0, batch.reflectionHeight, surface.z0),
+          maximum: new Vector3(surface.x1, batch.reflectionHeight, surface.z1),
+        });
+      }
+    }
     return mesh;
   }
 
@@ -1126,6 +1142,7 @@ export class MapScene {
       texture.clearColor.copyFrom(this.scene.clearColor);
     });
     texture.onAfterRenderObservable.add(() => {
+      this.engine.disableScissor();
       this.mapCaustics?.popCausticBlend();
       if (previousFog) {
         this.scene.fogEnabled = previousFog.enabled;
@@ -1141,15 +1158,31 @@ export class MapScene {
       reflection.projectiveMatrix.copyFrom(this.scene.getTransformMatrix());
     });
     reflection = {
-      height, texture, meshes: new Set(), projectiveMatrix: Matrix.Identity(), renderMeshes: [],
+      height, texture, meshes: new Set(), surfaces: [], projectiveMatrix: Matrix.Identity(), renderMeshes: [],
       frustumPlanes: Array.from({ length: 6 }, () => new Plane(0, 0, 0, 0)), initialized: false,
+      projectionScratch: { minX: 0, minY: 0, maxX: 0, maxY: 0, minW: 0 },
       distanceSquared: Number.POSITIVE_INFINITY,
     };
+    texture.onClearObservable.add(() => {
+      const engine = this.engine;
+      const scissor = reflection.scissor;
+      if (scissor) engine.enableScissor(scissor.x, scissor.y, scissor.width, scissor.height);
+      else engine.disableScissor();
+      engine.clear(texture.clearColor ?? this.scene.clearColor, true, true, true);
+    });
     texture.getCustomRenderList = () => {
-      Frustum.GetPlanesToRef(this.scene.getTransformMatrix(), reflection.frustumPlanes);
+      const transform = this.scene.getTransformMatrix();
+      Frustum.GetPlanesToRef(transform, reflection.frustumPlanes);
       reflection.renderMeshes.length = 0;
       for (const mesh of this.scene.meshes) {
-        if (this.isWaterRenderTargetMesh(mesh) && mesh.isInFrustum(reflection.frustumPlanes)) reflection.renderMeshes.push(mesh);
+        if (!this.isWaterRenderTargetMesh(mesh) || !mesh.isInFrustum(reflection.frustumPlanes)) continue;
+        if (!reflection.projectedBounds || mesh.infiniteDistance) {
+          reflection.renderMeshes.push(mesh);
+          continue;
+        }
+        const box = mesh.getBoundingInfo().boundingBox;
+        const projected = projectWorldBounds(box.minimumWorld, box.maximumWorld, transform, reflection.projectionScratch);
+        if (projected && projectedBoundsIntersect(projected, reflection.projectedBounds)) reflection.renderMeshes.push(mesh);
       }
       return reflection.renderMeshes;
     };
@@ -1179,6 +1212,7 @@ export class MapScene {
     this.waterReflectionCandidates.length = 0;
     for (const reflection of this.waterReflections.values()) {
       let visible = false;
+      let projectedBounds: ProjectedBounds | undefined;
       reflection.distanceSquared = Number.POSITIVE_INFINITY;
       for (const mesh of reflection.meshes) {
         if (!mesh.isEnabled() || !mesh.isVisible) continue;
@@ -1188,8 +1222,20 @@ export class MapScene {
         const dy = Math.max(bounds.minimumWorld.y - cameraPosition.y, 0, cameraPosition.y - bounds.maximumWorld.y);
         const dz = Math.max(bounds.minimumWorld.z - cameraPosition.z, 0, cameraPosition.z - bounds.maximumWorld.z);
         reflection.distanceSquared = Math.min(reflection.distanceSquared, dx * dx + dy * dy + dz * dz);
-        if (camera.isInFrustum(mesh)) visible = true;
       }
+      const cameraTransform = camera.getTransformationMatrix();
+      for (const surface of reflection.surfaces) {
+        const projected = projectWorldBounds(surface.minimum, surface.maximum, cameraTransform, reflection.projectionScratch);
+        if (!projected || !projectedBoundsIntersect(projected, VIEWPORT_PROJECTED_BOUNDS)) continue;
+        projectedBounds = mergeProjectedBounds(projectedBounds, projected);
+      }
+      visible = projectedBounds !== undefined;
+      // Account for the animated vertex height and the normal-map UV displacement. The padding is deliberately conservative and collapses
+      // to a full target near the camera, where an incomplete reflection would be most noticeable.
+      const reflectionPadding = projectedBounds ? 3.6 / Math.max(projectedBounds.minW, 0.1) + 0.04 : 0;
+      reflection.projectedBounds = projectedBounds ? expandProjectedBounds(projectedBounds, reflectionPadding) : undefined;
+      reflection.scissor = reflection.projectedBounds ? projectedBoundsToScissor(reflection.projectedBounds, reflection.texture.getRenderWidth(),
+        reflection.texture.getRenderHeight()) : undefined;
       if (visible && cameraPosition.y >= reflection.height - 0.5) this.waterReflectionCandidates.push(reflection);
     }
     if (!this.waterReflectionCandidates.length) {

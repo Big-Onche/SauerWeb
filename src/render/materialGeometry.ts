@@ -18,7 +18,15 @@ export interface MaterialGeometryBatch {
   materialIndex: number;
   /** Babylon-space Y coordinate of the planar reflection shared by this water batch. */
   reflectionHeight?: number;
+  waterSurfaces?: WaterSurfaceBounds[];
   waterLod?: WaterLodGeometry;
+}
+
+export interface WaterSurfaceBounds {
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
 }
 
 export interface WaterLodGeometry {
@@ -95,6 +103,7 @@ function appendVolume(batches: Map<string, MaterialGeometryBatch>, volume: Mater
   if (!batch) {
     batch = { name: `material-volume-${kind}-${materialIndex}`, kind, debugOnly, positions: [], indices: [], colors: [], uvs: [],
       waveData: [], faceCount: 0, materialIndex, reflectionHeight,
+      waterSurfaces: kind === "water" ? [] : undefined,
       waterLod: kind === "water" && waterQuality >= 3 ? { fixedIndices: [], patches: [] } : undefined };
     batches.set(key, batch);
   }
@@ -168,6 +177,7 @@ function appendFace(batch: MaterialGeometryBatch, volume: MaterialVolume, orient
 }
 
 function appendWaterTopFace(batch: MaterialGeometryBatch, volume: MaterialVolume, rectangle: FaceRectangle, quality: number): void {
+  batch.waterSurfaces?.push({ x0: rectangle.u0, x1: rectangle.u1, z0: rectangle.v0, z1: rectangle.v1 });
   const cellSize = quality >= 3 ? 4 : quality >= 2 ? 8 : quality >= 1 ? 16 : volume.size;
   const xSegments = Math.max(1, Math.min(16, Math.ceil((rectangle.u1 - rectangle.u0) / cellSize)));
   const ySegments = Math.max(1, Math.min(16, Math.ceil((rectangle.v1 - rectangle.v0) / cellSize)));

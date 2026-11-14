@@ -133,6 +133,7 @@ describe("generateMaterialGeometry", () => {
 
     expect(low.faceCount).toBe(5);
     expect(low.indices).toHaveLength(30);
+    expect(low.waterSurfaces).toEqual([{ x0: 0, x1: 8, z0: 0, z1: 8 }]);
     expect(ultra.faceCount).toBe(5);
     expect(ultra.indices).toHaveLength(48);
     expect(ultra.waveData).toHaveLength(ultra.positions.length / 3 * 2);
