@@ -1,5 +1,5 @@
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Matrix, Vector2, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Matrix, Quaternion, Vector2, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Plane } from "@babylonjs/core/Maths/math.plane";
 import { Frustum } from "@babylonjs/core/Maths/math.frustum";
 import { Engine } from "@babylonjs/core/Engines/engine";
@@ -2305,8 +2305,6 @@ export class MapScene {
   }
 
   private updatePlayerCamera(position: RegisteredMapEntity["position"]): void {
-    const yaw = this.physics.player.yaw * Math.PI / 180;
-    const pitch = this.physics.player.pitch * Math.PI / 180;
     let cameraPosition = toBabylonPosition(position);
     if (this.thirdperson || this.isLocalPlayerDead() || this.followedPlayer()?.state === ClientState.Dead) {
       const desired = thirdpersoncamera(position, this.physics.player.yaw, this.physics.player.pitch);
@@ -2321,8 +2319,7 @@ export class MapScene {
       cameraPosition = cameraPosition.add(offset);
     }
     this.playerCamera.position.copyFrom(cameraPosition);
-    // Sauerbraten applies yaw and pitch as independent camera rotations. Avoiding a look-at decomposition preserves yaw at vertical pitch.
-    this.playerCamera.rotation.set(pitch, Math.PI - yaw, 0);
+    setSauerCameraOrientation(this.playerCamera, this.physics.player.yaw, this.physics.player.pitch);
   }
 
   // Original: src/engine/rendergl.cpp
@@ -2712,6 +2709,15 @@ async function canvasObjectUrl(canvas: HTMLCanvasElement): Promise<string> {
 function squaredDistance(left: RegisteredMapEntity["position"], right: RegisteredMapEntity["position"]): number {
   const x = left.x - right.x, y = left.y - right.y, z = left.z - right.z;
   return x * x + y * y + z * z;
+}
+
+/** Applies Sauerbraten's yaw-then-pitch camera frame without decomposing a vertical forward vector through look-at. */
+export function setSauerCameraOrientation(camera: UniversalCamera, yawDegrees: number, pitchDegrees: number): void {
+  camera.rotationQuaternion ??= Quaternion.Identity();
+  Quaternion.RotationYawPitchRollToRef(Math.PI - yawDegrees * Math.PI / 180, pitchDegrees * Math.PI / 180, 0,
+    camera.rotationQuaternion);
+  // setcammatrix() rotates camdir, camright, and camup together. Babylon must likewise rotate up or its look-at matrix is singular at +/-90 pitch.
+  camera.updateUpVectorFromRotation = true;
 }
 
 function formatMegabytes(bytes: number): string {
