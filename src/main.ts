@@ -11,7 +11,6 @@ import { loadMusicVolume, musicPlayer } from "./platform/browser/MusicPlayer";
 import { isBindableKey, keyBindingLabel, keyForEvent, loadMovementBindings, MOVEMENT_BINDING_ACTIONS, resetMovementBindings,
   saveMovementBindings, type MovementBindingAction } from "./platform/browser/KeyBindings";
 import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./platform/browser/TouchSettings";
-import { requestMobileLandscapeFullscreen } from "./platform/browser/TouchControls";
 import { onlinePlayersLabel, OnlinePresence } from "./presence";
 import { sauerFormattedMarkup } from "./sauerFormatting";
 import { TEAMKILL_PROTECTION_MESSAGE } from "./fpsgame/teamkillProtection";
@@ -782,17 +781,10 @@ function launchMap(name: string): void {
 }
 
 function launchGame(url: string): void {
-  void requestMobileLandscapeFullscreen();
-  // Keep the launch click's user activation in this document. The game transfers
-  // this temporary lock to its canvas once the asynchronous map load completes.
-  try {
-    const request = document.documentElement.requestPointerLock();
-    if (request) void request.catch(() => undefined);
-  } catch {
-    // The viewport click remains a fallback where pointer lock is unavailable.
-  }
-  history.pushState(null, "", url);
-  route();
+  // Enter gameplay through a fresh document so a deployment cannot leave the menu's
+  // module graph pointing at a replaced lazy game chunk. The game captures input only
+  // after its complete asset/readiness gate has finished.
+  location.assign(url);
 }
 
 function menuButton(label: string, action: string, enabled: boolean, icon = "menu"): string {
