@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { SauerMap } from "../engine/octa";
 import { createFogDomeGeometry, resolveMapFog } from "./MapFog";
+import { srgbToLinear } from "./MapLighting";
 
 describe("map fog", () => {
   it("resolves defaults, then OGZ variables, then CFG overrides", () => {
     const map = emptyMap();
-    expect(resolveMapFog(map)).toMatchObject({ distance: 4000, start: 508, color: [128 / 255, 153 / 255, 179 / 255], domeMax: 0 });
+    expect(resolveMapFog(map)).toMatchObject({ distance: 4000, start: 508,
+      color: [srgbToLinear(128 / 255), srgbToLinear(153 / 255), srgbToLinear(179 / 255)], domeMax: 0 });
     map.variables.push({ name: "fog", type: "integer", value: 800 });
     map.variables.push({ name: "fogcolour", type: "integer", value: 0x204060 });
     map.variables.push({ name: "fogdomemax", type: "float", value: 0.75 });
     map.variables.push({ name: "fogdomecolour", type: "integer", value: 0 });
-    expect(resolveMapFog(map)).toMatchObject({ distance: 800, start: 108, color: [32 / 255, 64 / 255, 96 / 255],
-      domeColor: [32 / 255, 64 / 255, 96 / 255], domeMax: 0.75 });
+    expect(resolveMapFog(map)).toMatchObject({ distance: 800, start: 108,
+      color: [srgbToLinear(32 / 255), srgbToLinear(64 / 255), srgbToLinear(96 / 255)],
+      domeColor: [srgbToLinear(32 / 255), srgbToLinear(64 / 255), srgbToLinear(96 / 255)], domeMax: 0.75 });
     expect(resolveMapFog(map, { distance: 1600, color: 0xffffff, domeMax: 1 })).toMatchObject({
       distance: 1600, start: 208, color: [1, 1, 1], domeMax: 1,
     });

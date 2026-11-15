@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SauerMap } from "../engine/octa";
-import { DEFAULT_MAP_LIGHTING, expandSauerColor, resolveMapLighting, sauerColorBytes } from "./MapLighting";
+import { DEFAULT_MAP_LIGHTING, expandSauerColor, resolveMapLighting, sauerColorBytes, sauerColorLinear, srgbToLinear } from "./MapLighting";
 
 describe("map lighting", () => {
   it("resolves defaults, then OGZ variables, then CFG overrides", () => {
@@ -19,6 +19,7 @@ describe("map lighting", () => {
   it("expands scalar colors exactly like Sauerbraten's HVAR callbacks", () => {
     expect(expandSauerColor(25)).toBe(0x191919);
     expect(sauerColorBytes(0x123456)).toEqual([0x12, 0x34, 0x56]);
+    expect(sauerColorLinear(0x123456)).toEqual([srgbToLinear(0x12 / 255), srgbToLinear(0x34 / 255), srgbToLinear(0x56 / 255)]);
   });
 });
 

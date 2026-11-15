@@ -28,6 +28,14 @@ export function sauerColorBytes(value: number): [number, number, number] {
   return [(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff];
 }
 
+export function sauerColorLinear(value: number): [number, number, number] {
+  return sauerColorBytes(value).map((component) => srgbToLinear(component / 255)) as [number, number, number];
+}
+
+export function srgbToLinear(component: number): number {
+  return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+}
+
 function mapIntegerVariable(map: SauerMap, name: string): number | undefined {
   const variable = map.variables.find((entry) => entry.name.toLowerCase() === name && entry.type === "integer");
   return variable?.type === "integer" ? variable.value : undefined;

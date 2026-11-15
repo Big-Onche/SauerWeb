@@ -1,6 +1,6 @@
 import type { MapFogOverrides } from "../assets/types";
 import type { SauerMap } from "../engine/octa";
-import { expandSauerColor, sauerColorBytes } from "./MapLighting";
+import { expandSauerColor, sauerColorLinear } from "./MapLighting";
 
 export interface MapFog {
   distance: number;
@@ -93,7 +93,7 @@ export function createFogDomeGeometry(fog: MapFog, farPlane: number, segments = 
 }
 
 function normalizedColor(value: number): [number, number, number] {
-  return sauerColorBytes(value).map((component) => component / 255) as [number, number, number];
+  return sauerColorLinear(value);
 }
 
 function numericVariable(map: SauerMap, name: string): number | undefined {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rewriteFogDistanceForSauer } from "./SauerFogShader";
+import { rewriteCustomFogDistanceForSauer, rewriteFogDistanceForSauer } from "./SauerFogShader";
 
 describe("Sauer fog shader", () => {
   it("uses forward view depth instead of Babylon's radial distance", () => {
@@ -16,5 +16,11 @@ describe("Sauer fog shader", () => {
 
   it("fails clearly if Babylon changes its fog include", () => {
     expect(() => rewriteFogDistanceForSauer("unknown fog shader")).toThrow(/layout has changed/);
+  });
+
+  it("uses forward view depth in custom world materials", () => {
+    const shader = "before vFogDistance = length(cameraVector); after";
+
+    expect(rewriteCustomFogDistanceForSauer(shader)).toBe("before vFogDistance = abs((view * worldPosition).z); after");
   });
 });

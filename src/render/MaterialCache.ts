@@ -10,6 +10,7 @@ import type { ResolvedTexture } from "../assets/types";
 import type { Lightmap } from "../engine/octa";
 import { DEFAULT_MAP_LIGHTING, sauerColorBytes } from "./MapLighting";
 import { CAUSTIC_SHADER_DEFINITIONS, StandardMaterialCaustics, type MapCausticResources } from "./MapCaustics";
+import { rewriteCustomFogDistanceForSauer } from "./SauerFogShader";
 
 export type SauerSurfaceMode = "opaque" | "alpha-test" | "transparent" | "special";
 export type SauerLightmapMode = "ambient" | "bright" | "dark" | "atlas";
@@ -183,7 +184,7 @@ export class MaterialCache {
       fragmentSource,
     }, {
       attributes: ["position", "normal", "tangent", "uv", "uv2", "color"],
-      uniforms: ["world", "worldViewProjection", "cameraPosition", "ambientColor", "specularScale", "textureScale", "textureOffset",
+      uniforms: ["world", "view", "worldViewProjection", "cameraPosition", "ambientColor", "specularScale", "textureScale", "textureOffset",
         "glowScale", "alpha", "hasNormalMap", "hasSpecular", "hasSpecularMap", "hasGlowMap", "hasOpacityMap", "alphaCutoff", "fogColor",
         "fogStart", "fogEnd", ...(this.caustics
           ? ["causticLookupInfo", "causticFrameInfo", "waterFogColorBlend", "waterFogRange"] : [])],
@@ -328,7 +329,7 @@ function stableKey(descriptor: SauerMaterialDescriptor): string {
   });
 }
 
-const SAUER_BUMP_VERTEX_SHADER = `
+const SAUER_BUMP_VERTEX_SHADER = rewriteCustomFogDistanceForSauer(`
   precision highp float;
   attribute vec3 position;
   attribute vec3 normal;
@@ -337,6 +338,7 @@ const SAUER_BUMP_VERTEX_SHADER = `
   attribute vec2 uv2;
   attribute vec4 color;
   uniform mat4 world;
+  uniform mat4 view;
   uniform mat4 worldViewProjection;
   uniform vec3 cameraPosition;
   uniform vec2 textureScale;
@@ -362,7 +364,7 @@ const SAUER_BUMP_VERTEX_SHADER = `
     vWorldPosition = worldPosition.xyz;
     gl_Position = worldViewProjection * vec4(position, 1.0);
   }
-`;
+`);
 
 const SAUER_BUMP_FRAGMENT_SHADER = `
   precision highp float;
