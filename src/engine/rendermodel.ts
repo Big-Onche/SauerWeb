@@ -22,9 +22,56 @@ export interface ModelJointPose {
 export interface ModelGeometryMesh {
   name: string;
   positions: number[];
+  normals?: number[];
   uvs: number[];
   indices: number[];
   bones?: number[];
+}
+
+export function ensureModelGeometryNormals(geometry: ModelGeometry): ModelGeometry {
+  for (const mesh of geometry.meshes) {
+    if (mesh.normals?.length === mesh.positions.length) continue;
+    mesh.normals = computeModelNormals(mesh.positions, mesh.indices);
+  }
+  return geometry;
+}
+
+function computeModelNormals(positions: ArrayLike<number>, indices: ArrayLike<number>): number[] {
+  const normals = new Array<number>(positions.length).fill(0);
+  for (let offset = 0; offset + 2 < indices.length; offset += 3) {
+    const first = indices[offset] * 3;
+    const second = indices[offset + 1] * 3;
+    const third = indices[offset + 2] * 3;
+    const firstX = positions[first] - positions[second];
+    const firstY = positions[first + 1] - positions[second + 1];
+    const firstZ = positions[first + 2] - positions[second + 2];
+    const secondX = positions[third] - positions[second];
+    const secondY = positions[third + 1] - positions[second + 1];
+    const secondZ = positions[third + 2] - positions[second + 2];
+    let x = firstY * secondZ - firstZ * secondY;
+    let y = firstZ * secondX - firstX * secondZ;
+    let z = firstX * secondY - firstY * secondX;
+    const faceLength = Math.hypot(x, y, z) || 1;
+    x /= faceLength;
+    y /= faceLength;
+    z /= faceLength;
+    normals[first] += x;
+    normals[first + 1] += y;
+    normals[first + 2] += z;
+    normals[second] += x;
+    normals[second + 1] += y;
+    normals[second + 2] += z;
+    normals[third] += x;
+    normals[third + 1] += y;
+    normals[third + 2] += z;
+  }
+  for (let offset = 0; offset < normals.length; offset += 3) {
+    const length = Math.hypot(normals[offset], normals[offset + 1], normals[offset + 2]) || 1;
+    normals[offset] /= length;
+    normals[offset + 1] /= length;
+    normals[offset + 2] /= length;
+  }
+  return normals;
 }
 
 interface Md5Vertex {
@@ -206,17 +253,33 @@ export function interpolateModelGeometry(current: ModelGeometry, next: ModelGeom
     }
     const target = meshes[meshIndex];
     const positions = target?.positions.length === mesh.positions.length ? target.positions : new Array<number>(mesh.positions.length);
+    const hasNormals = mesh.normals?.length === mesh.positions.length && nextMesh.normals?.length === nextMesh.positions.length;
+    const normals = hasNormals
+      ? target?.normals?.length === mesh.positions.length ? target.normals : new Array<number>(mesh.positions.length)
+      : undefined;
     for (let index = 0; index < positions.length; index++) {
       positions[index] = mesh.positions[index] + (nextMesh.positions[index] - mesh.positions[index]) * amount;
+    }
+    if (normals) {
+      for (let index = 0; index < normals.length; index += 3) {
+        const x = mesh.normals![index] + (nextMesh.normals![index] - mesh.normals![index]) * amount;
+        const y = mesh.normals![index + 1] + (nextMesh.normals![index + 1] - mesh.normals![index + 1]) * amount;
+        const z = mesh.normals![index + 2] + (nextMesh.normals![index + 2] - mesh.normals![index + 2]) * amount;
+        const length = Math.hypot(x, y, z) || 1;
+        normals[index] = x / length;
+        normals[index + 1] = y / length;
+        normals[index + 2] = z / length;
+      }
     }
     if (target && target !== current.meshes[meshIndex] && target !== next.meshes[meshIndex]) {
       target.name = mesh.name;
       target.positions = positions;
+      target.normals = normals;
       target.uvs = mesh.uvs;
       target.indices = mesh.indices;
       target.bones = mesh.bones;
       meshes[meshIndex] = target;
-    } else meshes[meshIndex] = { ...mesh, positions };
+    } else meshes[meshIndex] = { ...mesh, positions, normals };
   }
   if (reusable) {
     if (reusable.meshes !== meshes) reusable.meshes = meshes;

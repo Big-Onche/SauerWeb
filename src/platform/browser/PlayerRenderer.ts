@@ -12,7 +12,8 @@ import { packageAssetUrl } from "../../assets/TextureResolver";
 import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
 import { parseRagdoll, poseRagdollVertices, RAGDOLL_FADE, RAGDOLL_MILLIS, RagdollSimulation, type RagdollCollider,
   type RagdollSkeleton } from "../../engine/ragdoll";
-import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseIqmParts, prepareMd5Animation, prepareMd5Model,
+import { ensureModelGeometryNormals, interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseIqmParts, prepareMd5Animation,
+  prepareMd5Model,
   skinMd5Model, skinMd5ModelParts,
   type ModelGeometry, type ModelGeometryMesh, type ModelJointPose, type PreparedMd5Animation,
   type PreparedMd5Model } from "../../engine/rendermodel";
@@ -560,7 +561,8 @@ export class PlayerRenderer {
     geometry.meshes.forEach((source, index) => {
       const local = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
       const positions = attachModelPositions(local, attachment, playerTranslate, playerScale);
-      this.applyMesh(instance.weaponMeshes[index], source, positions);
+      const normals = source.normals ? attachModelNormals(source.normals, attachment) : undefined;
+      this.applyMesh(instance.weaponMeshes[index], source, positions, normals);
     });
     const muzzleBone = asset.tags?.tag_muzzle;
     const muzzle = geometry.joints?.find((joint) => joint.name === muzzleBone);
@@ -599,6 +601,12 @@ export class PlayerRenderer {
           part.spec.endOffset));
       }
     }
+    const key = `${asset.geometryPath}:parts:${parts.map((part, index) => {
+      const position = positions[index];
+      return `${part.spec.path}:${position.frame}:${position.nextFrame}:${position.interpolation}:${part.roots.join(",")}`;
+    }).join("|")}`;
+    const cached = this.cachedGeometryFrame(key);
+    if (cached) return cached;
     let current: ModelGeometry;
     if (asset.format === "MD5") {
       const modelSource = await this.fetchText(asset.geometryPath!);
@@ -624,6 +632,8 @@ export class PlayerRenderer {
         frame: positions[index].frame, nextFrame: positions[index].nextFrame, interpolation: positions[index].interpolation,
         roots: part.roots }))));
     } else return this.geometry(asset, undefined, undefined, undefined, { frame: 0, nextFrame: 0, interpolation: 0 }, instance);
+    ensureModelGeometryNormals(current);
+    this.storeGeometryFrame(key, current);
     return current;
   }
 
@@ -657,13 +667,18 @@ export class PlayerRenderer {
     }
     else throw new Error(`Player model format ${asset.format ?? "unknown"} is not supported.`);
     if (generation !== this.geometryGeneration) return geometry;
+    ensureModelGeometryNormals(geometry);
+    this.storeGeometryFrame(key, geometry);
+    return geometry;
+  }
+
+  private storeGeometryFrame(key: string, geometry: ModelGeometry): void {
     this.geometryFrames.set(key, geometry);
     while (this.geometryFrames.size > MAX_GEOMETRY_FRAME_CACHE) {
       const oldest = this.geometryFrames.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       this.geometryFrames.delete(oldest);
     }
-    return geometry;
   }
 
   private cachedGeometryFrame(key: string): ModelGeometry | undefined {
@@ -702,7 +717,8 @@ export class PlayerRenderer {
           buffers.positions[offset + 1] = (source.positions[offset + 1] + translate[2]) * scale;
           buffers.positions[offset + 2] = (source.positions[offset + 2] + translate[1]) * scale;
         }
-        VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
+        if (source.normals?.length === buffers.normals.length) writePlayerNormals(buffers.normals, source.normals);
+        else VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
         if (created) {
           const data = new VertexData();
           data.positions = buffers.positions;
@@ -719,14 +735,15 @@ export class PlayerRenderer {
     });
   }
 
-  private applyMesh(mesh: Mesh, source: ModelGeometryMesh, positions: number[]): void {
+  private applyMesh(mesh: Mesh, source: ModelGeometryMesh, positions: number[], normals?: number[]): void {
     let buffers = this.meshVertexBuffers.get(mesh);
     if (buffers && buffers.positions.length === positions.length) {
-      this.updateMeshVertices(mesh, positions);
+      this.updateMeshVertices(mesh, positions, normals);
       return;
     }
     buffers = { positions: Float32Array.from(positions), normals: new Float32Array(positions.length), indices: source.indices };
-    VertexData.ComputeNormals(buffers.positions, source.indices, buffers.normals);
+    if (normals?.length === buffers.normals.length) buffers.normals.set(normals);
+    else VertexData.ComputeNormals(buffers.positions, source.indices, buffers.normals);
     const data = new VertexData();
     data.positions = buffers.positions;
     data.indices = source.indices;
@@ -736,11 +753,12 @@ export class PlayerRenderer {
     this.meshVertexBuffers.set(mesh, buffers);
   }
 
-  private updateMeshVertices(mesh: Mesh, positions: ArrayLike<number>): void {
+  private updateMeshVertices(mesh: Mesh, positions: ArrayLike<number>, normals?: ArrayLike<number>): void {
     const buffers = this.meshVertexBuffers.get(mesh);
     if (!buffers || buffers.positions.length !== positions.length) return;
     buffers.positions.set(positions);
-    VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
+    if (normals?.length === buffers.normals.length) buffers.normals.set(normals);
+    else VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
     mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, true);
     mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
   }
@@ -826,6 +844,14 @@ function translateAndScale(positions: number[], translate: [number, number, numb
   return result;
 }
 
+function writePlayerNormals(target: Float32Array, source: number[]): void {
+  for (let index = 0; index < target.length; index += 3) {
+    target[index] = -source[index];
+    target[index + 1] = -source[index + 2];
+    target[index + 2] = -source[index + 1];
+  }
+}
+
 function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
@@ -848,6 +874,17 @@ function attachModelPositions(positions: number[], attachment: ModelJointPose, p
     const attached = attachModelPosition(new Vector3(positions[index], positions[index + 1], positions[index + 2]), attachment,
       playerTranslate, playerScale);
     result.splice(index, 3, attached.x, attached.y, attached.z);
+  }
+  return result;
+}
+
+function attachModelNormals(normals: number[], attachment: ModelJointPose): number[] {
+  const result = new Array<number>(normals.length);
+  for (let index = 0; index < normals.length; index += 3) {
+    const attached = rotateModelPosition(new Vector3(normals[index], normals[index + 1], normals[index + 2]), attachment.orientation);
+    result[index] = attached.x;
+    result[index + 1] = attached.y;
+    result[index + 2] = attached.z;
   }
   return result;
 }

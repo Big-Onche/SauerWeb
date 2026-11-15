@@ -12,8 +12,8 @@ import type { Scene } from "@babylonjs/core/scene";
 import { packageAssetUrl } from "../../assets/TextureResolver";
 import type { HudGunAsset, MapModelAsset, MapModelSkin } from "../../assets/types";
 import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
-import { interpolateModelGeometry, prepareMd5Animation, prepareMd5Model, skinMd5Model, type ModelGeometry, type ModelGeometryMesh,
-  type ModelJointPose, type PreparedMd5Animation, type PreparedMd5Model } from "../../engine/rendermodel";
+import { ensureModelGeometryNormals, interpolateModelGeometry, prepareMd5Animation, prepareMd5Model, skinMd5Model, type ModelGeometry,
+  type ModelGeometryMesh, type ModelJointPose, type PreparedMd5Animation, type PreparedMd5Model } from "../../engine/rendermodel";
 import type { WeaponController } from "../../fpsgame/weapon/WeaponController";
 import { Gun, WEAPONS } from "../../fpsgame/weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponEvents } from "../../fpsgame/weapon/WeaponEvents";
@@ -171,7 +171,7 @@ export class WeaponRenderer {
       response.text(), animationResponse.text(), shootAnimationResponse.text(),
     ]);
     const model = prepareMd5Model(geometrySource);
-    const idleGeometry = skinMd5Model(model, prepareMd5Animation(idleAnimationSource, adjustments));
+    const idleGeometry = ensureModelGeometryNormals(skinMd5Model(model, prepareMd5Animation(idleAnimationSource, adjustments)));
     const shootAnimation = prepareMd5Animation(shootAnimationSource, adjustments);
     return {
       key: `${gun}:${part}`,
@@ -199,7 +199,8 @@ export class WeaponRenderer {
     // The horizontal HUD mirror adds a second reflection, restoring the MD5 source winding.
     const indices = source.indices.slice();
     data.indices = indices;
-    VertexData.ComputeNormals(buffers.positions, indices, buffers.normals);
+    if (source.normals) this.writeHudNormals(buffers.normals, source.normals, asset, attachment);
+    else VertexData.ComputeNormals(buffers.positions, indices, buffers.normals);
     data.normals = buffers.normals;
     data.applyToMesh(mesh, true);
     this.meshVertexBuffers.set(mesh, buffers);
@@ -218,7 +219,8 @@ export class WeaponRenderer {
       const buffers = mesh && this.meshVertexBuffers.get(mesh);
       if (!mesh || !buffers || buffers.positions.length !== source.positions.length) return;
       this.writeHudPositions(buffers.positions, source.positions, component.asset, attachment);
-      VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
+      if (source.normals) this.writeHudNormals(buffers.normals, source.normals, component.asset, attachment);
+      else VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
       mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, true);
       mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
     });
@@ -242,6 +244,29 @@ export class WeaponRenderer {
       target[index + 1] = (attached[1] + translate[2]) * scale * fovCompensation;
       // Babylon's right-handed camera looks down local -Z, matching Sauerbraten/OpenGL camera-space -Z.
       target[index + 2] = -(attached[0] + translate[0]) * scale;
+    }
+  }
+
+  private writeHudNormals(target: Float32Array, source: number[], asset: MapModelAsset, attachment?: ModelJointPose): void {
+    const fovCompensation = Math.tan(this.camera.fov / 2) / Math.tan(65 * Math.PI / 360);
+    const scale = asset.scale ?? 0.75;
+    const inverseHorizontal = 1 / (scale * fovCompensation || 1);
+    const inverseDepth = 1 / (scale || 1);
+    const attached: [number, number, number] = [0, 0, 0];
+    for (let index = 0; index < target.length; index += 3) {
+      if (attachment) rotateHudPoint(source, index, attachment, attached);
+      else {
+        attached[0] = source[index];
+        attached[1] = source[index + 1];
+        attached[2] = source[index + 2];
+      }
+      const x = attached[2] * inverseHorizontal;
+      const y = attached[1] * inverseHorizontal;
+      const z = -attached[0] * inverseDepth;
+      const length = Math.hypot(x, y, z) || 1;
+      target[index] = x / length;
+      target[index + 1] = y / length;
+      target[index + 2] = z / length;
     }
   }
 
@@ -325,7 +350,7 @@ export class WeaponRenderer {
       this.geometryFrames.set(key, cached);
       return cached;
     }
-    const geometry = skinMd5Model(component.model, component.shootAnimation, frame);
+    const geometry = ensureModelGeometryNormals(skinMd5Model(component.model, component.shootAnimation, frame));
     this.geometryFrames.set(key, geometry);
     while (this.geometryFrames.size > MAX_HUD_GEOMETRY_FRAMES) {
       const oldest = this.geometryFrames.keys().next().value as string | undefined;
@@ -388,13 +413,22 @@ function selectHudSkin(skins: MapModelSkin[], meshName: string): MapModelSkin | 
 
 function attachHudPoint(positions: number[], index: number, attachment: ModelJointPose,
                         result: [number, number, number] = [0, 0, 0]): [number, number, number] {
+  rotateHudPoint(positions, index, attachment, result);
+  result[0] += attachment.position[0];
+  result[1] += attachment.position[2];
+  result[2] += attachment.position[1];
+  return result;
+}
+
+function rotateHudPoint(positions: number[], index: number, attachment: ModelJointPose,
+                        result: [number, number, number] = [0, 0, 0]): [number, number, number] {
   const point: [number, number, number] = [positions[index], positions[index + 2], positions[index + 1]];
   const [x, y, z, w] = attachment.orientation;
   const tx = 2 * (y * point[2] - z * point[1]);
   const ty = 2 * (z * point[0] - x * point[2]);
   const tz = 2 * (x * point[1] - y * point[0]);
-  result[0] = point[0] + w * tx + y * tz - z * ty + attachment.position[0];
-  result[1] = point[2] + w * tz + x * ty - y * tx + attachment.position[2];
-  result[2] = point[1] + w * ty + z * tx - x * tz + attachment.position[1];
+  result[0] = point[0] + w * tx + y * tz - z * ty;
+  result[1] = point[2] + w * tz + x * ty - y * tx;
+  result[2] = point[1] + w * ty + z * tx - x * tz;
   return result;
 }

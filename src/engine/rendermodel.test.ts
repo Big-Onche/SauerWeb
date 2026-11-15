@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { describe, expect, it } from "vitest";
 import { loadSauerbratenDirectory } from "../../sauerbratenDirectory";
-import { interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseIqmParts, parseMd2, parseMd5,
+import { ensureModelGeometryNormals, interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseIqmParts, parseMd2, parseMd5,
   prepareMd5Animation, prepareMd5Model, skinMd5Model, skinMd5ModelParts } from "./rendermodel";
 
 const modelsDirectory = path.join(loadSauerbratenDirectory("test"), "packages", "models");
@@ -94,6 +95,22 @@ describe("MD5 model loading", () => {
     expect(interpolated.meshes[0].positions).not.toEqual(next.meshes[0].positions);
   });
 
+  it("generates reusable unit normals for cached animation frames", () => {
+    const directory = path.join(modelsDirectory, "mrfixit");
+    const mesh = fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8");
+    const geometry = ensureModelGeometryNormals(parseMd5(mesh));
+    const normals = geometry.meshes[0].normals!;
+    const expected = new Array<number>(normals.length);
+    VertexData.ComputeNormals(geometry.meshes[0].positions, geometry.meshes[0].indices, expected);
+
+    expect(normals).toHaveLength(geometry.meshes[0].positions.length);
+    normals.forEach((normal, index) => expect(normal).toBeCloseTo(expected[index]));
+    expect(ensureModelGeometryNormals(geometry).meshes[0].normals).toBe(normals);
+    for (let index = 0; index < normals.length; index += 3) {
+      expect(Math.hypot(normals[index], normals[index + 1], normals[index + 2])).toBeCloseTo(1);
+    }
+  });
+
   it("combines Sauerbraten locomotion and attack animation parts", () => {
     const directory = path.join(modelsDirectory, "mrfixit");
     const model = prepareMd5Model(fs.readFileSync(path.join(directory, "mrfixit.md5mesh"), "utf8"));
@@ -114,12 +131,16 @@ describe("MD5 model loading", () => {
     const animation = fs.readFileSync(path.join(directory, "forward.md5anim"), "utf8");
     const current = parseMd5(mesh, animation, [], 0);
     const next = parseMd5(mesh, animation, [], 1);
+    ensureModelGeometryNormals(current);
+    ensureModelGeometryNormals(next);
     const reusable = interpolateModelGeometry(current, next, 0.25);
     const positions = reusable.meshes[0].positions;
+    const normals = reusable.meshes[0].normals;
     const joints = reusable.joints;
 
     expect(interpolateModelGeometry(current, next, 0.75, reusable)).toBe(reusable);
     expect(reusable.meshes[0].positions).toBe(positions);
+    expect(reusable.meshes[0].normals).toBe(normals);
     expect(reusable.joints).toBe(joints);
     expect(reusable.meshes[0].positions[0]).toBeCloseTo(current.meshes[0].positions[0] +
       (next.meshes[0].positions[0] - current.meshes[0].positions[0]) * 0.75);
