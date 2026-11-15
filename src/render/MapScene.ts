@@ -243,6 +243,7 @@ export class MapScene {
   private particlesStartedAt = 0;
   private drawPhaseStartedAt = 0;
   private readonly botUpdatePlayers: Damageable[] = [];
+  private readonly dynamicCollisionEntities: DynamicEntityCollision[] = [];
   private readonly onWaterQualityChanged = (event: Event): void => {
     const quality = (event as CustomEvent<WaterQuality>).detail;
     if (quality >= 0 && quality <= 3) this.setWaterQuality(quality);
@@ -283,12 +284,8 @@ export class MapScene {
     this.initializeRendererProfiling();
     this.physics.raycastPerformanceRecorder = (milliseconds) => this.profiler.recordRaycast(milliseconds);
     this.physics.raycastPerformanceEnabled = () => this.profiler.enabled;
-    this.physics.setDynamicEntities(() => this.dynamicEntities());
-    this.bots.performanceRecorder = (phase, operation) => {
-      if (!this.profiler.enabled) {
-        operation();
-        return;
-      }
+    this.physics.setDynamicEntities(() => this.dynamicCollisionEntities);
+    if (this.profiler.enabled) this.bots.performanceRecorder = (phase, operation) => {
       const startedAt = performance.now();
       try {
         operation();
@@ -1726,6 +1723,7 @@ export class MapScene {
     for (const [clientNumber, player] of this.fpsClient.multiplayer.players) {
       if (clientNumber !== this.fpsClient.multiplayer.clientNumber) interpolateNetworkEntity(player, nowMilliseconds);
     }
+    this.refreshDynamicCollisionEntities();
     const dead = this.isLocalPlayerDead(), wasDead = this.localDeadAt > 0;
     if (dead && !wasDead) this.localDeadAt = nowMilliseconds;
     else if (!dead && wasDead) this.localDeadAt = 0;
@@ -1988,19 +1986,21 @@ export class MapScene {
     return belowUpper * belowUpper / (aboveLower * aboveLower + belowUpper * belowUpper);
   }
 
-  private *dynamicEntities(): IterableIterator<DynamicEntityCollision> {
+  private refreshDynamicCollisionEntities(): void {
     const multiplayer = this.fpsClient.multiplayer;
-    if (this.physics.player.clientState === ClientState.Alive) yield this.physics.player;
+    const entities = this.dynamicCollisionEntities;
+    entities.length = 0;
+    if (this.physics.player.clientState === ClientState.Alive) entities.push(this.physics.player);
     for (const [clientNumber, player] of multiplayer.players) {
       if (clientNumber === multiplayer.clientNumber || player.state !== ClientState.Alive || !player.positionReady) continue;
       const bot = this.bots.bots.get(clientNumber);
       if (bot && isBotLocallySimulated(bot.ownerNumber, multiplayer.clientNumber)) continue;
-      yield player;
+      entities.push(player);
     }
     for (const bot of this.bots.bots.values()) {
       if (bot.clientState !== ClientState.Alive || !bot.alive ||
           multiplayer.players.has(bot.clientNumber) && !isBotLocallySimulated(bot.ownerNumber, multiplayer.clientNumber)) continue;
-      yield bot;
+      entities.push(bot);
     }
   }
 

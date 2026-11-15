@@ -470,10 +470,16 @@ export class MultiplayerClient extends EventTarget {
       lifeSequence: bot.lifeSequence, frags: bot.frags, deaths: bot.deaths, flags: bot.flags, tokens: bot.tokens,
       selectedGun: bot.selectedGun, ammo: bot.ammo,
       lastAction: bot.lastAction, gunWait: bot.gunWait, lastAttackGun: bot.lastAttackGun, lastPain: bot.lastPain, deadAt: bot.deadAt,
-      position: copyVec3(bot.position), velocity: copyVec3(bot.velocity), yaw: bot.yaw, pitch: bot.pitch, roll: bot.roll, move: bot.move,
-      strafe: bot.strafe, physicsState: bot.physicsState, state: bot.clientState, alive: bot.alive, health: bot.health,
+      yaw: bot.yaw, pitch: bot.pitch, roll: bot.roll, move: bot.move, strafe: bot.strafe, physicsState: bot.physicsState,
+      state: bot.clientState, alive: bot.alive, health: bot.health,
       maxHealth: bot.maxHealth, armour: bot.armour, armourType: bot.armourType,
     });
+    player.position.x = bot.position.x;
+    player.position.y = bot.position.y;
+    player.position.z = bot.position.z;
+    player.velocity.x = bot.velocity.x;
+    player.velocity.y = bot.velocity.y;
+    player.velocity.z = bot.velocity.z;
   }
 
   clearLocalBots(): void {

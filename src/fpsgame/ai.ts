@@ -127,6 +127,12 @@ export class BotManager {
   private readonly damageTargets: Damageable[] = [];
   private readonly enemyTargets: Damageable[] = [];
   private readonly teammateTargets: Damageable[] = [];
+  private interactiveEntities: readonly RegisteredMapEntity[] = [];
+  private itemEntities: readonly RegisteredMapEntity[] = [];
+  private flagEntities: readonly RegisteredMapEntity[] = [];
+  private captureBases: readonly RegisteredMapEntity[] = [];
+  private playerStarts: readonly RegisteredMapEntity[] = [];
+  private readonly teleportDestinations = new Map<number, RegisteredMapEntity>();
 
   constructor(private readonly physics: PhysicsSimulation, private readonly localPlayer: Damageable, private readonly callbacks: BotCallbacks = {},
               random: () => number = Math.random) {
@@ -136,6 +142,7 @@ export class BotManager {
 
   async setMap(mapName: string, entities: readonly RegisteredMapEntity[], gameMode: number): Promise<void> {
     this.entities = entities;
+    this.indexEntities(entities);
     this.gameMode = gameMode;
     this.waypoints.clearwaypoints(true);
     if (!await this.waypoints.loadwaypoints(mapName)) this.waypoints.seedwaypoints(entities);
@@ -285,16 +292,19 @@ export class BotManager {
     damageTargets.push(this.localPlayer);
     for (const player of players) damageTargets.push(player);
     for (const bot of actors) damageTargets.push(bot);
-    for (const bot of actors) replaceTargets(bot.weaponSystem.targets, damageTargets);
+    for (const bot of actors) {
+      if (!sameTargets(bot.weaponSystem.targets, damageTargets)) replaceTargets(bot.weaponSystem.targets, damageTargets);
+    }
     this.iteration = (this.iteration + 1) % actors.length;
+    const delayedCtf = gameModeHas(this.gameMode, GameModeFlag.Hold) || gameModeHas(this.gameMode, GameModeFlag.Protect) &&
+      gameModeHas(this.gameMode, GameModeFlag.Efficiency);
+    const delayedCapture = gameModeHas(this.gameMode, GameModeFlag.Capture) && !gameModeHas(this.gameMode, GameModeFlag.Regen);
+    const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) || delayedCtf || delayedCapture ? 5000 : 500;
     for (let index = 0; index < actors.length; index++) {
       const bot = actors[index];
-      this.profile("weapons", () => this.syncWeaponState(bot));
+      if (this.performanceRecorder) this.profile("weapons", () => this.syncWeaponState(bot));
+      else this.syncWeaponState(bot);
       if (!bot.alive) {
-        const delayedCtf = gameModeHas(this.gameMode, GameModeFlag.Hold) || gameModeHas(this.gameMode, GameModeFlag.Protect) &&
-          gameModeHas(this.gameMode, GameModeFlag.Efficiency);
-        const delayedCapture = gameModeHas(this.gameMode, GameModeFlag.Capture) && !gameModeHas(this.gameMode, GameModeFlag.Regen);
-        const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) || delayedCtf || delayedCapture ? 5000 : 500;
         if (now - bot.deadAt >= respawnDelay && bot.respawned !== bot.lifeSequence) {
           bot.respawned = bot.lifeSequence;
           if (bot.ownerNumber >= 0) this.callbacks.spawnRequest?.(bot);
@@ -302,18 +312,21 @@ export class BotManager {
         }
         continue;
       }
-      this.profile("ai", () => {
+      if (this.performanceRecorder) {
+        this.profile("ai", () => { this.navigate(bot); this.think(bot, now, index === this.iteration, players, localAlive); });
+        this.profile("physics", () => this.physics.simulateEntity(bot, Math.max(1, elapsed)));
+        this.profile("ai", () => { this.timeouts(bot, elapsed, now); this.checkItems(bot, now); });
+      } else {
         this.navigate(bot);
         this.think(bot, now, index === this.iteration, players, localAlive);
-      });
-      this.profile("physics", () => this.physics.simulateEntity(bot, Math.max(1, elapsed)));
-      this.profile("ai", () => {
+        this.physics.simulateEntity(bot, Math.max(1, elapsed));
         this.timeouts(bot, elapsed, now);
         this.checkItems(bot, now);
-      });
+      }
       let fired = false;
       const hadQuad = bot.weaponSystem.controller.quadMilliseconds > 0;
-      this.profile("weapons", () => { fired = bot.weaponSystem.update(now, bot.ai.target); });
+      if (this.performanceRecorder) this.profile("weapons", () => { fired = bot.weaponSystem.update(now, bot.ai.target); });
+      else fired = bot.weaponSystem.update(now, bot.ai.target);
       if (hadQuad && bot.weaponSystem.controller.quadMilliseconds <= 0) this.callbacks.quadExpired?.(bot);
       if (fired && bot.selectedGun === Gun.Pistol && bot.skill <= 100) {
         const controller = bot.weaponSystem.controller;
@@ -368,14 +381,14 @@ export class BotManager {
 
   private checkItems(bot: BotActor, now: number): void {
     const feet = feetPosition(bot);
-    for (const entity of this.entities) {
+    for (const entity of this.interactiveEntities) {
       const radius = entity.type === 19 ? 16 : 12;
-      if (distance(feet, entity.position) >= radius) continue;
+      if (squaredDistance(feet, entity.position) >= radius * radius) continue;
       const cooldownKey = `${bot.clientNumber}:${entity.index}`;
       if (now < (this.itemCooldowns.get(cooldownKey) ?? 0)) continue;
       if (entity.type === 19) {
         const tag = entity.attributes[0] ?? 0;
-        const destination = this.entities.find((candidate) => candidate.type === 20 && (candidate.attributes[1] ?? 0) === tag);
+        const destination = this.teleportDestinations.get(tag);
         if (!destination) continue;
         bot.yaw = destination.attributes[0] ?? bot.yaw;
         bot.velocity = { x: 0, y: 0, z: 0 };
@@ -432,8 +445,7 @@ export class BotManager {
           score: distance(bot.position, teammate.position) * (assigned + 1) / (this.hasGoodAmmo(bot) ? 100 : 10) });
       }
     }
-    for (const entity of this.entities) {
-      if (entity.type < 8 || entity.type > 18) continue;
+    for (const entity of this.itemEntities) {
       if (this.callbacks.itemAvailable && !this.callbacks.itemAvailable(bot, entity.index)) continue;
       const node = this.waypoints.closestwaypoint(entity.position, SIGHTMIN, true);
       if (!this.waypoints.iswaypoint(node)) continue;
@@ -461,8 +473,7 @@ export class BotManager {
   private findObjectiveInterests(bot: BotActor, interests: AiInterest[]): void {
     if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
       const team = bot.team === "good" ? 1 : bot.team === "evil" ? 2 : 0;
-      for (const flag of this.entities) {
-        if (flag.typeName !== "flag") continue;
+      for (const flag of this.flagEntities) {
         const flagTeam = flag.attributes[1] ?? 0, own = flagTeam === team;
         const protect = gameModeHas(this.gameMode, GameModeFlag.Protect), hold = gameModeHas(this.gameMode, GameModeFlag.Hold);
         const type = hold || own === protect ? AiStateType.Pursue : AiStateType.Defend;
@@ -477,8 +488,7 @@ export class BotManager {
           score: distance(bot.position, flag.position) * (assigned + 1) / (type === AiStateType.Pursue ? 10 : 4) });
       }
     } else if (gameModeHas(this.gameMode, GameModeFlag.Capture)) {
-      for (const base of this.entities) {
-        if (base.type !== 24) continue;
+      for (const base of this.captureBases) {
         const node = this.waypoints.closestwaypoint(base.position, SIGHTMIN, true);
         if (!this.waypoints.iswaypoint(node)) continue;
         let assigned = 0;
@@ -490,8 +500,7 @@ export class BotManager {
           score: distance(bot.position, base.position) * (assigned + 1) / 6 });
       }
     } else if (gameModeHas(this.gameMode, GameModeFlag.Collect)) {
-      for (const base of this.entities) {
-        if (base.typeName !== "flag") continue;
+      for (const base of this.flagEntities) {
         const node = this.waypoints.closestwaypoint(base.position, SIGHTMIN, true);
         if (this.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Pursue, node, target: base.index,
           targetType: AiTargetType.Affinity, score: distance(bot.position, base.position) / 8 });
@@ -673,8 +682,7 @@ export class BotManager {
     bot.ai.targetYaw = desired.yaw; bot.ai.targetPitch = desired.pitch;
     if (!move) return;
     const relative = normalizeAngle(desired.yaw - bot.yaw), direction = Math.floor((relative + 22.5) / 45) & 7;
-    const directions: Array<[-1 | 0 | 1, -1 | 0 | 1]> = [[1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1], [0, 1], [1, 1]];
-    [bot.move, bot.strafe] = directions[direction];
+    [bot.move, bot.strafe] = MOVE_DIRECTIONS[direction];
   }
 
   private getaimpos(bot: BotActor, enemy: Damageable, now: number): Vec3 {
@@ -713,9 +721,8 @@ export class BotManager {
     const inventory = bot.weaponSystem.controller.inventory;
     if (this.forcegun >= Gun.Fist && this.forcegun <= Gun.Pistol && inventory.hasAmmo(this.forcegun)) inventory.select(this.forcegun);
     else {
-      const preferences = [Gun.Chaingun, Gun.Rocket, Gun.Shotgun, Gun.Rifle, Gun.Grenade, Gun.Pistol, Gun.Fist];
-      const selected = preferences.find((gun) => inventory.hasAmmo(gun) && distanceToEnemy >= Math.max(WEAPONS[gun].explosionRadius, 2) &&
-        distanceToEnemy <= WEAPONS[gun].range + 4);
+      const selected = WEAPON_PREFERENCES.find((gun) => inventory.hasAmmo(gun) &&
+        distanceToEnemy >= Math.max(WEAPONS[gun].explosionRadius, 2) && distanceToEnemy <= WEAPONS[gun].range + 4);
       if (selected !== undefined) inventory.select(selected);
     }
     bot.selectedGun = inventory.selectedGun;
@@ -756,8 +763,8 @@ export class BotManager {
     const spawnGroup = gameModeHas(this.gameMode, GameModeFlag.Hold) ? 0 : team === "good" ? 1 : team === "evil" ? 2 : 0;
     const grouped = gameModeHas(this.gameMode, GameModeFlag.Ctf) && !gameModeHas(this.gameMode, GameModeFlag.Hold) ||
       gameModeHas(this.gameMode, GameModeFlag.Collect);
-    const candidates = this.entities.filter((entity) => entity.type === 3 && (!grouped || (entity.attributes[1] ?? 0) === spawnGroup));
-    const starts = candidates.length ? candidates : this.entities.filter((entity) => entity.type === 3);
+    const candidates = grouped ? this.playerStarts.filter((entity) => (entity.attributes[1] ?? 0) === spawnGroup) : this.playerStarts;
+    const starts = candidates.length ? candidates : this.playerStarts;
     const occupants: Damageable[] = [this.localPlayer, ...this.bots.values()].filter((actor) => actor.alive);
     const safest = starts.map((start) => ({ start, distance: (occupants.length
       ? Math.min(...occupants.map((actor) => distance(start.position, actor.position))) : Number.POSITIVE_INFINITY) *
@@ -793,6 +800,20 @@ export class BotManager {
     bot.lastAttackGun = controller.lastAttackGun;
   }
 
+  private indexEntities(entities: readonly RegisteredMapEntity[]): void {
+    this.interactiveEntities = entities.filter((entity) => entity.type >= 8 && entity.type <= 19 || entity.type === 23);
+    this.itemEntities = entities.filter((entity) => entity.type >= 8 && entity.type <= 18);
+    this.flagEntities = entities.filter((entity) => entity.typeName === "flag");
+    this.captureBases = entities.filter((entity) => entity.type === 24);
+    this.playerStarts = entities.filter((entity) => entity.type === 3);
+    this.teleportDestinations.clear();
+    for (const entity of entities) {
+      if (entity.type !== 20) continue;
+      const tag = entity.attributes[1] ?? 0;
+      if (!this.teleportDestinations.has(tag)) this.teleportDestinations.set(tag, entity);
+    }
+  }
+
   private handleWeaponEvent(bot: BotActor, event: WeaponEvent): void {
     this.syncWeaponState(bot);
     if (event.type === "damage" && "ai" in event.target) this.damaged(event.target as BotActor, bot);
@@ -818,6 +839,16 @@ function replaceTargets(target: Damageable[], source: readonly Damageable[]): vo
   for (const actor of source) target.push(actor);
 }
 
+function sameTargets(left: readonly Damageable[], right: readonly Damageable[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) if (left[index] !== right[index]) return false;
+  return true;
+}
+
+const MOVE_DIRECTIONS: ReadonlyArray<readonly [-1 | 0 | 1, -1 | 0 | 1]> =
+  [[1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1], [0, 1], [1, 1]];
+const WEAPON_PREFERENCES = [Gun.Chaingun, Gun.Rocket, Gun.Shotgun, Gun.Rifle, Gun.Grenade, Gun.Pistol, Gun.Fist] as const;
+
 function createAiInfo(now: number, skill: number): AiInfo {
   return {
     state: [{ type: AiStateType.Wait, millis: now, targetType: AiTargetType.Node, target: -1, idle: 0, override: false }], route: [],
@@ -835,6 +866,10 @@ export function viewfieldy(skill = 101): number { return viewfieldx(skill) * 3 /
 
 function feetPosition(actor: PhysicsEntity): Vec3 { return { ...actor.position, z: actor.position.z - actor.eyeHeight }; }
 function distance(left: Vec3, right: Vec3): number { return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z); }
+function squaredDistance(left: Vec3, right: Vec3): number {
+  const x = left.x - right.x, y = left.y - right.y, z = left.z - right.z;
+  return x * x + y * y + z * z;
+}
 function clamp(value: number, minimum: number, maximum: number): number { return Math.min(maximum, Math.max(minimum, value)); }
 function normalizeAngle(angle: number): number { return (angle % 360 + 360) % 360; }
 function shortestAngle(angle: number): number { const normalized = normalizeAngle(angle); return normalized > 180 ? normalized - 360 : normalized; }
