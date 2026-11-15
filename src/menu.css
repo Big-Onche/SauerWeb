@@ -212,6 +212,15 @@ button { color: inherit; }
     grid-template: 129px 1px 94px 42px / 315px 1px 338px;
     grid-template-areas: "logo-space rule actions" "horizontal rule actions" "identity rule actions" "status rule actions";
     column-gap: 24px; align-items: center; width: 760px; height: 288px; margin: 0; padding: 12px 32px 10px 26px; }
+  .main-menu-stage .gui-skin > .skin-top-left { width: calc(100% + .5px); height: calc(100% + .5px); }
+  .main-menu-stage .gui-skin > .skin-top { width: calc(100% + 1px); height: calc(100% + .5px); margin-left: -.5px; }
+  .main-menu-stage .gui-skin > .skin-top-right { width: calc(100% + .5px); height: calc(100% + .5px); margin-left: -.5px; }
+  .main-menu-stage .gui-skin > .skin-left { width: calc(100% + .5px); height: calc(100% + 1px); margin-top: -.5px; }
+  .main-menu-stage .gui-skin > .skin-center { width: calc(100% + 1px); height: calc(100% + 1px); margin: -.5px; }
+  .main-menu-stage .gui-skin > .skin-right { width: calc(100% + .5px); height: calc(100% + 1px); margin-top: -.5px; margin-left: -.5px; }
+  .main-menu-stage .gui-skin > .skin-bottom-left { width: calc(100% + .5px); height: calc(100% + .5px); margin-top: -.5px; }
+  .main-menu-stage .gui-skin > .skin-bottom { width: calc(100% + 1px); height: calc(100% + .5px); margin-top: -.5px; margin-left: -.5px; }
+  .main-menu-stage .gui-skin > .skin-bottom-right { width: calc(100% + .5px); height: calc(100% + .5px); margin-top: -.5px; margin-left: -.5px; }
   .main-menu-stage .identity-row { grid-area: identity; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; margin: 0; }
   .main-menu-stage .portrait { width: 82px; height: 82px; }
   .main-dialog > .menu-rule { grid-area: rule; align-self: stretch; width: 1px; height: auto; margin: 0;
