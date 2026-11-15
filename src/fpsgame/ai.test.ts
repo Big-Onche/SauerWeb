@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PhysicsSimulation } from "../engine/physics";
 import { normalize, subtract } from "../engine/physics/vector";
-import { BotManager, findorientation, type BotActor } from "./ai";
+import { AiStateType, BotManager, findorientation, type BotActor } from "./ai";
 import { createDamageable } from "./weapon/DamageSystem";
 import { lineCylinderIntersection } from "./weapon/HitscanSystem";
 import { Gun } from "./weapon/WeaponDefinitions";
@@ -30,6 +30,29 @@ describe("native bot aiming skill", () => {
     const highError = Math.hypot(highAim.x - enemy.position.x, highAim.y - enemy.position.y);
 
     expect(lowError).toBeGreaterThan(highError * 90);
+  });
+});
+
+describe("native bot route following", () => {
+  it("advances from the closest route node toward the goal instead of steering back into the node underfoot", () => {
+    const { manager, bot } = botAtSkill(100);
+    manager.waypoints.clearwaypoints();
+    const start = manager.waypoints.addwaypoint({ x: 0, y: 0, z: 0 });
+    const current = manager.waypoints.addwaypoint({ x: 10, y: 0, z: 0 });
+    const next = manager.waypoints.addwaypoint({ x: 20, y: 0, z: 0 });
+    const goal = manager.waypoints.addwaypoint({ x: 30, y: 0, z: 0 });
+    manager.waypoints.linkwaypoint(start, current);
+    manager.waypoints.linkwaypoint(current, next);
+    manager.waypoints.linkwaypoint(next, goal);
+    bot.position = { x: 10, y: 0, z: bot.eyeHeight };
+    bot.lastNode = current;
+    bot.ai.route = [goal, next, current];
+
+    Reflect.apply(Reflect.get(manager, "hunt"), manager, [bot, bot.ai.state[0], 1000]);
+
+    expect(bot.ai.targetNode).toBe(next);
+    expect(bot.ai.spot).toEqual(manager.waypoints.waypoints[next].o);
+    expect(bot.ai.state[0].type).toBe(AiStateType.Wait);
   });
 });
 

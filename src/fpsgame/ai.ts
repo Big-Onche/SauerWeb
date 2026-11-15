@@ -7,7 +7,7 @@ import { WeaponSystem } from "./weapon";
 import type { Damageable } from "./weapon/DamageSystem";
 import { Gun, WEAPONS } from "./weapon/WeaponDefinitions";
 import type { WeaponEvent } from "./weapon/WeaponEvents";
-import { JUMPMIN, SIGHTMAX, SIGHTMIN, VIEWMAX, VIEWMIN, WAYPOINTRADIUS, WaypointSystem } from "./waypoint";
+import { CLOSEDIST, FARDIST, JUMPMIN, MINWPDIST, SIGHTMAX, SIGHTMIN, VIEWMAX, VIEWMIN, WAYPOINTRADIUS, WaypointSystem } from "./waypoint";
 
 export const MAXBOTS = 32;
 export enum AiType { None, Bot }
@@ -341,14 +341,23 @@ export class BotManager {
             bot.ai.previousNodes.length = Math.min(6, bot.ai.previousNodes.length);
           }
           bot.ai.route.length = 0;
-        } else if (bot.ai.blockSequence >= 6) this.killed(bot, bot, now);
+        } else if (bot.ai.blockSequence === 4) this.resetNavigation(bot, now, true);
+        else if (bot.ai.blockSequence === 5) this.resetNavigation(bot, now, false);
+        else if (bot.ai.blockSequence >= 6) this.killed(bot, bot, now);
       }
     } else { bot.ai.blockTime = 0; bot.ai.blockSequence = 0; }
     if (bot.ai.targetNode === bot.ai.targetLast) {
       bot.ai.targetTime += elapsed;
       if (bot.ai.targetTime > (bot.ai.targetSequence + 1) * 1000) {
         bot.ai.targetSequence++;
-        if (bot.ai.targetSequence <= 3) bot.ai.route.length = 0;
+        if (bot.ai.targetSequence <= 3) {
+          if (this.waypoints.iswaypoint(bot.ai.targetNode)) {
+            bot.ai.previousNodes.unshift(bot.ai.targetNode);
+            bot.ai.previousNodes.length = Math.min(6, bot.ai.previousNodes.length);
+          }
+          bot.ai.route.length = 0;
+        } else if (bot.ai.targetSequence === 4) this.resetNavigation(bot, now, true);
+        else if (bot.ai.targetSequence === 5) this.resetNavigation(bot, now, false);
         else if (bot.ai.targetSequence >= 6) this.killed(bot, bot, now);
       }
     } else {
@@ -506,14 +515,24 @@ export class BotManager {
   }
 
   private hunt(bot: BotActor, state: AiState, now: number): void {
-    if (!bot.ai.route.length) {
+    let routeIndex = this.closenode(bot);
+    if (routeIndex >= 0) {
+      if (routeIndex === 0) {
+        const node = bot.ai.route[0];
+        if (distance(feetPosition(bot), this.waypoints.waypoints[node].o) <= MINWPDIST) bot.ai.route.length = 0;
+      } else {
+        bot.ai.route.length = Math.min(bot.ai.route.length, routeIndex + 1);
+        routeIndex--;
+      }
+    } else if (!this.anynode(bot)) {
       const candidates = this.waypoints.findwaypointswithin(bot.position, SIGHTMIN, SIGHTMAX);
       let kept = 0;
       for (const node of candidates) if (!bot.ai.previousNodes.includes(node)) candidates[kept++] = node;
       candidates.length = kept;
       if (candidates.length) bot.ai.route = this.makeroute(bot, candidates[this.rnd(candidates.length)]);
-    }
-    const node = bot.ai.route.at(-1);
+      routeIndex = this.closenode(bot);
+    } else routeIndex = this.closenode(bot);
+    const node = routeIndex >= 0 ? bot.ai.route[routeIndex] : bot.ai.route.at(-1);
     if (!node || !this.waypoints.iswaypoint(node)) {
       bot.move = bot.strafe = 0;
       state.idle = 1;
@@ -522,16 +541,15 @@ export class BotManager {
     const spot = this.waypoints.waypoints[node].o;
     bot.ai.spot = copyVec3(spot);
     bot.ai.targetNode = node;
-    if (distance(feetPosition(bot), spot) <= WAYPOINTRADIUS) {
-      bot.ai.previousNodes.unshift(node);
-      bot.ai.previousNodes.length = Math.min(bot.ai.previousNodes.length, 6);
-      bot.ai.route.pop();
-    }
     this.turnAndMove(bot, spot, now, 0.25);
-    if (!bot.timeInAir && spot.z - feetPosition(bot).z >= JUMPMIN && now >= bot.ai.jumpSeed) {
+    const sequenced = bot.ai.blockSequence > 0 || bot.ai.targetSequence > 0;
+    if ((!bot.timeInAir || bot.inWater) && now >= bot.ai.jumpSeed &&
+        (sequenced || spot.z - feetPosition(bot).z >= JUMPMIN || now >= bot.ai.jumpRandom)) {
       bot.jumping = true;
-      const seed = (111 - bot.skill) * (bot.inWater ? 3 : 5);
+      let seed = (111 - bot.skill) * (bot.inWater ? 3 : 5);
       bot.ai.jumpSeed = now + seed + this.rnd(Math.max(seed, 1));
+      seed *= state.idle ? 50 : 25;
+      bot.ai.jumpRandom = now + seed + this.rnd(Math.max(seed, 1));
     }
     bot.ai.lastHunt = now;
   }
@@ -583,6 +601,55 @@ export class BotManager {
       if (route.length) return route;
     }
     return [];
+  }
+
+  // Original: src/fpsgame/ai.cpp, closenode(), randomlink() and anynode(). Routes are stored goal-first, so the bot follows them backwards.
+  private closenode(bot: BotActor): number {
+    const feet = feetPosition(bot);
+    let closest = -1, closestDistance = CLOSEDIST;
+    for (let index = 0; index < bot.ai.route.length; index++) {
+      const node = bot.ai.route[index];
+      if (!this.waypoints.iswaypoint(node)) continue;
+      const nodeDistance = distance(feet, this.waypoints.waypoints[node].o);
+      if (nodeDistance > FARDIST || nodeDistance >= closestDistance) continue;
+      closest = index;
+      closestDistance = nodeDistance;
+    }
+    return closest;
+  }
+
+  private anynode(bot: BotActor): boolean {
+    if (!this.waypoints.iswaypoint(bot.lastNode)) return false;
+    for (let retry = 0; retry < 2; retry++) {
+      if (retry) bot.ai.previousNodes.length = 0;
+      const route = [bot.lastNode];
+      let node = this.randomlink(bot, bot.lastNode, route);
+      if (!this.waypoints.iswaypoint(node)) continue;
+      route.unshift(node);
+      for (let index = 0; index < 6; index++) {
+        node = this.randomlink(bot, node, route);
+        if (!this.waypoints.iswaypoint(node)) break;
+        route.unshift(node);
+      }
+      bot.ai.route = route;
+      return true;
+    }
+    return false;
+  }
+
+  private randomlink(bot: BotActor, node: number, route: readonly number[]): number {
+    if (!this.waypoints.iswaypoint(node)) return -1;
+    const links = this.waypoints.waypoints[node].links.filter((link) => this.waypoints.iswaypoint(link) &&
+      !bot.ai.previousNodes.includes(link) && !route.includes(link));
+    return links.length ? links[this.rnd(links.length)] : -1;
+  }
+
+  private resetNavigation(bot: BotActor, now: number, careful: boolean): void {
+    bot.ai.route.length = 0;
+    bot.ai.state.splice(0, bot.ai.state.length,
+      { type: AiStateType.Wait, millis: now, targetType: AiTargetType.Node, target: -1, idle: 0, override: false });
+    bot.ai.dontMove = false;
+    bot.ai.beCareful = careful;
   }
 
   private navigate(bot: BotActor): void {

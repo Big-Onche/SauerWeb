@@ -2153,29 +2153,82 @@ export class MapScene {
     }
     if (!gameModeHas(multiplayer.gameMode, GameModeFlag.Ctf)) return false;
     const team = ctfTeamFlag(bot.team), hold = gameModeHas(multiplayer.gameMode, GameModeFlag.Hold);
+    const protect = gameModeHas(multiplayer.gameMode, GameModeFlag.Protect);
     const carrying = multiplayer.ctfMode.flags.find((flag) => flag.owner === bot.clientNumber);
-    if (carrying && (hold || gameModeHas(multiplayer.gameMode, GameModeFlag.Protect))) {
-      for (const teammate of multiplayer.players.values()) {
-        if (teammate.clientNumber === bot.clientNumber || teammate.team !== bot.team || teammate.state !== ClientState.Alive) continue;
-        const node = this.bots.waypoints.closestwaypoint(teammate.position, SIGHTMIN, true);
-        if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Defend, node, target: teammate.clientNumber,
-          targetType: AiTargetType.Player, score: squaredDistance(bot.position, teammate.position) / 100 });
+    if (carrying) {
+      if (hold || protect) {
+        for (const teammate of multiplayer.players.values()) {
+          if (teammate.clientNumber === bot.clientNumber || teammate.team !== bot.team || teammate.state !== ClientState.Alive) continue;
+          const node = this.bots.waypoints.closestwaypoint(teammate.position, SIGHTMIN, true);
+          if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Defend, node, target: teammate.clientNumber,
+            targetType: AiTargetType.Player, score: squaredDistance(bot.position, teammate.position) / 100 });
+        }
+        return true;
+      }
+      const homeFlags = multiplayer.ctfMode.flags.filter((flag) => flag.team === team);
+      const availableHome = homeFlags.filter((flag) => flag.owner < 0 && !flag.dropped);
+      const goals = availableHome.length ? availableHome : homeFlags;
+      for (const flag of goals) {
+        const owner = flag.owner >= 0 ? this.objectiveActor(flag.owner) : undefined;
+        const position = owner?.position ?? (flag.dropped ? flag.dropLoc : flag.spawnLoc);
+        const node = this.bots.waypoints.closestwaypoint(position, SIGHTMIN, true);
+        if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Pursue, node, target: flag.id,
+          targetType: AiTargetType.Affinity, score: squaredDistance(bot.position, position) });
       }
       return true;
     }
     for (const flag of multiplayer.ctfMode.flags) {
-      if (flag.spawnIndex < 0 && hold || flag.owner === bot.clientNumber || flag.invisible) continue;
+      if (flag.spawnIndex < 0 && hold || flag.owner === bot.clientNumber) continue;
       const home = !hold && flag.team === team;
-      const owner = flag.owner >= 0 ? multiplayer.players.get(flag.owner) : undefined;
+      const owner = flag.owner >= 0 ? this.objectiveActor(flag.owner) : undefined;
       const position = owner?.position ?? (flag.dropped ? flag.dropLoc : flag.spawnLoc);
-      const node = this.bots.waypoints.closestwaypoint(position, SIGHTMIN, true);
-      if (!this.bots.waypoints.iswaypoint(node)) continue;
-      const friendlyCarrier = owner?.team === bot.team;
-      const state = owner && friendlyCarrier ? AiStateType.Defend : home && !owner && !flag.dropped ? AiStateType.Defend : AiStateType.Pursue;
-      interests.push({ state, node, target: owner?.clientNumber ?? flag.id, targetType: owner ? AiTargetType.Player : AiTargetType.Affinity,
-        score: squaredDistance(bot.position, position) / (state === AiStateType.Pursue ? 10 : 4) });
+      const assigned = this.ctfAiAssignments(bot, flag.id, home ? AiStateType.Defend : AiStateType.Pursue, position, owner?.clientNumber);
+      if (home) {
+        const guard = Boolean(owner && owner.team !== bot.team || flag.dropped || !assigned.length);
+        if (!guard) continue;
+        const node = this.bots.waypoints.closestwaypoint(position, SIGHTMIN, true);
+        if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Defend, node, target: flag.id,
+          targetType: AiTargetType.Affinity, score: squaredDistance(bot.position, position) / 100 });
+      } else if (!assigned.length) {
+        const node = this.bots.waypoints.closestwaypoint(position, SIGHTMIN, true);
+        if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Pursue, node, target: flag.id,
+          targetType: AiTargetType.Affinity, score: squaredDistance(bot.position, position) });
+      } else {
+        for (const clientNumber of assigned) {
+          const attacker = this.objectiveActor(clientNumber);
+          if (!attacker) continue;
+          const node = this.bots.waypoints.iswaypoint(attacker.lastNode) ? attacker.lastNode :
+            this.bots.waypoints.closestwaypoint(attacker.position, SIGHTMIN, true);
+          if (this.bots.waypoints.iswaypoint(node)) interests.push({ state: AiStateType.Defend, node, target: clientNumber,
+            targetType: AiTargetType.Player, score: squaredDistance(bot.position, attacker.position) });
+        }
+      }
     }
     return interests.length > 0;
+  }
+
+  private ctfAiAssignments(bot: BotActor, flag: number, state: AiStateType, position: RegisteredMapEntity["position"],
+                           owner?: number): number[] {
+    const assigned: number[] = [];
+    for (const other of this.bots.bots.values()) {
+      if (other === bot || other.team !== bot.team || !other.alive) continue;
+      const current = other.ai.state.at(-1);
+      if (current?.type === state && current.targetType === AiTargetType.Affinity && current.target === flag) assigned.push(other.clientNumber);
+    }
+    for (const player of this.fpsClient.multiplayer.players.values()) {
+      if (player.clientNumber === bot.clientNumber || player.aiType !== 0 || player.team !== bot.team || player.state !== ClientState.Alive) continue;
+      if (player.clientNumber === owner || squaredDistance(player.position, position) <= 32 * 32) assigned.push(player.clientNumber);
+    }
+    return assigned;
+  }
+
+  private objectiveActor(clientNumber: number): { clientNumber: number; team: string; position: RegisteredMapEntity["position"];
+    lastNode: number } | undefined {
+    const bot = this.bots.bots.get(clientNumber);
+    if (bot) return bot;
+    const player = this.fpsClient.multiplayer.players.get(clientNumber);
+    if (!player) return undefined;
+    return { clientNumber, team: player.team, position: player.position, lastNode: -1 };
   }
 
   private downloadWaypoints(mapName: string): void {
