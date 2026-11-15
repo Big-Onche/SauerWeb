@@ -476,10 +476,9 @@ export class MapScene {
       mesh.material = texture
         ? this.materialCache.get(describeSauerMaterial(texture, batch.cubeMaterial, batch.lightmapId, batch.useLightmapAlpha))
         : this.createFallbackMaterial();
-      // Match renderva's distinct opaque and blend passes. Babylon otherwise distance-sorts the coplanar blend meshes together with water,
-      // which can change their order between the main framebuffer and the refraction render target.
-      mesh.renderingGroupId = batch.useLightmapAlpha ? 1 : 0;
-      mesh.alphaIndex = batch.useLightmapAlpha ? 1 : 0;
+      // Transparent meshes are sorted by alphaIndex before distance. World batches can span a whole root octant, so sorting their bounding
+      // sphere against a water surface is unstable and may put a texture-blend layer on the wrong side of the water pass.
+      if (batch.useLightmapAlpha) mesh.alphaIndex = 0;
       mesh.freezeWorldMatrix();
       mesh.alwaysSelectAsActiveMesh = true;
       faces += batch.faceCount;
@@ -929,7 +928,7 @@ export class MapScene {
     vertexData.applyToMesh(mesh, true);
     mesh.setVerticesData("waveData", batch.waveData, false, 2);
     mesh.material = this.getMaterialVolumeMaterial(batch.kind, batch.materialIndex, batch.reflectionHeight);
-    if (batch.kind === "water") mesh.renderingGroupId = 2;
+    if (batch.kind === "water") mesh.alphaIndex = 1;
     mesh.metadata = { debugOnly: batch.debugOnly, materialKind: batch.kind, materialIndex: batch.materialIndex,
       reflectionHeight: batch.reflectionHeight };
     mesh.isPickable = false;

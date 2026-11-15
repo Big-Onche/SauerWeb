@@ -1,5 +1,4 @@
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
-import { Constants } from "@babylonjs/core/Engines/constants";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Scene } from "@babylonjs/core/scene";
@@ -55,8 +54,6 @@ describe("MaterialCache", () => {
     expect(material.lightmapTexture?.coordinatesIndex).toBe(1);
     expect(material.opacityTexture).toBe(material.lightmapTexture);
     expect(material.useLightmapAsShadowmap).toBe(true);
-    expect(material.alphaMode).toBe(Constants.ALPHA_COMBINE);
-    expect(material.needDepthPrePass).toBe(false);
 
     cache.dispose();
     engine.dispose();

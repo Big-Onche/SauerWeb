@@ -131,7 +131,6 @@ export class MaterialCache {
         lightmap.hasAlpha = true;
         material.opacityTexture = lightmap;
         material.transparencyMode = Material.MATERIAL_ALPHABLEND;
-        material.alphaMode = Constants.ALPHA_COMBINE;
       }
     }
 
@@ -241,10 +240,7 @@ export class MaterialCache {
       const effect = material.getEffect();
       if (effect && this.caustics) this.caustics.bind(effect);
     });
-    // Native renderva renders texture layers with GL_SRC_ALPHA/GL_ONE_MINUS_SRC_ALPHA and depth writes disabled. A depth pre-pass makes the
-    // coplanar top layer own the depth buffer before it is composited, which is particularly destructive in the water refraction target.
-    if (descriptor.surfaceMode === "transparent") material.needDepthPrePass = true;
-    if (descriptor.useLightmapAlpha) material.alphaMode = Constants.ALPHA_COMBINE;
+    if (descriptor.surfaceMode === "transparent" || descriptor.useLightmapAlpha) material.needDepthPrePass = true;
     return material;
   }
 
