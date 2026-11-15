@@ -1,7 +1,7 @@
 import type { SauerMap, Vec3 } from "./octa";
 import { FLOOR_Z, GRAVITY, JUMP_VELOCITY, SLOPE_Z } from "./physics/constants";
 import { OctreeCollisionWorld } from "./physics/collision";
-import type { MapModelCollision, MaterialLookup, RaycastResult } from "./physics/collision";
+import type { DynamicEntityCollision, MapModelCollision, MaterialLookup, RaycastResult } from "./physics/collision";
 import { MAT_DEATH, MATF_VOLUME, MAT_LAVA, MAT_WATER } from "./material";
 import { GroundMover } from "./physics/ground";
 import type { PhysicsInputState } from "./physics/input";
@@ -21,7 +21,7 @@ export interface PhysicsDebugSnapshot {
 
 export type PhysicsSoundEvent = "jump" | "land" | "splash-in" | "splash-out" | "burn";
 
-/** Milestone-00 simulation shell. Collision resolution is intentionally delegated to the next milestone. */
+/** Fixed-step player simulation following Sauerbraten's native physics path. */
 export class PhysicsSimulation {
   readonly player = createPlayer();
   readonly scheduler = new PhysicsScheduler();
@@ -33,17 +33,24 @@ export class PhysicsSimulation {
   private lastSchedule = { steps: 0, stepMilliseconds: 5, interpolation: 1 };
   private groundMover?: GroundMover;
   private collisionWorld?: OctreeCollisionWorld;
+  private dynamicEntities: () => Iterable<DynamicEntityCollision> = () => [];
   raycastPerformanceRecorder?: (milliseconds: number) => void;
   raycastPerformanceEnabled?: () => boolean;
   soundEvent?: (event: PhysicsSoundEvent, player: PhysicsEntity) => void;
 
   setMap(map: SauerMap): void {
     this.collisionWorld = new OctreeCollisionWorld(map);
+    this.collisionWorld.setDynamicEntities(this.dynamicEntities);
     this.groundMover = new GroundMover(this.collisionWorld);
   }
 
   setMapModels(mapModels: MapModelCollision[]): void {
     this.collisionWorld?.setMapModels(mapModels);
+  }
+
+  setDynamicEntities(dynamicEntities: () => Iterable<DynamicEntityCollision>): void {
+    this.dynamicEntities = dynamicEntities;
+    this.collisionWorld?.setDynamicEntities(dynamicEntities);
   }
 
   raycast(origin: Vec3, direction: Vec3, maximumDistance: number, radius = 0, skipFirst = false): RaycastResult | undefined {

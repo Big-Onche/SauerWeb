@@ -45,6 +45,7 @@ import { createMapCausticResources, shouldUseCaustics, StandardMaterialCaustics,
 import { installSauerFogDistance } from "./SauerFogShader";
 import { BrowserFreeCameraInput, BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
 import { PhysicsSimulation, type PhysicsDebugSnapshot } from "../engine/physics";
+import type { DynamicEntityCollision } from "../engine/physics/collision";
 import { createClient, type MultiplayerEvent, type NetworkPlayer, type ServerEndpoint } from "../fpsgame/client";
 import { BrowserWeaponInput } from "../platform/browser/WeaponInput";
 import { WeaponHUD } from "../platform/browser/WeaponHUD";
@@ -282,6 +283,7 @@ export class MapScene {
     this.initializeRendererProfiling();
     this.physics.raycastPerformanceRecorder = (milliseconds) => this.profiler.recordRaycast(milliseconds);
     this.physics.raycastPerformanceEnabled = () => this.profiler.enabled;
+    this.physics.setDynamicEntities(() => this.dynamicEntities());
     this.bots.performanceRecorder = (phase, operation) => {
       if (!this.profiler.enabled) {
         operation();
@@ -1721,6 +1723,9 @@ export class MapScene {
       this.syncWaypointDebug(true);
     }
     if (this.cameraMode !== "player") return;
+    for (const [clientNumber, player] of this.fpsClient.multiplayer.players) {
+      if (clientNumber !== this.fpsClient.multiplayer.clientNumber) interpolateNetworkEntity(player, nowMilliseconds);
+    }
     const dead = this.isLocalPlayerDead(), wasDead = this.localDeadAt > 0;
     if (dead && !wasDead) this.localDeadAt = nowMilliseconds;
     else if (!dead && wasDead) this.localDeadAt = 0;
@@ -1981,6 +1986,22 @@ export class MapScene {
     if (distance >= upper) return 0;
     const aboveLower = distance - lower, belowUpper = distance - upper;
     return belowUpper * belowUpper / (aboveLower * aboveLower + belowUpper * belowUpper);
+  }
+
+  private *dynamicEntities(): IterableIterator<DynamicEntityCollision> {
+    const multiplayer = this.fpsClient.multiplayer;
+    if (this.physics.player.clientState === ClientState.Alive) yield this.physics.player;
+    for (const [clientNumber, player] of multiplayer.players) {
+      if (clientNumber === multiplayer.clientNumber || player.state !== ClientState.Alive || !player.positionReady) continue;
+      const bot = this.bots.bots.get(clientNumber);
+      if (bot && isBotLocallySimulated(bot.ownerNumber, multiplayer.clientNumber)) continue;
+      yield player;
+    }
+    for (const bot of this.bots.bots.values()) {
+      if (bot.clientState !== ClientState.Alive || !bot.alive ||
+          multiplayer.players.has(bot.clientNumber) && !isBotLocallySimulated(bot.ownerNumber, multiplayer.clientNumber)) continue;
+      yield bot;
+    }
   }
 
   private captureSpawnRating(team: string, position: RegisteredMapEntity["position"]): number {

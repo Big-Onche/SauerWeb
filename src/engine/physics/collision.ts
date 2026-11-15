@@ -1,7 +1,7 @@
 import { MATF_CLIP, MATF_VOLUME, MAT_CLIP, MAT_GAMECLIP, MAT_GLASS, MAT_NOCLIP } from "../material";
 import type { OctreeCube, SauerMap, Vec3 } from "../octa";
 import { CollisionType, type PhysicsEntity, PhysicsEntityType } from "./types";
-import { dot, magnitude, normalize, subtract } from "./vector";
+import { dot, magnitude, normalize, subtract, vec3 } from "./vector";
 
 export interface CollisionResult {
   normal: Vec3;
@@ -27,6 +27,20 @@ export interface MapModelCollision {
   center: Vec3;
   radius: Vec3;
   ellipse: boolean;
+}
+
+/** Collision-facing subset of Sauerbraten's dynent. Missing shape fields use the native player defaults. */
+export interface DynamicEntityCollision {
+  readonly id: string;
+  position: Vec3;
+  radius: number;
+  eyeHeight: number;
+  aboveEye: number;
+  alive: boolean;
+  yaw?: number;
+  xRadius?: number;
+  yRadius?: number;
+  collisionType?: CollisionType;
 }
 
 interface Plane extends Vec3 {
@@ -80,10 +94,15 @@ export class OctreeCollisionWorld {
   private mapModels: MapModelCollision[] = [];
   private mapModelBroadphase?: MapModelBroadphaseNode;
   private readonly mapModelCandidates: number[] = [];
+  private dynamicEntities: () => Iterable<DynamicEntityCollision> = emptyDynamicEntities;
 
   setMapModels(mapModels: MapModelCollision[]): void {
     this.mapModels = mapModels;
     this.mapModelBroadphase = buildMapModelBroadphase(mapModels);
+  }
+
+  setDynamicEntities(dynamicEntities: () => Iterable<DynamicEntityCollision>): void {
+    this.dynamicEntities = dynamicEntities;
   }
 
   lookupMaterial(position: Vec3): number {
@@ -137,7 +156,8 @@ export class OctreeCollisionWorld {
     return best;
   }
 
-  collide(entity: PhysicsEntity, direction: Vec3, cutoff = 0): CollisionResult | undefined {
+  collide(entity: PhysicsEntity, direction: Vec3, cutoff = 0, playerCollision = true,
+          insidePlayerCollision = false): CollisionResult | undefined {
     const minimum = {
       x: Math.floor(entity.position.x - entity.radius),
       y: Math.floor(entity.position.y - entity.radius),
@@ -158,7 +178,7 @@ export class OctreeCollisionWorld {
       const result = this.visit(cube, entity, direction, cutoff, minimum, maximum);
       if (result) return result;
     }
-    return undefined;
+    return playerCollision ? plcollide(entity, direction, this.dynamicEntities(), insidePlayerCollision) : undefined;
   }
 
   collideBouncer(position: Vec3, radius: number, direction: Vec3): CollisionResult | undefined {
@@ -166,7 +186,7 @@ export class OctreeCollisionWorld {
       position, radius, xRadius: radius, yRadius: radius, eyeHeight: radius, aboveEye: radius,
       collisionType: CollisionType.EllipsePrecise, entityType: PhysicsEntityType.Bounce,
     } as PhysicsEntity;
-    return this.collide(entity, direction);
+    return this.collide(entity, direction, 0, false);
   }
 
   private collisionMapModelCandidates(entity: PhysicsEntity): readonly number[] {
@@ -253,6 +273,70 @@ export class OctreeCollisionWorld {
 }
 
 const MAPMODEL_BROADPHASE_LEAF_SIZE = 8;
+
+function emptyDynamicEntities(): Iterable<DynamicEntityCollision> {
+  return [];
+}
+
+// Original: src/engine/physics.cpp
+// Function: plcollide()
+// Sauerbraten reference: SVN r6488
+function plcollide(entity: PhysicsEntity, direction: Vec3, dynamicEntities: Iterable<DynamicEntityCollision>,
+                   insidePlayerCollision: boolean): CollisionResult | undefined {
+  if (entity.entityType === PhysicsEntityType.Camera || entity.collisionType === CollisionType.None || !entity.alive) return undefined;
+  let insidePlayer: DynamicEntityCollision | undefined;
+  for (const other of dynamicEntities) {
+    if (other === entity || other.id === entity.id || !other.alive || rejectsDynamicEntity(entity, other)) continue;
+    const collision = collideDynamicEntity(entity, direction, other);
+    if (collision?.normal) return { normal: collision.normal, distance: collision.distance };
+    if (collision?.inside) insidePlayer = other;
+  }
+  return insidePlayer && insidePlayerCollision ? { normal: vec3(), distance: 0 } : undefined;
+}
+
+function collideDynamicEntity(entity: PhysicsEntity, direction: Vec3,
+                              other: DynamicEntityCollision): { normal?: Vec3; distance: number; inside?: boolean } | undefined {
+  const below = other.position.z - other.eyeHeight - (entity.position.z + entity.aboveEye);
+  const above = entity.position.z - entity.eyeHeight - (other.position.z + other.aboveEye);
+  if (below >= 0 || above >= 0) return undefined;
+
+  const x = other.position.x - entity.position.x, y = other.position.y - entity.position.y;
+  const angle = Math.atan2(y, x), entityAngle = angle - (entity.yaw + 90) * Math.PI / 180;
+  const otherAngle = angle - ((other.yaw ?? 0) + 90) * Math.PI / 180;
+  const entityXRadius = entity.xRadius || entity.radius, entityYRadius = entity.yRadius || entity.radius;
+  const otherXRadius = other.xRadius || other.radius, otherYRadius = other.yRadius || other.radius;
+  const entityRadius = Math.hypot(entityXRadius * Math.cos(entityAngle), entityYRadius * Math.sin(entityAngle));
+  const otherRadius = Math.hypot(otherXRadius * Math.cos(otherAngle), otherYRadius * Math.sin(otherAngle));
+  const distance = Math.hypot(x, y) - entityRadius - otherRadius;
+  if (distance >= 0) return undefined;
+
+  if (distance > (entity.position.z < other.position.z ? below : above) &&
+      (isZero(direction) || x * direction.x + y * direction.y > 0)) {
+    const normal = { x: -x, y: -y, z: 0 };
+    normalize(normal);
+    return { normal, distance: -distance };
+  }
+  if (entity.position.z < other.position.z) {
+    if (isZero(direction) || direction.z > 0 &&
+        below >= entity.zMargin - (entity.eyeHeight + entity.aboveEye) / 4) {
+      return { normal: { x: 0, y: 0, z: -1 }, distance: -below };
+    }
+  } else if (isZero(direction) || direction.z < 0 &&
+      above >= entity.zMargin - (entity.eyeHeight + entity.aboveEye) / 3) {
+    return { normal: { x: 0, y: 0, z: 1 }, distance: -above };
+  }
+  return { distance: -distance, inside: true };
+}
+
+function rejectsDynamicEntity(entity: PhysicsEntity, other: DynamicEntityCollision): boolean {
+  const radius = entity.radius + other.radius;
+  return Math.abs(entity.position.x - other.position.x) > radius || Math.abs(entity.position.y - other.position.y) > radius ||
+    Math.abs(entity.position.z - other.position.z) > entity.eyeHeight + entity.aboveEye + other.eyeHeight + other.aboveEye;
+}
+
+function isZero(value: Vec3): boolean {
+  return value.x === 0 && value.y === 0 && value.z === 0;
+}
 
 function buildMapModelBroadphase(models: readonly MapModelCollision[]): MapModelBroadphaseNode | undefined {
   if (!models.length) return undefined;
