@@ -72,6 +72,7 @@ import { SIGHTMIN } from "../fpsgame/waypoint";
 import { DevToolsProfiler } from "../platform/browser/DevToolsProfiler";
 import { TouchControls } from "../platform/browser/TouchControls";
 import { KillFeed } from "../platform/browser/KillFeed";
+import { MinimapHUD, minimapRadiusFromGeometry } from "../platform/browser/MinimapHUD";
 import { expandProjectedBounds, mergeProjectedBounds, projectWorldBounds, projectedBoundsIntersect, projectedBoundsToScissor,
   type PixelScissor, type ProjectedBounds } from "./ReflectionBounds";
 
@@ -168,6 +169,7 @@ export class MapScene {
   private readonly multiplayerHUD: MultiplayerHUD;
   private readonly spectatorHUD: SpectatorHUD;
   private readonly killFeed: KillFeed;
+  private readonly minimapHUD: MinimapHUD;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
   private readonly collectRenderer: CollectRenderer;
@@ -289,6 +291,7 @@ export class MapScene {
     this.multiplayerHUD = new MultiplayerHUD(viewport, this.fpsClient.multiplayer);
     this.spectatorHUD = new SpectatorHUD(viewport);
     this.killFeed = new KillFeed(viewport, this.fpsClient.multiplayer);
+    this.minimapHUD = new MinimapHUD(viewport, this.fpsClient.multiplayer);
     this.playerRenderer = new PlayerRenderer(this.scene, (from, to, radius) => {
       const direction = { x: to.x - from.x, y: to.z - from.z, z: to.y - from.y };
       const distance = Math.hypot(direction.x, direction.y, direction.z);
@@ -433,6 +436,7 @@ export class MapScene {
       batches: generateGeometry(map, textures),
       materialBatches: generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug"),
     }));
+    this.minimapHUD.setMinimapRadius(minimapRadiusFromGeometry(batches, map.header.worldSize));
     let faces = 0;
     let triangles = 0;
     let vertices = 0;
@@ -565,6 +569,7 @@ export class MapScene {
     this.weaponInput.enabled = playerMode;
     this.touchControls.setGameplayEnabled(playerMode);
     this.weaponHUD.setVisible(playerMode);
+    this.minimapHUD.setVisible(playerMode);
     this.crosshairHUD.setVisible(playerMode && !this.isLocalPlayerDead());
     this.multiplayerHUD.setVisible(playerMode && this.fpsClient.multiplayer.clientNumber >= 0);
     this.weaponRenderer.setHudGunVisible(playerMode && !this.thirdperson);
@@ -708,6 +713,7 @@ export class MapScene {
     this.multiplayerHUD.dispose();
     this.spectatorHUD.dispose();
     this.killFeed.dispose();
+    this.minimapHUD.dispose();
     this.canvas.removeEventListener("pointerdown", this.onSpectatorPointerDown, { capture: true });
     this.canvas.removeEventListener("contextmenu", this.onSpectatorContextMenu);
     window.removeEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
@@ -1763,6 +1769,16 @@ export class MapScene {
     });
     this.profiler.measure("hud", () => this.multiplayerHUD.render());
     this.profiler.measure("networking", () => this.updateNetworkPlayers(renderPosition));
+    this.profiler.measure("hud", () => {
+      const local = this.fpsClient.multiplayer.players.get(this.fpsClient.multiplayer.clientNumber);
+      const viewed = followed ?? local;
+      this.minimapHUD.render(viewed ? {
+        position: followed ? viewed.position : this.physics.player.position,
+        yaw: this.physics.player.yaw,
+        clientNumber: viewed.clientNumber,
+        team: viewed.team,
+      } : undefined, nowMilliseconds);
+    });
   }
 
   private initializeRendererProfiling(): void {
@@ -2283,6 +2299,7 @@ export class MapScene {
     this.touchControls.setGameplayEnabled(this.runtimeMode === "game" && !dead);
     // Native gameplayhud remains active while dead and while freely spectating (health 0, clock/scores, and spectator text still render).
     this.weaponHUD.setVisible(this.runtimeMode === "game");
+    this.minimapHUD.setVisible(this.runtimeMode === "game");
     this.crosshairHUD.setVisible(this.runtimeMode === "game" && !dead && (!spectator || followed?.state !== ClientState.Dead && Boolean(followed)));
     this.weaponRenderer.setViewedGun(followed?.selectedGun, followed?.lastAction, followed?.gunWait);
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson && !dead &&

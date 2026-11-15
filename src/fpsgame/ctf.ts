@@ -47,6 +47,8 @@ export class CtfClientMode {
   readonly scores = [0, 0];
   private holdSpawns: Vec3[] = [];
 
+  get holdSpawnLocations(): readonly Vec3[] { return this.holdSpawns; }
+
   reset(): void {
     this.flags.length = 0;
     this.holdSpawns = [];

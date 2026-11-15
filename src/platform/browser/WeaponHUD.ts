@@ -118,10 +118,11 @@ export class WeaponHUD {
     context.clearRect(0, 0, width, height);
     this.drawDamage(context, width, height);
     const mobile = touchControlsWanted(this.settings), hudScale = mobile ? this.settings.mobileHudScale / 100 : 1;
-    const scale = height / HUD_HEIGHT * (mobile ? 0.76 * hudScale : 1);
+    const transform = mobile ? mobilePlayerHudTransform(width, height, hudScale) : undefined;
+    const scale = transform?.scale ?? height / HUD_HEIGHT;
     context.save();
     context.scale(scale, scale);
-    if (mobile) context.translate(width / scale / 2 - 760, -150);
+    if (transform) context.translate(transform.x, transform.y);
     if (player.state !== ClientState.Spectator && player.state !== ClientState.Editing) this.drawPlayerHud(context, player);
     context.restore();
     this.drawClock(context, width, height, clockSeconds, mobile, hudScale);
@@ -250,6 +251,12 @@ export class WeaponHUD {
   };
 
   private readonly onSettingsChanged = (event: CustomEvent<TouchSettings>): void => { this.settings = event.detail; this.invalidate(); };
+}
+
+export function mobilePlayerHudTransform(width: number, height: number, hudScale: number): { scale: number; x: number; y: number } {
+  const scale = height / HUD_HEIGHT * 0.76 * hudScale;
+  const bottomPadding = Math.max(8, height * 0.02);
+  return { scale, x: width / scale / 2 - 760, y: (height - ICON_SIZE * scale - bottomPadding) / scale - ICON_Y };
 }
 
 function loadImage(source: string, loaded: () => void): HTMLImageElement {

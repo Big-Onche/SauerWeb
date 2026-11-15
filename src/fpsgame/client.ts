@@ -64,13 +64,14 @@ export interface NetworkPlayer extends Damageable {
   quadMillis: number;
 }
 
-interface CaptureBase {
+export interface CaptureBase {
   tag: number;
   ammoType: number;
   owner: string;
   enemy: string;
   converted: number;
   ammo: number;
+  o: Vec3;
 }
 
 export type MultiplayerEvent =
@@ -202,6 +203,7 @@ export class MultiplayerClient extends EventTarget {
     this.ctfMode.setup(this.mapEntities, this.gameMode);
     this.ctfMode.initializeLocal(this.gameMode);
     this.collectMode.setup(this.mapEntities);
+    this.initializeLocalCaptureBases();
     this.localGame = true;
     this.clientNumber = 0;
     this.endpoint = { host: "local", port: 0, playerName: playerName.slice(0, 15) || "unnamed", playerModel };
@@ -234,6 +236,7 @@ export class MultiplayerClient extends EventTarget {
     this.weapons.clear();
     this.ctfMode.reset();
     this.collectMode.reset();
+    this.captureBases = [];
     this.localIntermission = false;
     this.syncTargets();
   }
@@ -406,6 +409,8 @@ export class MultiplayerClient extends EventTarget {
   }
 
   get isLocalGame(): boolean { return this.localGame; }
+
+  get captureModeBases(): readonly CaptureBase[] { return this.captureBases; }
 
   getTeamScore(team: string): number {
     if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) return this.ctfMode.scores[ctfTeamFlag(team) - 1] ?? 0;
@@ -593,6 +598,7 @@ export class MultiplayerClient extends EventTarget {
     this.ctfMode.groundDroppedFlags((position) => this.groundFlagDrop(position));
     if (this.localGame && gameModeHas(this.gameMode, GameModeFlag.Ctf)) this.ctfMode.initializeLocal(this.gameMode);
     this.collectMode.setup(entities);
+    if (this.localGame) this.initializeLocalCaptureBases();
     this.entities.setMap(entities, this.gameMode, this.localGame, performance.now(), Math.max(1, this.players.size));
   }
 
@@ -608,6 +614,8 @@ export class MultiplayerClient extends EventTarget {
       }
       this.collectMode.reset();
       if (gameModeHas(gameMode, GameModeFlag.Collect)) this.collectMode.setup(this.mapEntities);
+      this.captureBases = [];
+      if (this.localGame) this.initializeLocalCaptureBases();
     }
   }
 
@@ -1450,6 +1458,17 @@ export class MultiplayerClient extends EventTarget {
     }
   }
 
+  private initializeLocalCaptureBases(): void {
+    this.captureBases = [];
+    if (!gameModeHas(this.gameMode, GameModeFlag.Capture)) return;
+    const mapBases = this.mapEntities.filter((entity) => entity.typeName === "base");
+    for (let index = 0; index < mapBases.length; index++) {
+      const base = mapBases[index], tag = (base.attributes[1] ?? 0) > 0 ? base.attributes[1] : index + 1;
+      this.captureBases.push({ tag, ammoType: base.attributes[0] ?? 0, owner: "", enemy: "", converted: 0, ammo: 0,
+        o: { ...base.position } });
+    }
+  }
+
   // Original: src/fpsgame/capture.h, captureclientmode::initbase(), updatebase(), setscore().
   private parseBases(packet: PacketReader): void {
     const count = packet.getInt(), mapBases = this.mapEntities.filter((entity) => entity.typeName === "base");
@@ -1457,7 +1476,7 @@ export class MultiplayerClient extends EventTarget {
     for (let index = 0; index < count; index++) {
       const ammoType = packet.getInt(), owner = packet.getString(), enemy = packet.getString(), converted = packet.getInt(), ammo = packet.getInt();
       const tag = (mapBases[index]?.attributes[1] ?? 0) > 0 ? mapBases[index].attributes[1] : index + 1;
-      this.captureBases.push({ tag, ammoType, owner, enemy, converted, ammo });
+      this.captureBases.push({ tag, ammoType, owner, enemy, converted, ammo, o: { ...(mapBases[index]?.position ?? { x: 0, y: 0, z: 0 }) } });
     }
   }
 
