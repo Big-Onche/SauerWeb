@@ -104,9 +104,32 @@ button { color: inherit; }
 .empty-state h2 { margin: 11px 0 10px; font-size: clamp(24px, 3vw, 38px); font-weight: 500; letter-spacing: -.045em; }.empty-state > p:last-child { margin: auto; max-width: 430px; color: #7d8980; font-size: 13px; line-height: 1.7; }
 .octa { position: relative; width: 92px; height: 92px; margin: 0 auto 29px; border: 1px solid #3b473d; transform: rotate(45deg); background: linear-gradient(135deg, #222b22, #111612); box-shadow: 0 0 60px #60764d22; }
 .octa::before, .octa::after, .octa span { content: ""; position: absolute; background: #53614f; }.octa::before { inset: 50% 0 auto; height: 1px; }.octa::after { inset: 0 auto 0 50%; width: 1px; }.octa span { width: 7px; height: 7px; top: calc(50% - 3px); left: calc(50% - 3px); background: #afc98a; box-shadow: 0 0 18px #b7dd80; }
-.loading { position: absolute; inset: 0; display: grid; place-content: center; gap: 15px; background: #0c100ddd; text-align: center; z-index: 5; }.loading[hidden], .error[hidden], .stats[hidden], .empty-state[hidden] { display: none; }
-.loading span { width: 32px; height: 32px; margin: auto; border: 2px solid #384238; border-top-color: #b6ce91; border-radius: 50%; animation: spin .8s linear infinite; }.loading p { color: #9bab91; font: 400 10px "DM Mono"; text-transform: uppercase; letter-spacing: .12em; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.loading { position: absolute; inset: 0; z-index: 60; overflow: hidden; background-color: #101311;
+  background-image: url('/api/data/background_decal.png'), url('/api/data/background_detail.png'), url('/api/data/background.png');
+  background-position: 14% 68%, 37% 62%, 63% 31%; background-repeat: no-repeat, repeat, repeat;
+  background-size: clamp(70px, 10vmin, 150px), 640px 640px, 382px 382px; color: #fff; font-family: "Sauerbraten", sans-serif;
+  text-align: center; }
+.loading::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 50% 34%, transparent 0 25%, #05070638 72%, #02030280);
+  pointer-events: none; }
+.loading[hidden], .error[hidden], .stats[hidden], .empty-state[hidden] { display: none; }
+.loading-logo { position: absolute; top: max(2vh, calc(25vh - min(25vw, 25vh))); left: 50%; z-index: 1; width: min(100vmin, 1024px);
+  height: min(50vmin, 512px); background: url('/api/data/logo_1024.png') center / contain no-repeat; transform: translateX(-50%); }
+.loading-map { position: absolute; top: 57%; left: 50%; z-index: 1; max-width: 80vw; overflow: hidden; color: #fff; font-size: clamp(20px, 3.2vmin, 38px);
+  text-overflow: ellipsis; text-shadow: 2px 2px 2px #000, -1px -1px 2px #000; white-space: nowrap; transform: translateX(-50%); }
+.loading-progress { position: absolute; bottom: 3.75vmin; left: 50%; z-index: 2; width: min(75vmin, 760px); transform: translateX(-50%); }
+.loading-frame { position: relative; width: 100%; aspect-ratio: 10; overflow: hidden;
+  background: url('/api/data/loading_frame.png') center top / 100% 123.077% no-repeat; }
+.loading-bar-track { position: absolute; top: 30.77%; left: 3.33%; width: 93.35%; height: 38.46%; overflow: hidden; }
+.loading-bar-fill { display: flex; width: 0; height: 100%; min-width: 0; overflow: hidden; transition: width 80ms linear; }
+.loading-bar-fill svg { display: block; flex: none; height: 100%; overflow: hidden; }
+.loading-bar-fill .loading-bar-cap { position: relative; z-index: 1; width: var(--loading-cap-width, 7px); }
+.loading-bar-fill .loading-bar-middle { flex: 1 1 auto; min-width: 0; margin-right: -1px; margin-left: -1px; }
+.loading-text { position: absolute; top: 31%; left: 5%; right: 5%; z-index: 2; overflow: hidden; color: #fff; font-size: clamp(10px, 1.75vmin, 18px);
+  line-height: 1.55; text-align: left; text-overflow: ellipsis; text-shadow: 1px 1px 2px #000, -1px -1px 2px #000; white-space: nowrap; }
+.loading-feedback { display: flex; justify-content: space-between; gap: 15px; min-height: 18px; padding: 2px 2.5%; color: #c8c8c8;
+  font: 400 clamp(8px, 1.15vmin, 12px) "DM Mono", monospace; text-shadow: 1px 1px 2px #000; }
+.loading-detail { overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }.loading-percent { flex: none; color: #fff; }
+@media (max-aspect-ratio: 4/3) { .loading-progress { width: min(92vw, 75vmin); }.loading-map { top: 54%; } }
 .error { position: absolute; top: 100px; left: 50%; width: min(560px, calc(100% - 44px)); padding: 13px 16px; border: 1px solid #8f554d; background: #3a211eea; color: #f2c0b8; font-size: 12px; line-height: 1.5; transform: translateX(-50%); z-index: 6; }
 .stats { position: absolute; left: 22px; bottom: 52px; display: flex; border: 1px solid #303832; background: #101512e8; backdrop-filter: blur(10px); }
 .stats div { min-width: 88px; padding: 10px 13px; border-right: 1px solid #303832; }.stats div:last-child { border: 0; }.stats strong, .stats span { display: block; }.stats strong { font: 500 12px "DM Mono"; color: #d7e0d3; }.stats span { margin-top: 3px; color: #68736b; font: 400 8px "DM Mono"; text-transform: uppercase; }

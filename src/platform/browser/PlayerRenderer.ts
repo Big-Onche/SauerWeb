@@ -159,16 +159,61 @@ export class PlayerRenderer {
   }
 
   clear(): void {
-    this.geometryGeneration++;
     this.instances.forEach((instance) => this.disposeInstance(instance));
     this.instances.clear();
     this.savedRagdolls.forEach((saved) => this.disposeInstance(saved.instance));
     this.savedRagdolls.length = 0;
-    this.materials.forEach((material) => material.dispose(true, true));
-    this.materials.clear();
-    this.geometryFrames.clear();
-    this.md5Models.clear();
-    this.md5Animations.clear();
+  }
+
+  // Original: src/fpsgame/render.cpp
+  // Functions: preloadplayermodel(), preloadweapons()
+  // Sauerbraten reference: SVN r6488
+  async preload(modelIndex: number, teamMode: boolean, multiplayer: boolean,
+                progress?: (complete: number, total: number, label: string) => void): Promise<void> {
+    const assets = await (this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
+      return response.json() as Promise<PlayerModelAsset[]>;
+    }));
+    const definitions = multiplayer ? assets : [assets[modelIndex] ?? assets[0]].filter(Boolean);
+    const work = definitions.flatMap((definition) => {
+      const skins: Array<"ffa" | "blueTeam" | "redTeam"> = teamMode ? ["blueTeam", "redTeam"] : ["ffa"];
+      return skins.map((skin) => ({ definition, skin, asset: definition[skin] }));
+    }).filter((item) => item.asset?.status === "ready" && item.asset.geometryPath);
+    if (!work.length || work.length !== definitions.length * (teamMode ? 2 : 1)) {
+      throw new Error("A required player model is missing or unsupported.");
+    }
+    let complete = 0;
+    const total = Math.max(1, work.length);
+    for (const { definition, skin, asset } of work) {
+      const instance: PlayerModelInstance = {
+        root: new TransformNode(`preload-player-${definition.index}-${skin}`, this.scene), meshes: [], weaponMeshes: [], weaponKey: "",
+        visualKey: "", animation: "", frame: -1, updateToken: 1, updating: false,
+      };
+      try {
+        for (let gun = 0; gun <= 6; gun++) {
+          await this.updateModel(instance, definition.index, skin, `${definition.index}:${skin}:${gun}`, "idle", undefined, undefined, 0, true,
+            0, gun, undefined, 0, { x: 0, y: 0, z: 0 }, instance.updateToken);
+        }
+        const uniqueAnimations = new Map<string, PlayerModelAnimation>();
+        Object.values(definition.animations).forEach((animation) => uniqueAnimations.set(animation.path, animation));
+        definition.animationParts.forEach((part) => Object.values(part.animations)
+          .forEach((animation) => uniqueAnimations.set(animation.path, animation)));
+        await Promise.all([...uniqueAnimations.values()].map(async (animation) => {
+          if (asset.format === "MD5") {
+            const source = await this.fetchText(animation.path);
+            await this.geometryFrame(asset, animation.path, source, undefined, animation.startOffset);
+          } else if (asset.format === "IQM") {
+            const source = await this.fetchBinary(animation.path);
+            await this.geometryFrame(asset, animation.path, undefined, source, animation.startOffset);
+          }
+        }));
+        if (definition.ragdollPath) await this.ragdollSkeleton(definition.ragdollPath);
+      } finally {
+        this.disposeInstance(instance);
+      }
+      progress?.(++complete, total, definition.name);
+      await yieldToBrowser();
+    }
   }
 
   private saveRagdoll(id: number, instance: PlayerModelInstance, nowMilliseconds: number): void {
@@ -779,6 +824,10 @@ function translateAndScale(positions: number[], translate: [number, number, numb
     result[index + 2] = (positions[index + 2] + translate[1]) * scale;
   }
   return result;
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 export function ragdollVelocity(velocity: Vec3, yaw: number): Vec3 {

@@ -36,6 +36,19 @@ const GAME_SOUNDS: ReadonlyArray<readonly [string, number]> = [
   ["sounds/ctf/flagfail.wav", 200],
 ];
 
+export function gameSoundPaths(ids?: Iterable<GameSound>): string[] {
+  const selected = ids ? new Set(ids) : undefined;
+  const paths = GAME_SOUNDS.flatMap(([path], id) => !selected || selected.has(id) ? [path] : []);
+  if (!selected || selected.has(GameSound.Rifle)) paths.push("sounds/q009/rifle2.ogg", "sounds/q009/rifle3.ogg");
+  if (!selected || selected.has(GameSound.Shotgun)) paths.push("sounds/q009/shotgun2.ogg", "sounds/q009/shotgun3.ogg");
+  if (!selected || selected.has(GameSound.Chaingun)) paths.push("sounds/q009/minigun2.ogg", "sounds/q009/minigun3.ogg");
+  if (!selected || selected.has(GameSound.RocketFire)) paths.push("sounds/q009/rlauncher2.ogg", "sounds/q009/rlauncher3.ogg");
+  if (!selected || selected.has(GameSound.RocketHit)) paths.push("sounds/q009/ren2.ogg", "sounds/q009/ren3.ogg");
+  if (!selected || selected.has(GameSound.FireballExplode)) paths.push("sounds/q009/grenade2.ogg", "sounds/q009/grenade3.ogg");
+  if (!selected || selected.has(GameSound.Pistol)) paths.push("sounds/q009/pistol2.ogg", "sounds/q009/pistol3.ogg");
+  return [...new Set(paths)];
+}
+
 export function registerGameSounds(sound: SoundSystem): void {
   GAME_SOUNDS.forEach(([path, volume], id) => sound.registersound(id, path, volume));
   sound.registersound(GameSound.Rifle, "sounds/q009/rifle2.ogg", 80);

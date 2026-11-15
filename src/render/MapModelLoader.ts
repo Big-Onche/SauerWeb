@@ -14,6 +14,8 @@ import { selectModelSkin } from "./modelSkin";
 import type { MapModelCollision } from "../engine/physics/collision";
 import { parseIqm, parseMd2, parseMd3, parseMd5, parseObj, type ModelGeometry, type ModelGeometryMesh } from "../engine/rendermodel";
 
+const geometryCache = new Map<string, Promise<ModelGeometry>>();
+
 export interface LoadedMapModels {
   meshes: Mesh[];
   issues: string[];
@@ -257,6 +259,16 @@ function modelIssue(entity: RegisteredMapEntity, index: number, asset: MapModelA
 }
 
 async function fetchModelGeometry(asset: MapModelAsset): Promise<ModelGeometry> {
+  const key = `${asset.format}:${asset.geometryPath}`;
+  let cached = geometryCache.get(key);
+  if (cached) return cached;
+  cached = fetchModelGeometryUncached(asset);
+  geometryCache.set(key, cached);
+  cached.catch(() => geometryCache.delete(key));
+  return cached;
+}
+
+async function fetchModelGeometryUncached(asset: MapModelAsset): Promise<ModelGeometry> {
   const url = packageAssetUrl(asset.geometryPath);
   if (!url) throw new Error("The model geometry path is missing.");
   const response = await fetch(url, { cache: "no-cache" });

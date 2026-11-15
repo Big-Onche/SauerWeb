@@ -1,7 +1,8 @@
 import { SoundSystem, type MapSoundConfig } from "../../engine/sound";
 import type { RegisteredMapEntity, Vec3 } from "../../engine/octa";
 import type { MultiplayerClient, MultiplayerEvent } from "../../fpsgame/client";
-import { GameSound, registerGameSounds } from "../../fpsgame/sound";
+import { GameSound, gameSoundPaths, registerGameSounds } from "../../fpsgame/sound";
+import { GameModeFlag, gameModeHas } from "../../fpsgame/game";
 import { Gun } from "../../fpsgame/weapon/WeaponDefinitions";
 import type { Damageable } from "../../fpsgame/weapon/DamageSystem";
 import type { PhysicsEntity } from "../../engine/physics/types";
@@ -40,6 +41,36 @@ export class GameAudio {
     this.entities = entities;
     this.mapSounds = mapSounds;
     this.sound.setMap(entities, mapSounds);
+  }
+
+  // Original: src/fpsgame/render.cpp, src/fpsgame/capture.h, src/fpsgame/ctf.h, src/fpsgame/collect.h
+  // Functions: preloadsounds(), captureclientmode::preload(), ctfclientmode::preload(), collectclientmode::preload()
+  // Sauerbraten reference: SVN r6488
+  async preload(mode: number, mapSounds: readonly MapSoundConfig[],
+                progress?: (complete: number, total: number, path: string) => void): Promise<void> {
+    const ids = new Set<GameSound>();
+    addRange(ids, GameSound.Jump, GameSound.Splash2);
+    addRange(ids, GameSound.JumpPad, GameSound.Pistol);
+    addRange(ids, GameSound.VoiceBoost, GameSound.VoiceQuad10);
+    addRange(ids, GameSound.Burn, GameSound.Hit);
+    if (gameModeHas(mode, GameModeFlag.Capture)) {
+      ids.add(GameSound.VoiceBaseCaptured);
+      ids.add(GameSound.VoiceBaseLost);
+    }
+    if (gameModeHas(mode, GameModeFlag.Ctf)) {
+      ids.add(GameSound.FlagPickup);
+      ids.add(GameSound.FlagDrop);
+      ids.add(GameSound.FlagReturn);
+      ids.add(GameSound.FlagScore);
+      ids.add(GameSound.FlagReset);
+      ids.add(GameSound.FlagFail);
+    }
+    if (gameModeHas(mode, GameModeFlag.Collect)) {
+      ids.add(GameSound.FlagDrop);
+      ids.add(GameSound.FlagScore);
+      ids.add(GameSound.FlagFail);
+    }
+    await BrowserSoundBackend.preload([...gameSoundPaths(ids), ...mapSounds.map((sound) => sound.path)], progress);
   }
 
   update(listener: Vec3, yaw: number): void {
@@ -103,3 +134,7 @@ export class GameAudio {
 
 /** Compatibility name for the original weapon-only browser adapter. */
 export { GameAudio as WeaponAudio };
+
+function addRange(target: Set<GameSound>, first: GameSound, last: GameSound): void {
+  for (let sound = first; sound <= last; sound++) target.add(sound);
+}

@@ -12,6 +12,8 @@ import { MapScene } from "./render/MapScene";
 import { bindCrosshairSettings, crosshairSettingsMarkup, loadCrosshairSettings } from "./platform/browser/CrosshairSettings";
 import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./platform/browser/TouchSettings";
 import { releaseMobileOrientation, TOUCH_ESCAPE_REQUESTED } from "./platform/browser/TouchControls";
+import { LoadingProgress } from "./assets/LoadingProgress";
+import { LoadingScreen } from "./platform/browser/LoadingScreen";
 
 const app = required<HTMLDivElement>("#app");
 const parameters = new URLSearchParams(location.search);
@@ -28,7 +30,24 @@ app.innerHTML = `
   <main class="game-shell">
     <section class="viewport-panel">
       <canvas id="viewport" aria-label="Sauerbraten game viewport"></canvas>
-      <div id="game-loading" class="loading"><span></span><p>Loading ${escapeHtml(requestedMap || "map")}…</p></div>
+      <section id="game-loading" class="loading" role="progressbar" aria-label="Loading map" aria-valuemin="0" aria-valuemax="100">
+        <div class="loading-logo" aria-hidden="true"></div>
+        <div class="loading-map">${escapeHtml(requestedMap || "map")}</div>
+        <div class="loading-progress">
+          <div class="loading-frame">
+            <div class="loading-bar-track"><div class="loading-bar-fill">
+              <svg class="loading-bar-cap" viewBox="0 0 7 20" preserveAspectRatio="none" aria-hidden="true">
+                <image href="/api/data/loading_bar.png" width="32" height="32" /></svg>
+              <svg class="loading-bar-middle" viewBox="7 0 16 20" preserveAspectRatio="none" aria-hidden="true">
+                <image href="/api/data/loading_bar.png" width="32" height="32" /></svg>
+              <svg class="loading-bar-cap" viewBox="23 0 7 20" preserveAspectRatio="none" aria-hidden="true">
+                <image href="/api/data/loading_bar.png" width="32" height="32" /></svg>
+            </div></div>
+            <span class="loading-text">loading...</span>
+          </div>
+          <div class="loading-feedback"><span class="loading-detail"></span><span class="loading-percent">0%</span></div>
+        </div>
+      </section>
       <div id="game-error" class="error" hidden></div>
       <div class="game-mode-label" ${server ? "hidden" : ""}>${escapeHtml(gameModeName(localGameMode))}</div>
       <form id="chat" class="game-chat" hidden><label id="chat-prompt">&gt;</label>
@@ -76,6 +95,7 @@ app.innerHTML = `
 
 const canvas = required<HTMLCanvasElement>("#viewport");
 const loading = required<HTMLDivElement>("#game-loading");
+const loadingScreen = new LoadingScreen(loading);
 const error = required<HTMLDivElement>("#game-error");
 const deathMenu = required<HTMLElement>("#death-menu");
 const respawnButton = required<HTMLButtonElement>("[data-action='respawn']");
@@ -94,12 +114,19 @@ let disposed = false;
 let respawnPending = false;
 let teamChat = false;
 let protectionRedirecting = false;
+let activeMode = localGameMode;
+let loadedMode: number | undefined;
 
 scene.setPlayerModel(savedPlayerModel());
 scene.setLocalGameMode(localGameMode);
 gameConsole.add(`game mode is ${gameModeName(localGameMode)}`, "game-info");
 scene.onMultiplayer((event) => {
-  if (event.type === "map-change" && event.map && event.map.toLocaleLowerCase() !== activeMap.toLocaleLowerCase()) void loadMap(event.map);
+  if (event.type === "map-change") {
+    const modeChanged = event.mode !== loadedMode;
+    activeMode = event.mode;
+    scene.setLocalGameMode(event.mode);
+    if (event.map && (event.map.toLocaleLowerCase() !== activeMap.toLocaleLowerCase() || modeChanged)) void loadMap(event.map);
+  }
   if (event.type === "players" || event.type === "spawn") {
     syncDeathMenu();
     syncSpectatorButton();
@@ -167,26 +194,45 @@ async function start(): Promise<void> {
 }
 
 async function loadMap(name: string): Promise<void> {
-  loading.hidden = false;
+  loadingScreen.show(name);
   error.hidden = true;
+  scene.setTouchControlsBlocked(true);
+  scene.setPhysicsPaused(true);
   musicPlayer.playMapLoadingMusic();
+  const progress = new LoadingProgress((update) => loadingScreen.update(update), [18, 8, 10, 34, 25, 5]);
   try {
-    const response = await fetch(`/api/maps/${encodeURIComponent(name)}.ogz`);
-    if (!response.ok) throw new Error(`Could not fetch ${name}.ogz (${response.status}).`);
-    const mapData = await decompressGzip(await response.arrayBuffer());
+    const download = progress.stage(0, "downloading map...");
+    const compressed = await fetchArrayBuffer(`/api/maps/${encodeURIComponent(name)}.ogz`, download);
+    const decompress = progress.stage(1, "decompressing map...");
+    decompress(0);
+    const mapData = await decompressGzip(compressed);
+    decompress(1, `${formatBytes(mapData.byteLength)} decoded`);
+    const parse = progress.stage(2, "loading map data...");
+    parse(0);
     const map = parser.parse(mapData, name);
+    parse(1, `${map.entityRegistry.length} entities`);
+    const world = progress.stage(3, "building world...");
     const manifest = await loadTextureManifest(name);
     await scene.loadMap(map, resolveMapTextures(map, manifest), manifest.skybox, manifest.lighting, manifest.fog, manifest.water,
-      manifest.mapModels ?? [], manifest.entityModels?.teleporter, manifest.mapSounds ?? [], manifest.entityModels?.pickups ?? []);
+      manifest.mapModels ?? [], manifest.entityModels?.teleporter, manifest.mapSounds ?? [], manifest.entityModels?.pickups ?? [], world);
+    const preload = progress.stage(4, "preloading game assets...");
+    await scene.preloadSession(activeMode, savedPlayerModel(), Boolean(server), manifest.mapSounds ?? [], preload);
+    const ready = progress.stage(5, "starting game...");
     scene.setMultiplayerMapInfo(name, crc32(new Uint8Array(mapData)));
     activeMap = name;
+    loadedMode = activeMode;
     document.title = `${name} — SauerWeb`;
     gameConsole.add(`read map ${name}`);
+    ready(1);
+    progress.complete("ready");
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    loadingScreen.hide();
+    scene.setPhysicsPaused(false);
   } catch (caught) {
     fail(caught instanceof Error ? caught.message : String(caught));
-  } finally {
-    loading.hidden = true;
+    loadingScreen.hide();
   }
+  syncTouchControls();
 }
 
 function onKeyDown(event: KeyboardEvent): void {
@@ -319,6 +365,38 @@ function fail(message: string): void {
 async function decompressGzip(compressed: ArrayBuffer): Promise<ArrayBuffer> {
   const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Response(stream).arrayBuffer();
+}
+
+async function fetchArrayBuffer(url: string, progress: (fraction: number, detail?: string) => void): Promise<ArrayBuffer> {
+  const response = await fetch(url, { cache: "force-cache" });
+  if (!response.ok) throw new Error(`Could not fetch ${url} (${response.status}).`);
+  const total = Number(response.headers.get("Content-Length")) || 0;
+  if (!response.body) {
+    const result = await response.arrayBuffer();
+    progress(1, formatBytes(result.byteLength));
+    return result;
+  }
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.byteLength;
+    progress(total ? received / total : 0, total ? `${formatBytes(received)} / ${formatBytes(total)}` : formatBytes(received));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  progress(1, formatBytes(received));
+  return bytes.buffer;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function savedPlayerName(): string {

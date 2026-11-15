@@ -65,6 +65,16 @@ export class CtfRenderer {
     this.loading = undefined;
   }
 
+  // Original: src/fpsgame/ctf.h
+  // Functions: ctfclientmode::preload()
+  // Sauerbraten reference: SVN r6488
+  async preload(hold: boolean): Promise<void> {
+    await this.load();
+    if (!this.geometry) throw new Error("Could not initialize CTF flag geometry.");
+    if (hold) this.material("neutral");
+    else { this.material("red"); this.material("blue"); }
+  }
+
   private async load(): Promise<void> {
     if (this.loading) return this.loading;
     this.loading = (async () => {
@@ -73,7 +83,7 @@ export class CtfRenderer {
       const source = parseMd2(await response.arrayBuffer()).meshes[0];
       const positions = flagModelPositions(source.positions);
       this.geometry = { positions, uvs: source.uvs, indices: source.indices };
-    })().catch((error) => { console.warn(error); });
+    })();
     return this.loading;
   }
 

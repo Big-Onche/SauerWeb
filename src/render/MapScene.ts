@@ -400,8 +400,9 @@ export class MapScene {
                 lightingOverrides?: MapLightingOverrides, fogOverrides?: MapFogOverrides,
                 waterOverrides?: MapWaterOverrides,
                 mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset, mapSounds: MapSoundAsset[] = [],
-                pickupModels: MapModelAsset[] = []): Promise<SceneStats> {
+                pickupModels: MapModelAsset[] = [], progress?: (fraction: number, text: string) => void): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
+    progress?.(0, "clearing world...");
     this.currentMap = map;
     this.waterParameters = resolveMapWater(map, waterOverrides);
     const lighting = resolveMapLighting(map, lightingOverrides);
@@ -449,6 +450,7 @@ export class MapScene {
     this.fpsClient.multiplayer.setMapEntities(map.entityRegistry);
     this.gameAudio.setMap(map.entityRegistry, mapSounds);
     await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
+    progress?.(0.08, "loading octree...");
     const { batches, materialBatches } = this.profiler.measure("mapGeometry", () => ({
       batches: generateGeometry(map, textures),
       materialBatches: generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug"),
@@ -488,6 +490,7 @@ export class MapScene {
       triangles += batch.indices.length / 3;
       vertices += batch.positions.length / 3;
     });
+    progress?.(0.55, "loading models...");
     if (this.entityDebug && !this.entityMeshes.length) map.entityRegistry.forEach((entity) => this.createEntityMarker(entity));
     this.particleRenderer.loadMap(map.entityRegistry);
     const loadedMapModels = await loadMapModels(this.scene, map.entityRegistry, mapModels, this.wireframe,
@@ -502,6 +505,10 @@ export class MapScene {
         materialVolumes: map.materialVolumes.length,
         mapModelIssues: loadedMapModels.issues,
       };
+    }
+    if (this.runtimeMode === "game" && loadedMapModels.issues.length) {
+      loadedMapModels.resources.dispose();
+      throw new Error(`Required map assets failed to load: ${loadedMapModels.issues[0]}`);
     }
     if (this.mapCaustics) {
       const materials = new Set<StandardMaterial>();
@@ -523,10 +530,13 @@ export class MapScene {
     this.setMapFarPlane(map);
     await this.createSkybox(map, resolveMapSky(map, skyOverrides), generation);
     this.createFogDome(fog);
-    await this.weaponRenderer.loadHudGuns();
+    progress?.(0.78, "loading weapons...");
+    const hudGunIssues = await this.weaponRenderer.loadHudGuns();
+    if (this.runtimeMode === "game" && hudGunIssues.length) throw new Error(`Required HUD weapon failed to load: ${hudGunIssues[0]}`);
     this.placeCamera(map, batches);
     this.fpsClient.multiplayer.synchronizeLocalState();
     this.syncPlayerView();
+    progress?.(1, "world initialized");
     return {
       meshes: batches.length + materialBatches.length + loadedMapModels.meshes.length,
       faces,
@@ -535,6 +545,37 @@ export class MapScene {
       materialVolumes: map.materialVolumes.length,
       mapModelIssues: loadedMapModels.issues,
     };
+  }
+
+  // Original: src/engine/worldio.cpp, src/fpsgame/render.cpp
+  // Functions: load_world(const char *mname, const char *cname), preload()
+  // Sauerbraten reference: SVN r6488
+  async preloadSession(mode: number, playerModel: number, multiplayer: boolean, mapSounds: readonly MapSoundAsset[],
+                       progress?: (fraction: number, text: string) => void): Promise<void> {
+    progress?.(0, "preloading game assets...");
+    const jobs: Array<Promise<void>> = [
+      this.playerRenderer.preload(playerModel, gameModeHas(mode, GameModeFlag.Team), multiplayer,
+        (complete, total, label) => progress?.(0.05 + 0.45 * complete / total, `loading player model ${label}...`)),
+      this.gameAudio.preload(mode, mapSounds,
+        (complete, total, path) => progress?.(0.5 + 0.25 * complete / total, path)),
+    ];
+    if (gameModeHas(mode, GameModeFlag.Ctf)) jobs.push(this.ctfRenderer.preload(gameModeHas(mode, GameModeFlag.Hold)));
+    if (gameModeHas(mode, GameModeFlag.Capture)) jobs.push(this.captureRenderer.preload());
+    if (gameModeHas(mode, GameModeFlag.Collect)) jobs.push(this.collectRenderer.preload());
+    await Promise.all(jobs);
+    progress?.(0.78, "compiling shaders...");
+    const compiled = new Set<Material>();
+    await Promise.all(this.scene.meshes.map(async (mesh) => {
+      const material = mesh.material;
+      if (!material || compiled.has(material)) return;
+      compiled.add(material);
+      await material.forceCompilationAsync(mesh);
+    }));
+    progress?.(0.92, "uploading textures...");
+    await this.scene.whenReadyAsync(true);
+    this.scene.render();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    progress?.(1, "ready");
   }
 
   setWireframe(enabled: boolean): void {

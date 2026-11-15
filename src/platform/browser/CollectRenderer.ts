@@ -114,6 +114,18 @@ export class CollectRenderer {
     return material;
   }
 
+  // Original: src/fpsgame/collect.h
+  // Functions: collectclientmode::preload()
+  // Sauerbraten reference: SVN r6488
+  async preload(): Promise<void> {
+    await this.load();
+    if (!this.baseGeometry || !this.skullGeometry) throw new Error("Could not initialize Collect models.");
+    this.material("base", "red");
+    this.material("base", "blue");
+    this.material("skull", "red");
+    this.material("skull", "blue");
+  }
+
   private async load(): Promise<void> {
     if (this.loading) return this.loading;
     this.loading = (async () => {
@@ -124,7 +136,7 @@ export class CollectRenderer {
       if (!baseResponse.ok || !skullResponse.ok) throw new Error("Could not load native Collect models.");
       this.baseGeometry = flatten(parseMd3(await baseResponse.arrayBuffer()), COLLECT_BASE_MODEL_SCALE);
       this.skullGeometry = flatten(parseObj(await skullResponse.text()), COLLECT_SKULL_MODEL_SCALE, COLLECT_SKULL_TRANSLATE_Z);
-    })().catch((error) => { console.warn(error); });
+    })();
     return this.loading;
   }
 

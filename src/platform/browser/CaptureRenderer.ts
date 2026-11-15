@@ -99,6 +99,20 @@ export class CaptureRenderer {
     this.loading = undefined;
   }
 
+  // Original: src/fpsgame/capture.h
+  // Functions: captureclientmode::preload()
+  // Sauerbraten reference: SVN r6488
+  async preload(): Promise<void> {
+    await this.load();
+    if (!this.baseGeometry || !this.ammoGeometry) throw new Error("Could not initialize Capture models.");
+    for (const color of ["neutral", "red", "blue"]) {
+      this.baseMaterial("energy", color);
+      this.baseMaterial("monolith", color);
+      this.flameMaterial(color);
+    }
+    for (let ammo = 1; ammo <= AMMO_NAMES.length; ammo++) this.ammoMaterial(ammo);
+  }
+
   private async load(): Promise<void> {
     if (this.loading) return this.loading;
     this.loading = (async () => {
@@ -109,7 +123,7 @@ export class CaptureRenderer {
       if (!base.ok || !ammo.ok) throw new Error("Could not load native Capture models.");
       this.baseGeometry = parseMd3Geometry(await base.arrayBuffer(), BASE_SCALE);
       this.ammoGeometry = parseMd3Geometry(await ammo.arrayBuffer(), AMMO_SCALE);
-    })().catch((error) => { console.warn(error); });
+    })();
     return this.loading;
   }
 
