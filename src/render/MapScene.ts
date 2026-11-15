@@ -3,6 +3,7 @@ import { Matrix, Quaternion, Vector2, Vector3 } from "@babylonjs/core/Maths/math
 import { Plane } from "@babylonjs/core/Maths/math.plane";
 import { Frustum } from "@babylonjs/core/Maths/math.frustum";
 import { Engine } from "@babylonjs/core/Engines/engine";
+import "@babylonjs/core/Engines/Extensions/engine.query";
 import { EngineInstrumentation } from "@babylonjs/core/Instrumentation/engineInstrumentation";
 import { SceneInstrumentation } from "@babylonjs/core/Instrumentation/sceneInstrumentation";
 import { Constants } from "@babylonjs/core/Engines/constants";
