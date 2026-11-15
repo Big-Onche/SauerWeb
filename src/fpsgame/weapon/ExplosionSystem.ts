@@ -24,7 +24,7 @@ export class ExplosionSystem {
       let amount = Math.trunc(baseDamage * (1 - distance / EXPLOSION_DISTANCE_SCALE / definition.explosionRadius));
       if (target === owner) amount = Math.trunc(amount / EXPLOSION_SELF_DAMAGE_DIVISOR);
       hits.push({ target, distance, rays: 1, direction });
-      if (applyDamage) this.damage.damage(target, owner, amount, direction, gun);
+      if (applyDamage) this.damage.damage(target, owner, amount, direction, gun, middle);
     }
     return hits;
   }

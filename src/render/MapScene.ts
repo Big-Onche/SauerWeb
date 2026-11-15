@@ -40,6 +40,7 @@ import { createFogDomeGeometry, resolveMapFog, type MapFog } from "./MapFog";
 import { animatedWaterSurfaceHeight, resolveMapWater, underwaterFogBlend, underwaterOverlay, underwaterViewport,
   type MapWaterMaterial } from "./MapWater";
 import { loadWaterQuality, waterReflectionSize, WATER_QUALITY_CHANGED, type WaterQuality } from "./WaterSettings";
+import { DECAL_QUALITY_CHANGED, type DecalQuality } from "./DecalSettings";
 import { createMapCausticResources, shouldUseCaustics, StandardMaterialCaustics, type MapCausticResources } from "./MapCaustics";
 import { installSauerFogDistance } from "./SauerFogShader";
 import { BrowserFreeCameraInput, BrowserPhysicsInput } from "../platform/browser/PhysicsInput";
@@ -242,6 +243,10 @@ export class MapScene {
     const quality = (event as CustomEvent<WaterQuality>).detail;
     if (quality >= 0 && quality <= 3) this.setWaterQuality(quality);
   };
+  private readonly onDecalQualityChanged = (event: Event): void => {
+    const quality = (event as CustomEvent<DecalQuality>).detail;
+    if (quality >= 0 && quality <= 4) this.particleRenderer.setDecalQuality(quality);
+  };
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
     this.canvas = canvas;
@@ -252,6 +257,7 @@ export class MapScene {
     this.scene.useRightHandedSystem = true;
     this.scene.clearColor = new Color4(0.055, 0.067, 0.06, 1);
     window.addEventListener(WATER_QUALITY_CHANGED, this.onWaterQualityChanged);
+    window.addEventListener(DECAL_QUALITY_CHANGED, this.onDecalQualityChanged);
 
     this.freeCamera = this.createCamera("free-camera");
     this.freeCamera.speed = 4;
@@ -325,6 +331,12 @@ export class MapScene {
       if (event.type !== "shot-effect") return undefined;
       if (event.clientNumber === this.fpsClient.multiplayer.clientNumber) return this.weaponRenderer.muzzlePosition();
       return event.clientNumber === undefined ? undefined : this.playerRenderer.muzzlePosition(event.clientNumber);
+    }, (from, to) => {
+      const direction = subtract(to, from), distance = magnitude(direction);
+      if (distance <= 1e-6) return undefined;
+      normalize(direction);
+      const hit = this.physics.raycast(from, direction, distance + 1, 0, false);
+      return hit ? { position: hit.position, normal: hit.normal } : undefined;
     });
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
     this.gameAudio = new WeaponAudio(this.weapons.events, this.fpsClient.multiplayer, this.physics.player);
@@ -718,6 +730,7 @@ export class MapScene {
     this.canvas.removeEventListener("contextmenu", this.onSpectatorContextMenu);
     window.removeEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
     window.removeEventListener(WATER_QUALITY_CHANGED, this.onWaterQualityChanged);
+    window.removeEventListener(DECAL_QUALITY_CHANGED, this.onDecalQualityChanged);
     this.resizeObserver.disconnect();
     window.removeEventListener("resize", this.resize);
     if (document.pointerLockElement === this.canvas) void document.exitPointerLock();

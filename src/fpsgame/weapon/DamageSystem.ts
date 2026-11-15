@@ -35,7 +35,8 @@ export interface DamageResult {
 export class DamageSystem {
   constructor(private readonly events: WeaponEvents) {}
 
-  damage(target: Damageable, attacker: Damageable, amount: number, direction: Vec3, gun: Gun): DamageResult {
+  damage(target: Damageable, attacker: Damageable, amount: number, direction: Vec3, gun: Gun,
+         position: Vec3 = target.position): DamageResult {
     if (!target.alive || amount <= 0) return { applied: 0, absorbed: 0, killed: false };
     const absorbed = Math.min(target.armour, Math.trunc(amount * (target.armourType + 1) * 25 / 100));
     const applied = amount - absorbed;
@@ -44,7 +45,7 @@ export class DamageSystem {
     hitpush(target, amount, direction, gun, target === attacker);
     const killed = target.health <= 0;
     if (killed) target.alive = false;
-    this.events.emit({ type: "damage", gun, target, amount: applied, absorbed });
+    this.events.emit({ type: "damage", gun, target, position: copyVec3(position), amount: applied, absorbed });
     if (killed) this.events.emit({ type: "death", gun, target });
     return { applied, absorbed, killed };
   }

@@ -37,9 +37,17 @@ export interface TextureManifest {
   lighting?: MapLightingOverrides;
   fog?: MapFogOverrides;
   water?: MapWaterOverrides;
+  minimap?: MapMinimapOverrides;
   mapModels: MapModelAsset[];
   entityModels?: { teleporter?: MapModelAsset; pickups?: MapModelAsset[] };
   mapSounds?: MapSoundAsset[];
+}
+
+export interface MapMinimapOverrides {
+  height?: number;
+  color?: number;
+  clip?: boolean;
+  size?: number;
 }
 
 export interface MapSoundAsset { path: string; volume: number; maxUses: number }

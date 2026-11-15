@@ -115,7 +115,7 @@ export class ProjectileSystem {
       if (targetHit || worldHit || remainingDistance < 4) {
         const impact = worldHit ? copyVec3(projectile.o) : v;
         if (worldHit) addScaled(impact, projectile.dir, hitDistance);
-        this.projsplash(projectile, impact, targets, targetHit);
+        this.projsplash(projectile, impact, targets, targetHit, worldHit?.normal);
         this.remove(index);
         continue;
       }
@@ -158,17 +158,18 @@ export class ProjectileSystem {
   get activeCount(): number { return this.projectiles.length + this.bouncers.activeCount; }
   get activeProjectiles(): readonly Projectile[] { return this.projectiles; }
 
-  private projsplash(projectile: Projectile, position: Vec3, targets: readonly Damageable[], directTarget?: Damageable): void {
+  private projsplash(projectile: Projectile, position: Vec3, targets: readonly Damageable[], directTarget?: Damageable,
+                     surfaceNormal?: Vec3): void {
     const amount = WEAPONS[projectile.gun].damage * projectile.damageMultiplier / (projectile.owner.monster ? 4 : 1);
     const hits: WeaponHit[] = [];
     if (directTarget && projectile.local) {
       const direction = subtract(directTarget.position, position);
       normalize(direction);
       hits.push({ target: directTarget, distance: 0, rays: 1, direction });
-      if (!this.serverAuthoritative) this.damage.damage(directTarget, projectile.owner, amount, direction, projectile.gun);
+      if (!this.serverAuthoritative) this.damage.damage(directTarget, projectile.owner, amount, direction, projectile.gun, position);
     }
     if (projectile.gun === Gun.Rocket) {
-      const normal = { x: -projectile.dir.x, y: -projectile.dir.y, z: -projectile.dir.z };
+      const normal = surfaceNormal ?? { x: -projectile.dir.x, y: -projectile.dir.y, z: -projectile.dir.z };
       hits.push(...this.explosions.explode(projectile.gun, projectile.owner, position, amount, targets, directTarget,
         projectile.local && !this.serverAuthoritative, normal));
       this.rocketdebris(projectile, position);

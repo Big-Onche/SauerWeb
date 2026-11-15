@@ -16,6 +16,7 @@ import { onlinePlayersLabel, OnlinePresence } from "./presence";
 import { sauerFormattedMarkup } from "./sauerFormatting";
 import { TEAMKILL_PROTECTION_MESSAGE } from "./fpsgame/teamkillProtection";
 import { loadWaterQuality, saveWaterQuality, waterQualityLabel, type WaterQuality } from "./render/WaterSettings";
+import { decalQualityLabel, loadDecalQuality, saveDecalQuality, type DecalQuality } from "./render/DecalSettings";
 
 interface MapListItem {
   name: string;
@@ -304,6 +305,13 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
     const output = document.querySelector<HTMLOutputElement>("output[for='water-quality']");
     if (output) output.value = waterQualityLabel(quality);
   });
+  const decalQuality = document.querySelector<HTMLInputElement>("#decal-quality");
+  decalQuality?.addEventListener("input", () => {
+    const quality = Number(decalQuality.value) as DecalQuality;
+    saveDecalQuality(quality);
+    const output = document.querySelector<HTMLOutputElement>("output[for='decal-quality']");
+    if (output) output.value = decalQualityLabel(quality);
+  });
   document.querySelector<HTMLButtonElement>("[data-action='open-crosshair']")?.addEventListener("click", () => {
     navigate("/");
     document.querySelector<HTMLButtonElement>("[data-action='crosshair']")?.click();
@@ -328,8 +336,9 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
   ]);
   if (tab === "gfx") return optionGroup("graphics", [
     optionInfo("renderer", "WebGL"), optionSlider("water quality", "water-quality", loadWaterQuality(), 0, 3,
-      waterQualityLabel(loadWaterQuality())), optionInfo("dynamic lights", "enabled"),
-    optionNote("Low disables planar reflections. Medium, high and ultra use progressively sharper real-time water reflections."),
+      waterQualityLabel(loadWaterQuality())), optionSlider("decals", "decal-quality", loadDecalQuality(), 0, 4,
+      decalQualityLabel(loadDecalQuality())), optionInfo("dynamic lights", "enabled"),
+    optionNote("Decal quality controls draw distance, capacity and fade lifetime. Water quality controls real-time reflection detail."),
   ]);
   if (tab === "display") return optionGroup("display", [
     `<button class="option-action" type="button" data-action="fullscreen"><span><strong>fullscreen</strong><small>Toggle browser fullscreen mode</small></span><b>toggle</b></button>`,

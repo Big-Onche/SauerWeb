@@ -28,7 +28,7 @@ export type WeaponEvent =
   | { type: "bouncer-exploded"; key: string; id: number; ownerId: string; local: boolean; position: Vec3; hits: WeaponHit[] }
   | { type: "bouncer-removed"; key: string }
   | { type: "explosion"; gun: Gun; position: Vec3; radius: number; normal?: Vec3 }
-  | { type: "damage"; gun: Gun; target: Damageable; amount: number; absorbed: number }
+  | { type: "damage"; gun: Gun; target: Damageable; position: Vec3; amount: number; absorbed: number }
   | { type: "death"; gun: Gun; target: Damageable };
 
 export type WeaponEventListener = (event: WeaponEvent) => void;

@@ -1,12 +1,14 @@
 import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import type { Camera } from "@babylonjs/core/Cameras/camera";
 import "@babylonjs/core/Culling/ray";
+import { Constants } from "@babylonjs/core/Engines/constants";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { Material } from "@babylonjs/core/Materials/material";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
+import { Space } from "@babylonjs/core/Maths/math.axis";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
@@ -24,11 +26,12 @@ import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { projectileRenderPose, projectileVisualPosition } from "../fpsgame/weapon/ProjectileSystem";
 import { toBabylonDirection, toBabylonPosition } from "./coordinates";
+import { DECAL_QUALITY_SETTINGS, loadDecalQuality, type DecalQuality } from "./DecalSettings";
 import { selectModelSkin } from "./modelSkin";
 
 type ParticleTexture = "ball1.png" | "ball2.png" | "ball3.png" | "base.png" | "explosion.png" | "flames.png" | "flare.jpg" |
   "lensflares.png" | "lightning.jpg" | "muzzleflash1.jpg" | "muzzleflash2.jpg" | "muzzleflash3.jpg" | "plasma.png" | "smoke.png" |
-  "snow.png" | "spark.png" | "steam.png" | "blood.png" | "scorch.png";
+  "snow.png" | "spark.png" | "steam.png" | "blood.png" | "bullet.png" | "scorch.png";
 
 interface SpriteEffect {
   mesh: Mesh;
@@ -41,7 +44,13 @@ interface SpriteEffect {
   track?: () => Vec3 | undefined;
   update?: (progress: number) => void;
   fadeMesh?: boolean;
+  fadeStart?: number;
   ownedMaterial?: Material;
+}
+
+export interface DecalSurface {
+  position: Vec3;
+  normal: Vec3;
 }
 
 interface PooledParticleSystem {
@@ -154,6 +163,31 @@ const EXPLOSION_FRAGMENT_SHADER = `
   }
 `;
 
+const BULLET_DECAL_VERTEX_SHADER = `
+  precision highp float;
+  attribute vec3 position;
+  attribute vec2 uv;
+  uniform mat4 worldViewProjection;
+  varying vec2 texcoord;
+
+  void main(void) {
+    gl_Position = worldViewProjection * vec4(position, 1.0);
+    texcoord = uv;
+  }
+`;
+
+const BULLET_DECAL_FRAGMENT_SHADER = `
+  precision highp float;
+  uniform sampler2D decalSampler;
+  uniform float opacity;
+  varying vec2 texcoord;
+
+  void main(void) {
+    vec3 decal = texture2D(decalSampler, texcoord).rgb;
+    gl_FragColor = vec4(mix(vec3(0.5), decal, opacity), 1.0);
+  }
+`;
+
 /** Babylon presentation of Sauerbraten's renderparticles.cpp particle recipes. */
 export class ParticleRenderer {
   private readonly systems = new Set<ParticleSystem>();
@@ -164,14 +198,18 @@ export class ParticleRenderer {
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly persistentMeshes = new Set<Mesh>();
   private readonly effects: SpriteEffect[] = [];
+  private readonly decals: SpriteEffect[] = [];
   private readonly projectiles = new Map<string, ProjectileEffect>();
   private readonly bouncers = new Map<string, BouncerEffect>();
   private bouncerTemplates?: Promise<Map<number, Mesh[]>>;
+  private bulletMaterial?: ShaderMaterial;
   private templateGeneration = 0;
   private renderingEnabled = true;
+  private decalQuality = loadDecalQuality();
 
   constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera,
-              private readonly taggedMuzzle: (event: WeaponEvent) => Vec3 | undefined) {
+              private readonly taggedMuzzle: (event: WeaponEvent) => Vec3 | undefined,
+              private readonly resolveSurface?: (from: Vec3, to: Vec3) => DecalSurface | undefined) {
     events.on((event) => this.handleWeaponEvent(event));
   }
 
@@ -192,6 +230,12 @@ export class ParticleRenderer {
       projectile.light?.setEnabled(enabled);
     });
     this.bouncers.forEach((bouncer) => bouncer.meshes.forEach((mesh) => { mesh.isVisible = enabled; }));
+  }
+
+  setDecalQuality(quality: DecalQuality): void {
+    this.decalQuality = quality;
+    const maximum = DECAL_QUALITY_SETTINGS[quality].maximum;
+    while (this.decals.length > maximum) this.removeDecal(this.decals[0]);
   }
 
   // Original: src/fpsgame/entities.cpp, N_ITEMSPAWN and pickupeffects() particle_icon calls.
@@ -230,6 +274,7 @@ export class ParticleRenderer {
     this.systems.clear();
     this.effects.forEach((effect) => this.disposeEffect(effect, false));
     this.effects.length = 0;
+    this.decals.length = 0;
     this.persistentMeshes.forEach((mesh) => this.disposeMesh(mesh));
     this.persistentMeshes.clear();
     this.projectiles.forEach((projectile) => {
@@ -249,6 +294,8 @@ export class ParticleRenderer {
     this.beamPool.length = 0;
     this.materials.forEach((material) => material.dispose(false, false));
     this.materials.clear();
+    this.bulletMaterial?.dispose(false, false);
+    this.bulletMaterial = undefined;
     this.textures.forEach((texture) => texture.dispose());
     this.textures.clear();
   }
@@ -364,6 +411,8 @@ export class ParticleRenderer {
     else if (event.type === "bouncer-impact") this.decal(event.position, event.normal, "blood.png", 0x60ffff,
       2.96 / event.bounces);
     else if (event.type === "explosion") this.explosion(event.gun, event.position, event.radius, event.normal);
+    else if (event.type === "damage") this.splash(event.position, "blood.png", 0x60ffff, 2.96,
+      Math.max(1, Math.trunc(event.amount / 10)), 1000, 150, 2);
   }
 
   // Original: src/fpsgame/weapon.cpp
@@ -376,16 +425,19 @@ export class ParticleRenderer {
       endpoints.forEach((endpoint) => {
         this.sparks(endpoint, 20, 250);
         this.beam(muzzle, endpoint, "flare.jpg", 0xffc864, 0.28, 300);
+        this.bulletDecal(from, endpoint, 2);
       });
       this.muzzleFlash(muzzle, "muzzleflash3.jpg", 2.75, 200, 30, taggedMuzzle);
     } else if (gun === Gun.Chaingun || gun === Gun.Pistol) {
       this.sparks(endpoints[0], 200, 250);
       this.beam(muzzle, endpoints[0], "flare.jpg", 0xffc864, 0.28, 600);
+      this.bulletDecal(from, endpoints[0], 2);
       this.muzzleFlash(muzzle, "muzzleflash1.jpg", gun === Gun.Chaingun ? 2.25 : 1.25, gun === Gun.Chaingun ? 100 : 200,
         gun === Gun.Chaingun ? 30 : 15, taggedMuzzle);
     } else if (gun === Gun.Rifle) {
       this.sparks(endpoints[0], 200, 250);
       this.trail(muzzle, endpoints[0], "smoke.png", 0x404040, 0.6, 500, 20);
+      this.bulletDecal(from, endpoints[0], 3);
       this.muzzleFlash(muzzle, "muzzleflash3.jpg", 1.25, 150, 25, taggedMuzzle);
     } else if (gun === Gun.Rocket) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 3, 250, 0, taggedMuzzle);
     else if (gun === Gun.Grenade) this.muzzleFlash(muzzle, "muzzleflash2.jpg", 1.5, 200, 20, taggedMuzzle);
@@ -589,7 +641,7 @@ export class ParticleRenderer {
       this.sparks(position, 100, 200);
       return;
     }
-    this.decal(position, normal ?? { x: 0, y: 0, z: 1 }, "scorch.png", 0xffffff, radius / 2);
+    if (normal) this.decal(position, normal, "scorch.png", 0xffffff, radius / 2);
     const blue = gun === Gun.Grenade;
     const duration = Math.max(1, (radius - 4) * (blue ? 15 : 20));
     const effect = this.fireball(position, radius, duration, blue);
@@ -649,15 +701,51 @@ export class ParticleRenderer {
   }
 
   private decal(position: Vec3, normal: Vec3, texture: ParticleTexture, color: number, size: number): void {
+    const from = { x: position.x + normal.x * 2, y: position.y + normal.y * 2, z: position.z + normal.z * 2 };
+    const surface = this.resolveSurface ? this.resolveSurface(from, position) : { position, normal };
+    if (surface) this.createDecal(surface, texture, color, size);
+  }
+
+  private createDecal(surface: DecalSurface, texture: ParticleTexture, color: number, size: number, approach?: Vec3): void {
+    const settings = DECAL_QUALITY_SETTINGS[this.decalQuality];
+    if (!settings.maximum) return;
+    const camera = this.scene.activeCamera ?? this.playerCamera;
+    const babylonPosition = toBabylonPosition(surface.position);
+    if (Vector3.DistanceSquared(camera.globalPosition, babylonPosition) > settings.distance * settings.distance) return;
+    while (this.decals.length >= settings.maximum) this.removeDecal(this.decals[0]);
     const mesh = MeshBuilder.CreatePlane(`weapon-decal-${texture}`, { size: size * 2 }, this.scene);
-    mesh.position.copyFrom(toBabylonPosition(position));
-    const direction = toBabylonDirection(normal).normalize();
-    mesh.position.addInPlace(direction.scale(0.01));
+    mesh.position.copyFrom(toBabylonPosition(surface.position));
+    const direction = toBabylonDirection(surface.normal).normalize();
+    mesh.position.addInPlace(direction.scale(0.03));
     mesh.lookAt(mesh.position.add(direction));
+    if (texture === "scorch.png") mesh.rotate(direction, Math.random() * Math.PI * 2, Space.WORLD);
+    else if (texture === "bullet.png" && approach) this.orientBulletDecal(mesh, direction, approach);
     mesh.isPickable = false;
     mesh.isVisible = this.renderingEnabled;
-    mesh.material = this.spriteMaterial(`decal-${texture}`, texture, color, false);
-    this.effects.push({ mesh, started: performance.now(), duration: 60_000, startScale: 1, endScale: 1 });
+    mesh.material = this.decalMaterial(texture, color);
+    const effect: SpriteEffect = {
+      mesh, started: performance.now(), duration: settings.lifetimeMs, startScale: 1, endScale: 1, fadeStart: 0.8,
+    };
+    this.effects.push(effect);
+    this.decals.push(effect);
+  }
+
+  private bulletDecal(from: Vec3, endpoint: Vec3, size: number): void {
+    const surface = this.resolveSurface?.(from, endpoint);
+    if (surface) this.createDecal(surface, "bullet.png", 0xffffff, size, {
+      x: endpoint.x - from.x, y: endpoint.y - from.y, z: endpoint.z - from.z,
+    });
+  }
+
+  private orientBulletDecal(mesh: Mesh, normal: Vector3, approach: Vec3): void {
+    const shot = toBabylonDirection(approach).normalize();
+    const projected = shot.subtract(normal.scale(Vector3.Dot(shot, normal)));
+    if (projected.lengthSquared() <= 1e-8) return;
+    projected.normalize();
+    mesh.computeWorldMatrix(true);
+    const currentDown = Vector3.TransformNormal(Vector3.Down(), mesh.getWorldMatrix()).normalize();
+    const angle = Math.atan2(Vector3.Dot(normal, Vector3.Cross(currentDown, projected)), Vector3.Dot(currentDown, projected));
+    mesh.rotate(normal, angle + Math.PI, Space.WORLD);
   }
 
   private sparks(position: Vec3, count: number, fadeMs: number): void {
@@ -912,6 +1000,47 @@ export class ParticleRenderer {
     return material;
   }
 
+  private decalMaterial(textureName: ParticleTexture, color: number): Material {
+    if (textureName === "bullet.png") return this.bulletDecalMaterial();
+    const material = this.spriteMaterial(`decal-${textureName}`, textureName, color, false);
+    const texture = material.opacityTexture!;
+    const grayscaleMask = textureName === "blood.png";
+    texture.getAlphaFromRGB = grayscaleMask;
+    material.transparencyMode = Material.MATERIAL_ALPHATESTANDBLEND;
+    material.alphaCutOff = 0.02;
+    material.zOffset = -1;
+    material.zOffsetUnits = -4;
+    return material;
+  }
+
+  private bulletDecalMaterial(): ShaderMaterial {
+    if (this.bulletMaterial) return this.bulletMaterial;
+    const material = new ShaderMaterial("decal-bullet-material", this.scene, {
+      vertexSource: BULLET_DECAL_VERTEX_SHADER,
+      fragmentSource: BULLET_DECAL_FRAGMENT_SHADER,
+    }, {
+      attributes: ["position", "uv"], uniforms: ["worldViewProjection", "opacity"], samplers: ["decalSampler"],
+      needAlphaBlending: true,
+    });
+    material.setTexture("decalSampler", this.particleTexture("bullet.png"));
+    material.alphaMode = Constants.ALPHA_MULTIPLY;
+    material.backFaceCulling = false;
+    material.disableDepthWrite = true;
+    material.zOffset = -1;
+    material.zOffsetUnits = -4;
+    material.onBindObservable.add((mesh) => {
+      material.setFloat("opacity", mesh.visibility);
+      const alphaState = (this.scene.getEngine() as unknown as {
+        _alphaState: { setAlphaBlendFunctionParameters: (sourceRgb: number, destinationRgb: number,
+                                                         sourceAlpha: number, destinationAlpha: number) => void };
+      })._alphaState;
+      alphaState.setAlphaBlendFunctionParameters(Constants.GL_ALPHA_FUNCTION_DST_COLOR, Constants.GL_ALPHA_FUNCTION_SRC,
+        1, 1);
+    });
+    this.bulletMaterial = material;
+    return material;
+  }
+
   private particleTexture(name: ParticleTexture): Texture {
     let texture = this.textures.get(name);
     if (texture) return texture;
@@ -931,13 +1060,20 @@ export class ParticleRenderer {
         effect.mesh.position.copyFrom(toBabylonPosition(trackedPosition));
         effect.light?.position.copyFrom(effect.mesh.position);
       }
-      effect.mesh.visibility = this.renderingEnabled ? (effect.fadeMesh === false ? 1 : 1 - progress) : 0;
+      const fade = effect.fadeStart === undefined ? 1 - progress
+        : progress <= effect.fadeStart ? 1 : 1 - (progress - effect.fadeStart) / (1 - effect.fadeStart);
+      const decalIndex = this.decals.indexOf(effect);
+      const capacityFade = decalIndex < 0 ? 1
+        : decalCapacityOpacity(decalIndex, this.decals.length, DECAL_QUALITY_SETTINGS[this.decalQuality].maximum);
+      effect.mesh.visibility = this.renderingEnabled ? (effect.fadeMesh === false ? 1 : fade * capacityFade) : 0;
       effect.mesh.scaling.setAll(effect.startScale + (effect.endScale - effect.startScale) * progress);
       effect.update?.(progress);
       if (effect.light) effect.light.intensity = (1 - progress) * 2;
       if (progress >= 1) {
         this.disposeEffect(effect);
         this.effects.splice(index, 1);
+        const decalIndex = this.decals.indexOf(effect);
+        if (decalIndex >= 0) this.decals.splice(decalIndex, 1);
       }
     }
     this.systems.forEach((system) => {
@@ -961,6 +1097,14 @@ export class ParticleRenderer {
       effect.mesh.visibility = 1;
       pool.push(effect.mesh);
     } else this.disposeMesh(effect.mesh);
+  }
+
+  private removeDecal(effect: SpriteEffect): void {
+    const effectIndex = this.effects.indexOf(effect);
+    if (effectIndex >= 0) this.effects.splice(effectIndex, 1);
+    const decalIndex = this.decals.indexOf(effect);
+    if (decalIndex >= 0) this.decals.splice(decalIndex, 1);
+    this.disposeEffect(effect, false);
   }
 
   private disposeMesh(mesh: Mesh): void {
@@ -987,6 +1131,13 @@ export function sauerParticleOffset(origin: Vec3, direction: number, distance: n
 /** Native quad vertices extend by size on both sides, while Babylon's particle size is the complete width. */
 export function sauerParticleDiameter(size: number): number {
   return size * 2;
+}
+
+/** Fades the oldest 20% as the decal pool fills, so capacity eviction is visually imperceptible. */
+export function decalCapacityOpacity(index: number, count: number, maximum: number): number {
+  if (maximum <= 0 || count <= maximum * 0.75) return 1;
+  const pressure = Math.min(1, (count / maximum - 0.75) / 0.25);
+  return Math.min(1, Math.max(0, 1 - pressure + index / Math.max(1, maximum * 0.2)));
 }
 
 /** Exact renderparticles.cpp calc() trajectory, with elapsed time in milliseconds. */

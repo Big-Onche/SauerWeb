@@ -67,7 +67,7 @@ export class HitscanSystem {
       const hitTo = definition.rays > 1 ? target : endpoint;
       const direction = subtract(hitTo, from), distance = magnitude(direction);
       normalize(direction);
-      if (applyDamage) this.damage.damage(hitTarget, attacker, definition.damage * damageMultiplier * rayCount, direction, gun);
+      if (applyDamage) this.damage.damage(hitTarget, attacker, definition.damage * damageMultiplier * rayCount, direction, gun, endpoint);
       hits.push({ target: hitTarget, distance, rays: rayCount, direction });
     });
     return { endpoints, hits };

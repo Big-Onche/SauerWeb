@@ -264,7 +264,9 @@ export class BouncerSystem {
         break;
       }
       bouncer.position = copyVec3(old);
-      this.bounced(bouncer, collisionNormal);
+      const contact = worldHit?.position ?? { x: trial.x - collisionNormal.x * bouncer.radius,
+        y: trial.y - collisionNormal.y * bouncer.radius, z: trial.z - collisionNormal.z * bouncer.radius };
+      this.bounced(bouncer, collisionNormal, contact);
       const collisionDot = dot(collisionNormal, bouncer.velocity);
       const speed = magnitude(bouncer.velocity);
       const energy = speed > 0 ? 1 + (1 - elasticity) * collisionDot / speed : 0;
@@ -278,11 +280,11 @@ export class BouncerSystem {
     return collideplayer;
   }
 
-  private bounced(bouncer: Bouncer, surface: Vec3): void {
+  private bounced(bouncer: Bouncer, surface: Vec3, contact: Vec3): void {
     if (bouncer.bouncetype !== BouncerType.BNC_GIBS || bouncer.bounces >= 2) return;
     bouncer.bounces++;
     this.events.emit({ type: "bouncer-impact", key: bouncer.key, bouncerType: bouncer.bouncetype,
-      position: copyVec3(bouncer.position), normal: copyVec3(surface), bounces: bouncer.bounces });
+      position: copyVec3(contact), normal: copyVec3(surface), bounces: bouncer.bounces });
   }
 
   private detonate(bouncer: Bouncer, targets: readonly Damageable[]): void {

@@ -1,4 +1,5 @@
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
+import { Constants } from "@babylonjs/core/Engines/constants";
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
@@ -7,7 +8,7 @@ import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it, vi } from "vitest";
 import { WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
-import { explosionTexgenBasis, ParticleRenderer, sauerParticleColor, sauerParticleDiameter, sauerParticleOffset,
+import { decalCapacityOpacity, explosionTexgenBasis, ParticleRenderer, sauerParticleColor, sauerParticleDiameter, sauerParticleOffset,
   sauerParticlePosition } from "./ParticleRenderer";
 
 describe("Sauerbraten particle entity helpers", () => {
@@ -44,6 +45,13 @@ describe("Sauerbraten particle entity helpers", () => {
     expect(sauerParticlePosition(origin, { x: 50, y: -25, z: 100 }, -20, 500)).toEqual({ x: 15, y: 17.5, z: 41.25 });
     expect(sauerParticlePosition(origin, { x: 50, y: -25, z: 100 }, 20, 500)).toEqual({ x: 15, y: 17.5, z: 38.75 });
     expect(sauerParticlePosition(origin, { x: 50, y: -25, z: 100 }, 0, 500)).toEqual(origin);
+  });
+
+  it("fades oldest decals before the capacity limit evicts them", () => {
+    expect(decalCapacityOpacity(0, 96, 128)).toBe(1);
+    expect(decalCapacityOpacity(0, 128, 128)).toBe(0);
+    expect(decalCapacityOpacity(13, 128, 128)).toBeCloseTo(13 / 25.6);
+    expect(decalCapacityOpacity(26, 128, 128)).toBe(1);
   });
 
   it("shares textures and material configurations across repeated weapon effects", () => {
@@ -117,6 +125,47 @@ describe("Sauerbraten particle entity helpers", () => {
     });
 
     expect(splash).toHaveBeenCalledWith({ x: 10, y: 0, z: 0 }, "spark.png", 0xb49b4b, 0.24, 200, 250, 150, 2, true);
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("projects bullet decals onto the map collision surface", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    scene.activeCamera = camera;
+    const resolveSurface = vi.fn((_from, to) => ({ position: { ...to }, normal: { x: 0, y: 0, z: 1 } }));
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined, resolveSurface);
+
+    events.emit({
+      type: "shot-effect", gun: Gun.Pistol, from: { x: 0, y: 0, z: 0 }, to: { x: 10, y: 0, z: 0 }, rays: [],
+    });
+
+    expect(resolveSurface).toHaveBeenCalledWith({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 });
+    const decal = scene.getMeshByName("weapon-decal-bullet.png");
+    expect(decal).not.toBeNull();
+    expect(decal!.material!.getActiveTextures()[0].name).toContain("bullet.png");
+    const material = decal!.material as ShaderMaterial;
+    expect(material).toBeInstanceOf(ShaderMaterial);
+    expect(material.alphaMode).toBe(Constants.ALPHA_MULTIPLY);
+    expect(material.zOffset).toBe(-1);
+    expect(material.zOffsetUnits).toBe(-4);
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("does not create decals when the setting is disabled", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    scene.activeCamera = camera;
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined,
+      (_from, to) => ({ position: { ...to }, normal: { x: 0, y: 0, z: 1 } }));
+    renderer.setDecalQuality(0);
+
+    events.emit({
+      type: "shot-effect", gun: Gun.Rifle, from: { x: 0, y: 0, z: 0 }, to: { x: 10, y: 0, z: 0 }, rays: [],
+    });
+
+    expect(scene.getMeshByName("weapon-decal-bullet.png")).toBeNull();
     renderer.clear();
     engine.dispose();
   });
