@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PhysicsSimulation } from "../engine/physics";
+import { ClientState } from "../engine/physics/types";
 import { normalize, subtract } from "../engine/physics/vector";
 import { AiStateType, BotManager, findorientation, type BotActor } from "./ai";
 import { createDamageable } from "./weapon/DamageSystem";
@@ -53,6 +54,48 @@ describe("native bot route following", () => {
     expect(bot.ai.targetNode).toBe(next);
     expect(bot.ai.spot).toEqual(manager.waypoints.waypoints[next].o);
     expect(bot.ai.state[0].type).toBe(AiStateType.Wait);
+  });
+});
+
+describe("native bot lifecycle", () => {
+  it("requests the first spawn for a forced-dead bot even when its initial life sequence is -1", () => {
+    const physics = new PhysicsSimulation(), requests: number[] = [];
+    const manager = new BotManager(physics, physics.player, { spawnRequest: (bot) => requests.push(bot.clientNumber) });
+    const bot = manager.init({ clientNumber: 7, ownerNumber: 4, skill: 50 });
+    Object.assign(bot, { lifeSequence: -1, respawned: -2, clientState: ClientState.Dead, alive: false, lastPain: 1000, deadAt: 1000 });
+
+    manager.update(1499, []);
+    manager.update(1500, []);
+    manager.update(2500, []);
+
+    expect(requests).toEqual([7]);
+    expect(bot.respawned).toBe(-1);
+  });
+
+  it("uses the native five-second CTF bot wait with its 250 ms allowance", () => {
+    const physics = new PhysicsSimulation(), requests: number[] = [];
+    const manager = new BotManager(physics, physics.player, { spawnRequest: (bot) => requests.push(bot.clientNumber) });
+    manager.setGameMode(11);
+    const bot = manager.init({ clientNumber: 7, ownerNumber: 4, skill: 50 });
+    Object.assign(bot, { lifeSequence: 2, respawned: -1, clientState: ClientState.Dead, alive: false, lastPain: 1000, deadAt: 1000 });
+
+    manager.update(6249, []);
+    expect(requests).toEqual([]);
+    manager.update(6250, []);
+    expect(requests).toEqual([7]);
+  });
+
+  it("routes an owned bot suicide to the server once per native sequence token", () => {
+    const physics = new PhysicsSimulation(), requests: number[] = [];
+    const manager = new BotManager(physics, physics.player, { suicideRequest: (bot) => requests.push(bot.clientNumber) });
+    const bot = manager.init({ clientNumber: 7, ownerNumber: 4, skill: 50 });
+
+    Reflect.apply(Reflect.get(manager, "suicide"), manager, [bot, 6100]);
+    Reflect.apply(Reflect.get(manager, "suicide"), manager, [bot, 6200]);
+    Reflect.apply(Reflect.get(manager, "suicide"), manager, [bot, 7100]);
+
+    expect(requests).toEqual([7, 7]);
+    expect(bot.clientState).toBe(ClientState.Alive);
   });
 });
 

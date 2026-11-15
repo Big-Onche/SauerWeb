@@ -157,6 +157,7 @@ export class MapScene {
       if (bot.ownerNumber === this.fpsClient.multiplayer.clientNumber) this.fpsClient.multiplayer.sendOwnedBotEvent(bot.clientNumber, event);
     },
     spawnRequest: (bot) => this.fpsClient.multiplayer.requestOwnedBotSpawn(bot.clientNumber),
+    suicideRequest: (bot) => this.fpsClient.multiplayer.requestOwnedBotSuicide(bot.clientNumber),
     changed: () => this.syncBotTargets(),
     objective: (bot, _state, interests) => this.gameModeAiObjective(bot, interests),
     itemPickup: (bot, entityIndex, now) => this.fpsClient.multiplayer.tryBotItemPickup(bot, entityIndex, now),
@@ -1861,7 +1862,12 @@ export class MapScene {
         bot.lifeSequence = event.player.lifeSequence;
         bot.clientState = event.player.state;
         bot.alive = event.player.alive;
-        if (!bot.alive) bot.deadAt = performance.now() - 500;
+        if (!bot.alive) {
+          bot.deadAt = bot.lastPain = performance.now() - 500;
+          // Native clients use -2 when a forced-dead lifecycle must be allowed to make its first request,
+          // including the otherwise ambiguous initial lifesequence of -1.
+          bot.respawned = -2;
+        }
       } else this.bots.remove(event.player.clientNumber);
       return;
     }

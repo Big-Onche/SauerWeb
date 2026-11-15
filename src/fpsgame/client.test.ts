@@ -71,6 +71,21 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.remaining).toBe(0);
   });
 
+  it("wraps an owned bot suicide in N_FROMAI like the native client", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+
+    client.multiplayer.requestOwnedBotSuicide(7);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toBe(1);
+    expect(send.mock.calls[0][2]).toBe(true);
+    const packet = new PacketReader(send.mock.calls[0][1]);
+    expect([packet.getInt(), packet.getInt(), packet.getInt()]).toEqual([NetworkMessage.FromAi, 7, NetworkMessage.Suicide]);
+    expect(packet.remaining).toBe(0);
+  });
+
   it("measures N_PONG at the browser and reports the vanilla-smoothed RTT with N_CLIENTPING", () => {
     const client = createClient(), multiplayer = client.multiplayer;
     multiplayer.connected = true;
@@ -501,6 +516,8 @@ describe("native server message framing", () => {
     expect(client.weapons.controller.inventory.selectedGun).toBe(Gun.Rifle);
     expect(Array.from(client.weapons.controller.inventory.ammo.slice(0, 7))).toEqual([1, 0, 0, 0, 100, 0, 0]);
     client.physics.player.alive = false;
+    const player = client.multiplayer.players.get(client.multiplayer.clientNumber);
+    if (player) player.deadAt = performance.now() - 5000;
     expect(client.multiplayer.requestRespawn()).toBe(true);
     expect(client.weapons.controller.inventory.selectedGun).toBe(Gun.Rifle);
     expect(Array.from(client.weapons.controller.inventory.ammo.slice(0, 7))).toEqual([1, 0, 0, 0, 100, 0, 0]);

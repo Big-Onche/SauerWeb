@@ -77,6 +77,7 @@ export interface BotActor extends PhysicsEntity {
   deadAt: number;
   lastNode: number;
   respawned: number;
+  suicided: number;
   ai: AiInfo;
   weaponSystem: WeaponSystem;
 }
@@ -93,6 +94,7 @@ export interface BotInit {
 export interface BotCallbacks {
   event?: (event: WeaponEvent, bot: BotActor) => void;
   spawnRequest?: (bot: BotActor) => void;
+  suicideRequest?: (bot: BotActor) => void;
   changed?: () => void;
   objective?: (bot: BotActor, state: AiState, interests: AiInterest[]) => boolean;
   itemPickup?: (bot: BotActor, entityIndex: number, now: number) => boolean;
@@ -206,6 +208,7 @@ export class BotManager {
       deadAt: 0,
       lastNode: -1,
       respawned: -1,
+      suicided: -1,
       ai: createAiInfo(performance.now(), clamp(init.skill, 1, 101)),
       weaponSystem: undefined as unknown as WeaponSystem,
     } satisfies Omit<BotActor, "weaponSystem"> & { weaponSystem: WeaponSystem };
@@ -241,7 +244,7 @@ export class BotManager {
     const spawn = this.chooseSpawn(bot.team);
     resetPlayer(bot, { ...spawn.position, z: spawn.position.z + bot.eyeHeight }, spawn.attributes[0] ?? 0);
     bot.lifeSequence++;
-    bot.respawned = -1;
+    bot.respawned = bot.suicided = -1;
     bot.deadAt = 0;
     bot.tokens = 0;
     bot.lastNode = this.waypoints.closestwaypoint(spawn.position, SIGHTMIN, false);
@@ -252,8 +255,12 @@ export class BotManager {
     this.callbacks.changed?.();
   }
 
+  // Original: src/fpsgame/fps.cpp
+  // Functions: killed(fpsent *d, fpsent *actor), deathstate(fpsent *d, bool restore)
+  // Sauerbraten reference: SVN r6488
   killed(victim: BotActor, attacker?: Damageable, now = performance.now()): void {
-    if (victim.clientState === ClientState.Dead) return;
+    if (victim.clientState !== ClientState.Alive && victim.clientState !== ClientState.Lagged &&
+        victim.clientState !== ClientState.Spawning) return;
     victim.alive = false;
     victim.clientState = ClientState.Dead;
     victim.deadAt = victim.lastPain = now;
@@ -296,20 +303,27 @@ export class BotManager {
       if (!sameTargets(bot.weaponSystem.targets, damageTargets)) replaceTargets(bot.weaponSystem.targets, damageTargets);
     }
     this.iteration = (this.iteration + 1) % actors.length;
-    const delayedCtf = gameModeHas(this.gameMode, GameModeFlag.Hold) || gameModeHas(this.gameMode, GameModeFlag.Protect) &&
-      gameModeHas(this.gameMode, GameModeFlag.Efficiency);
-    const delayedCapture = gameModeHas(this.gameMode, GameModeFlag.Capture) && !gameModeHas(this.gameMode, GameModeFlag.Regen);
-    const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) || delayedCtf || delayedCapture ? 5000 : 500;
     for (let index = 0; index < actors.length; index++) {
       const bot = actors[index];
       if (this.performanceRecorder) this.profile("weapons", () => this.syncWeaponState(bot));
       else this.syncWeaponState(bot);
-      if (!bot.alive) {
-        if (now - bot.deadAt >= respawnDelay && bot.respawned !== bot.lifeSequence) {
+      // Original: src/fpsgame/ai.cpp, src/fpsgame/game.h, src/fpsgame/capture.h, src/fpsgame/ctf.h, src/fpsgame/collect.h
+      // Functions: ai::think(fpsent *d, bool run), ai::move(fpsent *d, aistate &b, int curtime), fpsent::respawnwait(int secs, int delay),
+      // captureclientmode::respawnwait(),
+      // collectclientmode::respawnwait(), ctfclientmode::respawnwait()
+      // Sauerbraten reference: SVN r6488
+      if (bot.clientState === ClientState.Dead) {
+        if (bot.respawned !== bot.lifeSequence && this.respawnwait(bot, now, 250) <= 0 && now - bot.lastPain >= 500) {
           bot.respawned = bot.lifeSequence;
           if (bot.ownerNumber >= 0) this.callbacks.spawnRequest?.(bot);
           else this.spawned(bot, now);
         }
+        continue;
+      }
+      if (bot.clientState !== ClientState.Alive) {
+        bot.move = bot.strafe = 0;
+        bot.weaponSystem.controller.setAttacking(false);
+        bot.jumping = false;
         continue;
       }
       if (this.performanceRecorder) {
@@ -334,7 +348,7 @@ export class BotManager {
       }
       bot.weaponSystem.controller.setAttacking(false);
       bot.jumping = false;
-      if (!bot.alive || bot.health <= 0 || bot.clientState === ClientState.Dead) this.killed(bot, undefined, now);
+      if (!bot.alive || bot.health <= 0) this.killed(bot, undefined, now);
     }
   }
 
@@ -356,7 +370,7 @@ export class BotManager {
           bot.ai.route.length = 0;
         } else if (bot.ai.blockSequence === 4) this.resetNavigation(bot, now, true);
         else if (bot.ai.blockSequence === 5) this.resetNavigation(bot, now, false);
-        else if (bot.ai.blockSequence >= 6) this.killed(bot, bot, now);
+        else if (bot.ai.blockSequence >= 6) this.suicide(bot, now);
       }
     } else { bot.ai.blockTime = 0; bot.ai.blockSequence = 0; }
     if (bot.ai.targetNode === bot.ai.targetLast) {
@@ -371,12 +385,39 @@ export class BotManager {
           bot.ai.route.length = 0;
         } else if (bot.ai.targetSequence === 4) this.resetNavigation(bot, now, true);
         else if (bot.ai.targetSequence === 5) this.resetNavigation(bot, now, false);
-        else if (bot.ai.targetSequence >= 6) this.killed(bot, bot, now);
+        else if (bot.ai.targetSequence >= 6) this.suicide(bot, now);
       }
     } else {
       bot.ai.targetTime = bot.ai.targetSequence = 0;
       bot.ai.targetLast = bot.ai.targetNode;
     }
+  }
+
+  // Original: src/fpsgame/fps.cpp
+  // Functions: suicide(physent *d)
+  // Sauerbraten reference: SVN r6488
+  private suicide(bot: BotActor, now: number): void {
+    if (bot.clientState !== ClientState.Alive) return;
+    if (bot.ownerNumber < 0) {
+      this.killed(bot, bot, now);
+      return;
+    }
+    const sequence = (bot.lifeSequence << 16) | (Math.trunc(now / 1000) & 0xFFFF);
+    if (bot.suicided === sequence) return;
+    this.callbacks.suicideRequest?.(bot);
+    bot.suicided = sequence;
+  }
+
+  // Original: src/fpsgame/game.h, src/fpsgame/capture.h, src/fpsgame/ctf.h, src/fpsgame/collect.h
+  // Functions: fpsent::respawnwait(int secs, int delay), captureclientmode::respawnwait(), collectclientmode::respawnwait(),
+  // ctfclientmode::respawnwait()
+  // Sauerbraten reference: SVN r6488
+  private respawnwait(bot: BotActor, now: number, delay = 0): number {
+    const delayed = gameModeHas(this.gameMode, GameModeFlag.Collect) ||
+      gameModeHas(this.gameMode, GameModeFlag.Capture) && !gameModeHas(this.gameMode, GameModeFlag.Regen) ||
+      gameModeHas(this.gameMode, GameModeFlag.Ctf) &&
+        (gameModeHas(this.gameMode, GameModeFlag.Efficiency) || !gameModeHas(this.gameMode, GameModeFlag.Protect));
+    return delayed ? Math.max(0, 5 - Math.trunc((now - bot.lastPain - delay) / 1000)) : 0;
   }
 
   private checkItems(bot: BotActor, now: number): void {

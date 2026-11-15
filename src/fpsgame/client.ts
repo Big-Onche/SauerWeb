@@ -576,6 +576,14 @@ export class MultiplayerClient extends EventTarget {
   }
 
   // Original: src/fpsgame/fps.cpp
+  // Functions: suicide(physent *d)
+  // Sauerbraten reference: SVN r6488
+  requestOwnedBotSuicide(clientNumber: number): void {
+    if (!this.connected) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber).putInt(NetworkMessage.Suicide).finish(), true);
+  }
+
+  // Original: src/fpsgame/fps.cpp
   // Function: respawn() / respawnself()
   // Sauerbraten reference: SVN r6488
   requestRespawn(): boolean {
@@ -1873,9 +1881,11 @@ export class MultiplayerClient extends EventTarget {
       .putInt(flag).putInt(version).finish(), true);
   }
 
+  // Original: src/fpsgame/ctf.h
+  // Functions: ctfclientmode::respawnwait(fpsent *d, int delay)
+  // Sauerbraten reference: SVN r6488
   private ctfRespawnDelayed(): boolean {
-    if (gameModeHas(this.gameMode, GameModeFlag.Hold)) return true;
-    return gameModeHas(this.gameMode, GameModeFlag.Protect) && gameModeHas(this.gameMode, GameModeFlag.Efficiency);
+    return gameModeHas(this.gameMode, GameModeFlag.Efficiency) || !gameModeHas(this.gameMode, GameModeFlag.Protect);
   }
 
   private objectiveMapReady(): boolean {
