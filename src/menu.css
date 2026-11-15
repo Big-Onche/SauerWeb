@@ -8,6 +8,7 @@ button, input { font: inherit; }
 button { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .sauer-screen { position: relative; display: grid; place-items: center; width: 100%; height: 100%; overflow: hidden; background: #252b2b; }
+.main-menu-viewport, .main-menu-stage { display: contents; }
 .sauer-background { position: absolute; inset: 0; overflow: hidden; }
 .background-base, .background-detail, .background-decals, .background-shade { position: absolute; inset: 0; }
 .background-base { background: url("/api/data/background.png") repeat; background-size: 382px 382px; }
@@ -17,7 +18,7 @@ button { color: inherit; }
 .sauer-logo { position: absolute; top: clamp(0px, 1.5vh, 16px); left: 50%; z-index: 1; width: min(900px, 94vw, 100vh); height: auto; transform: translateX(-50%); pointer-events: none; }
 .sauer-dialog { position: relative; z-index: 2; isolation: isolate; border: 0; background: transparent; box-shadow: 0 25px 80px #000b; }
 .sauer-dialog > :not(.gui-skin) { position: relative; z-index: 2; }
-.main-menu-status { position: absolute; bottom: 16px; left: 20px; z-index: 2; pointer-events: none; }
+.main-dialog > .main-menu-status { position: fixed; bottom: 16px; left: 20px; z-index: 2; pointer-events: none; }
 .online-players { display: flex; align-items: center; gap: 8px; color: #bec8c1;
   font-size: 14px; font-weight: 600; letter-spacing: .04em; text-shadow: 0 2px 2px #000; pointer-events: none; }
 .online-players[hidden] { display: none; }
@@ -196,6 +197,29 @@ button { color: inherit; }
 @media (max-width: 800px) { .maps-dialog { height: calc(100vh - 72px); width: calc(100vw - 72px); padding: 14px; }.map-browser { grid-template-columns: 1fr 180px; gap: 10px; }.map-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }.map-columns > div:last-child { display: none; } }
 @media (max-height: 760px) { .sauer-logo { width: min(660px, 82vw, 86vh); }.main-dialog { margin-top: 26vh; } }
 @media (max-width: 540px) { .sauer-logo { width: 100vw; }.main-dialog { margin-top: 24vh; }.map-browser { grid-template-columns: 1fr; }.map-preview { display: none; }.map-columns { grid-template-columns: 1fr 1fr; }.maps-heading h1 { font-size: 23px; }.maps-dialog footer span:last-child { display: none; } }
+@media (orientation: portrait) and (any-pointer: coarse) and (max-width: 700px) {
+  .main-menu-stage .main-dialog { width: min(430px,
+    calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 90px)); }
+  .main-menu-stage .main-dialog { margin-top: 16dvh; }
+}
+@media (orientation: landscape) and (any-pointer: coarse) and (max-height: 620px) {
+  .main-menu-viewport { position: fixed; top: env(safe-area-inset-top, 0); right: env(safe-area-inset-right, 0);
+    bottom: env(safe-area-inset-bottom, 0); left: env(safe-area-inset-left, 0); z-index: 1; display: block; overflow: hidden; }
+  .main-menu-stage { --main-menu-scale: 1; position: absolute; top: 50%; left: 50%; display: block; width: 818px; height: 340px;
+    transform: translate(-50%, -50%) scale(var(--main-menu-scale)); transform-origin: center; }
+  .main-menu-stage .sauer-logo { top: 16px; left: 47px; z-index: 3; width: 300px; transform: none; }
+  .main-menu-stage .main-dialog { position: absolute; top: 26px; left: 24px; display: grid;
+    grid-template: 129px 1px 94px 42px / 315px 1px 338px;
+    grid-template-areas: "logo-space rule actions" "horizontal rule actions" "identity rule actions" "status rule actions";
+    column-gap: 24px; align-items: center; width: 760px; height: 288px; margin: 0; padding: 12px 32px 10px 26px; }
+  .main-menu-stage .identity-row { grid-area: identity; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; margin: 0; }
+  .main-menu-stage .portrait { width: 82px; height: 82px; }
+  .main-dialog > .menu-rule { grid-area: rule; align-self: stretch; width: 1px; height: auto; margin: 0;
+    background: linear-gradient(transparent, #a4acad88 8%, #a4acad88 92%, transparent); }
+  .main-menu-stage .menu-actions { grid-area: actions; align-self: stretch; align-content: center; gap: 2px; }
+  .main-menu-stage .menu-actions .menu-rule.compact { height: 1px; margin: 3px 0; }
+  .main-menu-stage .main-dialog > .main-menu-status { position: static; grid-area: status; align-self: center; margin: 0; }
+}
 @media (max-width: 600px) { .botmatch-dialog { width: calc(100vw - 24px); min-height: 0; padding: 14px; }.botmatch-controls > label { grid-template-columns: 1fr;
   gap: 8px; min-height: 78px; }.primary-map-action { justify-self: stretch; width: 100%; }.botmatch-dialog footer span:last-child { display: none; } }
 @media (max-width: 720px) { .gamemode-dialog { width: calc(100vw - 24px); height: calc(100vh - 24px); padding: 14px; }.gamemode-layout { grid-template-columns: 1fr; gap: 10px; }

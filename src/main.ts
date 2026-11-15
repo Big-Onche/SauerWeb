@@ -45,6 +45,7 @@ let serverBrowserRequest = 0;
 let experimentalDisclaimerDismissed = false;
 const serverBrowserOptions = { searchlan: false, autoupdateservers: true, autosortservers: true };
 const backgroundDecals = createBackgroundDecals();
+let disposeMainMenuScaling: (() => void) | undefined;
 
 onlinePresence.addEventListener("change", updateOnlinePlayerCounter);
 
@@ -55,6 +56,8 @@ window.addEventListener("keydown", (event) => {
 });
 
 function route(): void {
+  disposeMainMenuScaling?.();
+  disposeMainMenuScaling = undefined;
   const path = normalizePath(location.pathname);
   if (path === "/debug") {
     void import("./debug");
@@ -83,12 +86,11 @@ function renderMainMenu(): void {
   const showServerCapacity = new URLSearchParams(location.search).get("notice") === "server-capacity";
   app.innerHTML = `
     <main class="sauer-screen">
-      ${backgroundMarkup(true)}
-      <div class="main-menu-status">
-        <div class="online-players" hidden><i aria-hidden="true"></i><span></span></div>
-        <div class="application-version">${escapeHtml(__SAUERWEB_VERSION__)}</div>
-      </div>
-      <section class="sauer-dialog main-dialog" aria-labelledby="main-menu-title">
+      ${backgroundMarkup(false)}
+      <div class="main-menu-viewport">
+        <div class="main-menu-stage">
+          <img class="sauer-logo" src="/api/data/logo_1024.png" alt="Cube 2: Sauerbraten" />
+          <section class="sauer-dialog main-dialog" aria-labelledby="main-menu-title">
         ${guiSkinMarkup()}
         <h1 id="main-menu-title" class="sr-only">Sauerbraten main menu</h1>
         <div class="identity-row">
@@ -113,7 +115,13 @@ function renderMainMenu(): void {
           ${menuButton("about..", "about", true)}
           ${menuLink("Report an issue", REPORT_ISSUE_URL, "info")}
         </nav>
-      </section>
+        <div class="main-menu-status">
+          <div class="online-players" hidden><i aria-hidden="true"></i><span></span></div>
+          <div class="application-version">${escapeHtml(__SAUERWEB_VERSION__)}</div>
+        </div>
+          </section>
+        </div>
+      </div>
       <dialog id="playermodel-dialog" class="playermodel-dialog" aria-labelledby="playermodel-title">
         ${guiSkinMarkup()}
         <div class="playermodel-layout">
@@ -183,6 +191,7 @@ function renderMainMenu(): void {
       </dialog>
     </main>`;
 
+  disposeMainMenuScaling = bindMainMenuScaling();
   updateOnlinePlayerCounter();
 
   const playerName = required<HTMLInputElement>("#player-name");
@@ -259,6 +268,50 @@ function renderMainMenu(): void {
     history.replaceState(null, "", "/");
     (showTeamkillProtection ? teamkillDisclaimer : serverCapacity).showModal();
   } else if (shouldShowExperimentalDisclaimer()) experimentalDisclaimer.showModal();
+}
+
+function bindMainMenuScaling(): () => void {
+  const viewport = required<HTMLElement>(".main-menu-viewport");
+  const stage = required<HTMLElement>(".main-menu-stage");
+  const mobileLandscape = matchMedia("(orientation: landscape) and (any-pointer: coarse) and (max-height: 620px)");
+  let animationFrame = 0;
+
+  const update = (): void => {
+    animationFrame = 0;
+    if (!mobileLandscape.matches) {
+      stage.style.removeProperty("--main-menu-scale");
+      return;
+    }
+    const horizontalMargin = 24;
+    const verticalMargin = 24;
+    const availableWidth = Math.max(0, viewport.clientWidth - horizontalMargin);
+    const availableHeight = Math.max(0, viewport.clientHeight - verticalMargin);
+    const scale = Math.min(availableWidth / stage.offsetWidth, availableHeight / stage.offsetHeight);
+    stage.style.setProperty("--main-menu-scale", String(Math.max(0, scale)));
+  };
+  const scheduleUpdate = (): void => {
+    if (!animationFrame) animationFrame = requestAnimationFrame(update);
+  };
+  const resizeObserver = new ResizeObserver(scheduleUpdate);
+  resizeObserver.observe(viewport);
+  mobileLandscape.addEventListener("change", scheduleUpdate);
+  window.addEventListener("resize", scheduleUpdate);
+  window.addEventListener("orientationchange", scheduleUpdate);
+  document.addEventListener("fullscreenchange", scheduleUpdate);
+  window.visualViewport?.addEventListener("resize", scheduleUpdate);
+  window.visualViewport?.addEventListener("scroll", scheduleUpdate);
+  scheduleUpdate();
+
+  return () => {
+    if (animationFrame) cancelAnimationFrame(animationFrame);
+    resizeObserver.disconnect();
+    mobileLandscape.removeEventListener("change", scheduleUpdate);
+    window.removeEventListener("resize", scheduleUpdate);
+    window.removeEventListener("orientationchange", scheduleUpdate);
+    document.removeEventListener("fullscreenchange", scheduleUpdate);
+    window.visualViewport?.removeEventListener("resize", scheduleUpdate);
+    window.visualViewport?.removeEventListener("scroll", scheduleUpdate);
+  };
 }
 
 function updateOnlinePlayerCounter(): void {
