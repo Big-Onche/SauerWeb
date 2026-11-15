@@ -114,8 +114,21 @@ button { color: inherit; }
 .loading[hidden], .error[hidden], .stats[hidden], .empty-state[hidden] { display: none; }
 .loading-logo { position: absolute; top: max(2vh, calc(25vh - min(25vw, 25vh))); left: 50%; z-index: 1; width: min(100vmin, 1024px);
   height: min(50vmin, 512px); background: url('/api/data/logo_1024.png') center / contain no-repeat; transform: translateX(-50%); }
-.loading-map { position: absolute; top: 57%; left: 50%; z-index: 1; max-width: 80vw; overflow: hidden; color: #fff; font-size: clamp(20px, 3.2vmin, 38px);
-  text-overflow: ellipsis; text-shadow: 2px 2px 2px #000, -1px -1px 2px #000; white-space: nowrap; transform: translateX(-50%); }
+.loading-map-panel { position: absolute; top: 46.67%; left: 50%; z-index: 1; display: flex; align-items: flex-start; gap: 2.2vmin;
+  transform: translateX(-50%); }
+.loading-mapshot { position: relative; flex: none; width: min(35vmin, 360px); aspect-ratio: 1; }
+.loading-mapshot-image, .loading-mapshot-frame { position: absolute; inset: 0; width: 100%; height: 100%; }
+.loading-mapshot-image { object-fit: cover; }.loading-mapshot-image[hidden], .loading-mapshot-fallback[hidden] { display: none; }
+.loading-mapshot-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: min(17.5vmin, 180px);
+  text-shadow: 2px 2px 3px #000; }
+.loading-mapshot-frame { z-index: 1; pointer-events: none; }
+.loading-map { position: absolute; right: 10%; bottom: 10%; z-index: 2; max-width: 80%; overflow: hidden; color: #fff;
+  font-size: clamp(12px, 2.2vmin, 23px); font-weight: 400; text-overflow: ellipsis;
+  text-shadow: 2px 2px 2px #000, -1px -1px 2px #000; white-space: nowrap; }
+.loading-mode-info { width: min(30vmin, 310px); margin: 0; color: #fff; font-size: clamp(14px, 2.55vmin, 26px); line-height: 1.12;
+  text-align: left; text-shadow: 2px 2px 2px #000, -1px -1px 2px #000; }
+.loading-mode-info .sauer-color-blue { color: #86b6ff; }.loading-mode-info .sauer-color-red { color: #ff8a7d; }
+.loading-mode-info .sauer-color-yellow { color: #ffd36d; }
 .loading-progress { position: absolute; bottom: 3.75vmin; left: 50%; z-index: 2; width: min(75vmin, 760px); transform: translateX(-50%); }
 .loading-frame { position: relative; width: 100%; aspect-ratio: 10; overflow: hidden;
   background: url('/api/data/loading_frame.png') center top / 100% 123.077% no-repeat; }
@@ -129,7 +142,11 @@ button { color: inherit; }
 .loading-feedback { display: flex; justify-content: space-between; gap: 15px; min-height: 18px; padding: 2px 2.5%; color: #c8c8c8;
   font: 400 clamp(8px, 1.15vmin, 12px) "DM Mono", monospace; text-shadow: 1px 1px 2px #000; }
 .loading-detail { overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }.loading-percent { flex: none; color: #fff; }
-@media (max-aspect-ratio: 4/3) { .loading-progress { width: min(92vw, 75vmin); }.loading-map { top: 54%; } }
+@media (max-aspect-ratio: 4/3) {
+  .loading-map-panel { top: 43%; gap: 1.5vmin; }.loading-mapshot { width: min(34vmin, 42vw); }
+  .loading-mode-info { width: min(33vmin, 42vw); font-size: clamp(12px, 2.2vmin, 22px); }
+  .loading-progress { width: min(92vw, 75vmin); }
+}
 .error { position: absolute; top: 100px; left: 50%; width: min(560px, calc(100% - 44px)); padding: 13px 16px; border: 1px solid #8f554d; background: #3a211eea; color: #f2c0b8; font-size: 12px; line-height: 1.5; transform: translateX(-50%); z-index: 6; }
 .stats { position: absolute; left: 22px; bottom: 52px; display: flex; border: 1px solid #303832; background: #101512e8; backdrop-filter: blur(10px); }
 .stats div { min-width: 88px; padding: 10px 13px; border-right: 1px solid #303832; }.stats div:last-child { border: 0; }.stats strong, .stats span { display: block; }.stats strong { font: 500 12px "DM Mono"; color: #d7e0d3; }.stats span { margin-top: 3px; color: #68736b; font: 400 8px "DM Mono"; text-transform: uppercase; }

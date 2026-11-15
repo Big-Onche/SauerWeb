@@ -3,7 +3,7 @@ import "./guiSkin.css";
 import { loadTextureManifest, resolveMapTextures } from "./assets/TextureResolver";
 import { crc32 } from "./engine/crc32";
 import { SauerMapParser } from "./engine/worldio";
-import { GameModeFlag, gameModeHas, gameModeName } from "./fpsgame/game";
+import { GAME_MODE_DESCRIPTIONS, GameModeFlag, gameModeHas, gameModeName } from "./fpsgame/game";
 import { guiSkinMarkup } from "./guiSkin";
 import { GameConsole } from "./platform/browser/GameConsole";
 import { FpsHud } from "./platform/browser/FpsHud";
@@ -14,6 +14,7 @@ import { bindTouchSettings, loadTouchSettings, touchSettingsMarkup } from "./pla
 import { releaseMobileOrientation, TOUCH_ESCAPE_REQUESTED } from "./platform/browser/TouchControls";
 import { LoadingProgress } from "./assets/LoadingProgress";
 import { LoadingScreen } from "./platform/browser/LoadingScreen";
+import { sauerFormattedMarkup } from "./sauerFormatting";
 
 const app = required<HTMLDivElement>("#app");
 const parameters = new URLSearchParams(location.search);
@@ -32,7 +33,16 @@ app.innerHTML = `
       <canvas id="viewport" aria-label="Sauerbraten game viewport"></canvas>
       <section id="game-loading" class="loading" role="progressbar" aria-label="Loading map" aria-valuemin="0" aria-valuemax="100">
         <div class="loading-logo" aria-hidden="true"></div>
-        <div class="loading-map">${escapeHtml(requestedMap || "map")}</div>
+        <div class="loading-map-panel">
+          <div class="loading-mapshot">
+            <img class="loading-mapshot-image" src="/api/packages/base/${encodeURIComponent(requestedMap)}.jpg"
+              alt="${escapeHtml(requestedMap || "Map")} preview" />
+            <span class="loading-mapshot-fallback" hidden>?</span>
+            <img class="loading-mapshot-frame" src="/api/data/mapshot_frame.png" alt="" />
+            <strong class="loading-map">${escapeHtml(requestedMap || "map")}</strong>
+          </div>
+          <p class="loading-mode-info">${loadingModeMarkup(localGameMode)}</p>
+        </div>
         <div class="loading-progress">
           <div class="loading-frame">
             <div class="loading-bar-track"><div class="loading-bar-fill">
@@ -194,7 +204,7 @@ async function start(): Promise<void> {
 }
 
 async function loadMap(name: string): Promise<void> {
-  loadingScreen.show(name);
+  loadingScreen.show(name, loadingModeMarkup(activeMode));
   error.hidden = true;
   scene.setTouchControlsBlocked(true);
   scene.setPhysicsPaused(true);
@@ -397,6 +407,11 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function loadingModeMarkup(mode: number): string {
+  const description = GAME_MODE_DESCRIPTIONS[mode + 3] ?? gameModeName(mode);
+  return sauerFormattedMarkup(description ?? gameModeName(mode));
 }
 
 function savedPlayerName(): string {
