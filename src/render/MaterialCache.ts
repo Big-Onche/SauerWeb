@@ -195,6 +195,7 @@ export class MaterialCache {
     });
     material.backFaceCulling = false;
     material.alpha = descriptor.alpha;
+    if (descriptor.useLightmapAlpha) material.disableDepthWrite = true;
 
     const diffuse = descriptor.diffuseUrl
       ? this.getTexture(descriptor.diffuseUrl, descriptor.scroll, descriptor.surfaceMode !== "opaque")
@@ -240,7 +241,7 @@ export class MaterialCache {
       const effect = material.getEffect();
       if (effect && this.caustics) this.caustics.bind(effect);
     });
-    if (descriptor.surfaceMode === "transparent" || descriptor.useLightmapAlpha) material.needDepthPrePass = true;
+    if (descriptor.surfaceMode === "transparent") material.needDepthPrePass = true;
     return material;
   }
 
@@ -396,7 +397,7 @@ const SAUER_BUMP_FRAGMENT_SHADER = `
   varying vec3 vWorldPosition;
 
   void main(void) {
-    vec4 diffuse = texture2D(diffuseSampler, vTextureUV) * vColor;
+    vec4 diffuse = texture2D(diffuseSampler, vTextureUV) * vec4(2.0 * vColor.rgb, vColor.a);
     vec4 lightmap = texture2D(lightmapSampler, vLightmapUV);
     vec3 bump = hasNormalMap > 0.5 ? texture2D(normalSampler, vTextureUV).rgb * 2.0 - 1.0 : vec3(0.0, 0.0, 1.0);
     vec3 lightDirection = texture2D(directionSampler, vLightmapUV).rgb * 2.0 - 1.0;

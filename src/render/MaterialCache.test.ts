@@ -96,6 +96,22 @@ describe("MaterialCache", () => {
     cache.dispose();
     engine.dispose();
   });
+
+  it("uses Sauerbraten's depth state for bump-mapped blend layers", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const texture = resolvedTexture("bumpworld");
+    texture.normalUrl = "/normal.png";
+    const cache = new MaterialCache(scene, [lightmap(1), lightmap(2)]);
+    const material = cache.get(describeSauerMaterial(texture, 0, 6, true));
+
+    expect(material).toBeInstanceOf(ShaderMaterial);
+    expect(material.needDepthPrePass).toBe(false);
+    expect(material.disableDepthWrite).toBe(true);
+
+    cache.dispose();
+    engine.dispose();
+  });
 });
 
 function lightmap(type: number): Lightmap {
