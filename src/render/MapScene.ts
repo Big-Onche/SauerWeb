@@ -476,6 +476,10 @@ export class MapScene {
       mesh.material = texture
         ? this.materialCache.get(describeSauerMaterial(texture, batch.cubeMaterial, batch.lightmapId, batch.useLightmapAlpha))
         : this.createFallbackMaterial();
+      // Match renderva's distinct opaque and blend passes. Babylon otherwise distance-sorts the coplanar blend meshes together with water,
+      // which can change their order between the main framebuffer and the refraction render target.
+      mesh.renderingGroupId = batch.useLightmapAlpha ? 1 : 0;
+      mesh.alphaIndex = batch.useLightmapAlpha ? 1 : 0;
       mesh.freezeWorldMatrix();
       mesh.alwaysSelectAsActiveMesh = true;
       faces += batch.faceCount;
@@ -925,6 +929,7 @@ export class MapScene {
     vertexData.applyToMesh(mesh, true);
     mesh.setVerticesData("waveData", batch.waveData, false, 2);
     mesh.material = this.getMaterialVolumeMaterial(batch.kind, batch.materialIndex, batch.reflectionHeight);
+    if (batch.kind === "water") mesh.renderingGroupId = 2;
     mesh.metadata = { debugOnly: batch.debugOnly, materialKind: batch.kind, materialIndex: batch.materialIndex,
       reflectionHeight: batch.reflectionHeight };
     mesh.isPickable = false;
