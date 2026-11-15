@@ -97,6 +97,20 @@ describe("native bot lifecycle", () => {
     expect(requests).toEqual([7, 7]);
     expect(bot.clientState).toBe(ClientState.Alive);
   });
+
+  it("stops every bot during intermission", () => {
+    const { manager, bot } = botAtSkill(50);
+    bot.move = bot.strafe = 1;
+    bot.jumping = true;
+    bot.weaponSystem.controller.setAttacking(true);
+
+    manager.update(1000, [], true, true);
+
+    expect(bot.move).toBe(0);
+    expect(bot.strafe).toBe(0);
+    expect(bot.jumping).toBe(false);
+    expect(bot.weaponSystem.controller.attacking).toBe(false);
+  });
 });
 
 function botAtSkill(skill: number, random: () => number = () => 0.5): { manager: BotManager; bot: BotActor } {

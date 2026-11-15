@@ -105,17 +105,22 @@ export class PhysicsSimulation {
     this.scheduler.reset(nowMilliseconds);
   }
 
-  update(nowMilliseconds: number, input: PhysicsInputState): Vec3 {
-    return this.physicsframe(nowMilliseconds, input);
+  update(nowMilliseconds: number, input: PhysicsInputState, allowMovement = true): Vec3 {
+    return this.physicsframe(nowMilliseconds, input, allowMovement);
   }
 
-  // Original: src/engine/physics.cpp
-  // Function: physicsframe()
+  // Original: src/fpsgame/fps.cpp, src/engine/physics.cpp
+  // Functions: updateworld(), physicsframe()
   // Sauerbraten reference: SVN r6488
-  physicsframe(nowMilliseconds: number, input: PhysicsInputState): Vec3 {
+  physicsframe(nowMilliseconds: number, input: PhysicsInputState, allowMovement = true): Vec3 {
     if (!this.player.alive && this.player.clientState !== ClientState.Spectator) this.player.clientState = ClientState.Dead;
-    this.applyInput(input);
+    this.applyInput(input, allowMovement);
     if (this.paused) return this.renderPosition;
+    if (!allowMovement) {
+      this.scheduler.reset(nowMilliseconds);
+      this.renderPosition = copyVec3(this.player.position);
+      return this.renderPosition;
+    }
     this.lastSchedule = this.scheduler.schedule(nowMilliseconds, this.timeScale);
     for (let index = 0; index < this.lastSchedule.steps; index++) this.moveplayer(this.player, this.lastSchedule.stepMilliseconds);
     this.renderPosition = lerpVec3(this.player.previousPosition, this.player.position, this.lastSchedule.interpolation);
@@ -126,16 +131,16 @@ export class PhysicsSimulation {
     return { ...this.lastSchedule, paused: this.paused, entity: this.player, renderPosition: copyVec3(this.renderPosition) };
   }
 
-  private applyInput(input: PhysicsInputState): void {
-    if (!this.player.alive && this.player.clientState !== ClientState.Spectator) {
+  private applyInput(input: PhysicsInputState, allowMovement: boolean): void {
+    if (!allowMovement || !this.player.alive && this.player.clientState !== ClientState.Spectator) {
       this.player.move = this.player.strafe = 0;
       this.player.jumping = false;
-      return;
+    } else {
+      this.player.move = movementAxis(input.forward, input.backward);
+      // Native commands map left to +1 and right to -1 (physics.cpp:2017-2018).
+      this.player.strafe = movementAxis(input.left, input.right);
+      this.player.jumping = input.jump;
     }
-    this.player.move = movementAxis(input.forward, input.backward);
-    // Native commands map left to +1 and right to -1 (physics.cpp:2017-2018).
-    this.player.strafe = movementAxis(input.left, input.right);
-    this.player.jumping = input.jump;
     this.player.yaw = (this.player.yaw + input.yawDelta * 0.1 + 360) % 360;
     this.player.pitch = Math.min(90, Math.max(-90, this.player.pitch - input.pitchDelta * 0.1));
   }

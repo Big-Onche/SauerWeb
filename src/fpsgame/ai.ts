@@ -286,7 +286,10 @@ export class BotManager {
     }
   }
 
-  update(now: number, players: readonly Damageable[], localAlive = true): void {
+  // Original: src/fpsgame/ai.cpp
+  // Functions: ai::update()
+  // Sauerbraten reference: SVN r6488
+  update(now: number, players: readonly Damageable[], localAlive = true, intermission = false): void {
     if (!this.lastUpdate) this.lastUpdate = now;
     const elapsed = Math.min(100, Math.max(0, now - this.lastUpdate));
     this.lastUpdate = now;
@@ -294,6 +297,14 @@ export class BotManager {
     actors.length = 0;
     for (const bot of this.bots.values()) actors.push(bot);
     if (!actors.length) return;
+    if (intermission) {
+      for (const bot of actors) {
+        bot.move = bot.strafe = 0;
+        bot.jumping = false;
+        bot.weaponSystem.controller.setAttacking(false);
+      }
+      return;
+    }
     const damageTargets = this.damageTargets;
     damageTargets.length = 0;
     damageTargets.push(this.localPlayer);

@@ -1750,7 +1750,10 @@ export class MapScene {
       player.move = player.strafe = 0;
       player.physicsState = PhysicsState.Float;
       renderPosition = player.position;
-    } else renderPosition = this.profiler.measure("playerPhysics", () => this.physics.update(nowMilliseconds, input));
+    } else {
+      renderPosition = this.profiler.measure("playerPhysics", () =>
+        this.physics.update(nowMilliseconds, input, !this.fpsClient.multiplayer.intermission));
+    }
     this.updatePlayerCamera(renderPosition);
     const aimTarget = this.profiler.measure("weaponSimulation", () => this.aimTarget());
     this.profiler.measure("hud", () => this.crosshairHUD.update(this.aimingAtTeammate(aimTarget)));
@@ -1765,12 +1768,14 @@ export class MapScene {
       armourType: this.physics.player.armourType, selectedGun: this.weapons.controller.inventory.selectedGun,
       ammo: this.weapons.controller.inventory.ammo, state: this.physics.player.clientState, flags: 0, tokens: 0,
     }));
+    if (this.fpsClient.multiplayer.intermission) this.weapons.controller.setAttacking(false);
     this.profiler.measure("weaponSimulation", () => this.weapons.update(nowMilliseconds, aimTarget));
     this.botUpdatePlayers.length = 0;
     for (const player of this.fpsClient.multiplayer.players.values()) {
       if (player.aiType === 0 || player.ownerNumber >= 0) this.botUpdatePlayers.push(player);
     }
-    this.profiler.measure("botUpdate", () => this.bots.update(nowMilliseconds, this.botUpdatePlayers, !dead));
+    this.profiler.measure("botUpdate", () =>
+      this.bots.update(nowMilliseconds, this.botUpdatePlayers, !dead, this.fpsClient.multiplayer.intermission));
     this.profiler.measure("networking", () => {
       for (const bot of this.bots.bots.values()) if (bot.ownerNumber < 0) this.fpsClient.multiplayer.syncLocalBot(bot);
       this.syncBotTargets();

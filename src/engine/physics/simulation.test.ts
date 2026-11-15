@@ -51,6 +51,20 @@ describe("PhysicsSimulation", () => {
     expect(simulation.player.falling).toEqual({ x: 0, y: 0, z: 0 });
   });
 
+  it("stops player movement during intermission while preserving free look", () => {
+    const simulation = new PhysicsSimulation();
+    simulation.spawn({ x: 0, y: 0, z: 30 }, 0, 0);
+    const start = { ...simulation.player.position };
+
+    simulation.update(100, { ...createInputState(), forward: true, jump: true, yawDelta: 100 }, false);
+
+    expect(simulation.player.position).toEqual(start);
+    expect(simulation.player.move).toBe(0);
+    expect(simulation.player.strafe).toBe(0);
+    expect(simulation.player.jumping).toBe(false);
+    expect(simulation.player.yaw).toBe(10);
+  });
+
   it("shares the native collision retry budget across all movement substeps", () => {
     const simulation = new PhysicsSimulation();
     const move = vi.fn(() => false);

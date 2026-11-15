@@ -266,7 +266,9 @@ export class MultiplayerClient extends EventTarget {
     this.entities.checkitems(nowMilliseconds);
     if (this.localGame) {
       this.syncLocalPlayer();
-      this.timeLeftSeconds = this.localIntermission ? 0 : Math.max(0, 10 * 60 - Math.trunc((nowMilliseconds - this.mapStarted) / 1000));
+      const remaining = this.localIntermission ? 0 : Math.max(0, 10 * 60 - Math.trunc((nowMilliseconds - this.mapStarted) / 1000));
+      if (!remaining && !this.localIntermission) this.timeupdate(0);
+      else this.timeLeftSeconds = remaining;
       if (gameModeHas(this.gameMode, GameModeFlag.Ctf)) {
         this.ctfMode.updateLocal(this.players, this.gameMode, nowMilliseconds, Math.random, (player, event) => {
           this.announceLocalFlag(player ? this.players.get(player.clientNumber) : undefined, event);
@@ -415,6 +417,8 @@ export class MultiplayerClient extends EventTarget {
   }
 
   get isLocalGame(): boolean { return this.localGame; }
+
+  get intermission(): boolean { return this.localIntermission; }
 
   get captureModeBases(): readonly CaptureBase[] { return this.captureMode.bases; }
 
@@ -961,8 +965,7 @@ export class MultiplayerClient extends EventTarget {
           break;
         }
         case NetworkMessage.TimeUp: {
-          this.timeLeftSeconds = packet.getInt();
-          if (this.timeLeftSeconds <= 0) this.logIntermission();
+          this.timeupdate(packet.getInt());
           break;
         }
         case NetworkMessage.ServerMessage: {
@@ -1615,6 +1618,17 @@ export class MultiplayerClient extends EventTarget {
     this.console(`player frags: ${player.frags}${objective}, deaths: ${player.deaths}`, "game-info");
   }
 
+  // Original: src/fpsgame/fps.cpp
+  // Functions: timeupdate(int secs)
+  // Sauerbraten reference: SVN r6488
+  private timeupdate(seconds: number): void {
+    this.timeLeftSeconds = seconds;
+    if (seconds > 0 || this.localIntermission) return;
+    this.localIntermission = true;
+    this.weapons.controller.setAttacking(false);
+    this.logIntermission();
+  }
+
   private parseTeamInfo(packet: PacketReader): void {
     this.teamScores.clear();
     for (let team = packet.getString(); team; team = packet.getString()) this.teamScores.set(team, packet.getInt());
@@ -1937,11 +1951,7 @@ export class MultiplayerClient extends EventTarget {
       this.console(`${name} scored for ${teamName}`, "game-info");
       this.emit({ type: "playsound", sound: team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
       if (score >= CTFFLAGLIMIT) this.console(`${teamName} captured ${score} flags`, "game-info");
-      if (score >= CTFFLAGLIMIT && !this.localIntermission) {
-        this.localIntermission = true;
-        this.timeLeftSeconds = 0;
-        this.logIntermission();
-      }
+      if (score >= CTFFLAGLIMIT) this.timeupdate(0);
     }
   }
 
@@ -1972,11 +1982,7 @@ export class MultiplayerClient extends EventTarget {
       "game-info");
     this.emit({ type: "playsound", sound: event.team === localTeam ? GameSound.FlagScore : GameSound.FlagFail });
     if (event.score >= COLLECT_SCORE_LIMIT) this.console(`${teamName} collected ${event.score} skulls`, "game-info");
-    if (event.score >= COLLECT_SCORE_LIMIT && !this.localIntermission) {
-      this.localIntermission = true;
-      this.timeLeftSeconds = 0;
-      this.logIntermission();
-    }
+    if (event.score >= COLLECT_SCORE_LIMIT) this.timeupdate(0);
   }
 
   private announceLocalCapture(event: LocalCaptureEvent): void {
@@ -2008,10 +2014,8 @@ export class MultiplayerClient extends EventTarget {
       this.weapons.controller.inventory.ammo[event.gun] = event.player.ammo[event.gun];
     } else if (event.type === "victory") {
       this.teamScores.set(event.team, 10_000);
-      this.localIntermission = true;
-      this.timeLeftSeconds = 0;
       this.console(`${this.teamDisplay(event.team)} captured all bases`, "game-info");
-      this.logIntermission();
+      this.timeupdate(0);
     }
     this.emit({ type: "players" });
   }

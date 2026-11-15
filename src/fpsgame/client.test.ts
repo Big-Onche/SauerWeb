@@ -108,6 +108,17 @@ describe("Sauerbraten rifle protocol", () => {
     now.mockRestore();
   });
 
+  it("enters intermission on N_TIMEUP(0) and clears attacking", () => {
+    const client = createClient();
+    client.weapons.controller.setAttacking(true);
+    const timeUp = new PacketWriter().putInt(NetworkMessage.TimeUp).putInt(0).finish();
+
+    Reflect.apply(Reflect.get(client.multiplayer, "parseMessages"), client.multiplayer, [-1, new PacketReader(timeUp)]);
+
+    expect(client.multiplayer.intermission).toBe(true);
+    expect(client.weapons.controller.attacking).toBe(false);
+  });
+
   it("requests spectator changes without changing state before server confirmation", () => {
     const client = createClient();
     client.multiplayer.connected = true;
