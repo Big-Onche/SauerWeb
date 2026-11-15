@@ -96,8 +96,27 @@ describe("Sauerbraten particle entity helpers", () => {
     expect(fireball!.material).toBeInstanceOf(ShaderMaterial);
     expect(fireball!.material!.getActiveTextures()[0].name).toContain(textureName);
     expect((fireball!.material as ShaderMaterial).alphaMode).toBe(1);
+    expect(scene.particleSystems).toHaveLength(0);
     expect(() => scene.render()).not.toThrow();
 
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("uses native gravity for gun-impact sparks", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+    const splash = vi.spyOn(renderer as unknown as {
+      splash: (position: { x: number; y: number; z: number }, texture: string, color: number, size: number, count: number,
+               fadeMs: number, velocityRadius: number, gravity: number, additive?: boolean) => void;
+    }, "splash");
+
+    events.emit({
+      type: "shot-effect", gun: Gun.Pistol, from: { x: 0, y: 0, z: 0 }, to: { x: 10, y: 0, z: 0 }, rays: [],
+    });
+
+    expect(splash).toHaveBeenCalledWith({ x: 10, y: 0, z: 0 }, "spark.png", 0xb49b4b, 0.24, 200, 250, 150, 2, true);
     renderer.clear();
     engine.dispose();
   });

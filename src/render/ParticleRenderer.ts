@@ -585,8 +585,10 @@ export class ParticleRenderer {
 
   private explosion(gun: Gun, position: Vec3, radius: number, normal?: Vec3): void {
     const magic = gun === Gun.Fireball || gun === Gun.Iceball || gun === Gun.Slimeball;
-    this.sparks(position, magic ? 100 : 200, magic ? 200 : 300);
-    if (magic) return;
+    if (magic) {
+      this.sparks(position, 100, 200);
+      return;
+    }
     this.decal(position, normal ?? { x: 0, y: 0, z: 1 }, "scorch.png", 0xffffff, radius / 2);
     const blue = gun === Gun.Grenade;
     const duration = Math.max(1, (radius - 4) * (blue ? 15 : 20));
@@ -659,7 +661,7 @@ export class ParticleRenderer {
   }
 
   private sparks(position: Vec3, count: number, fadeMs: number): void {
-    this.splash(position, "spark.png", 0xb49b4b, 0.24, count, fadeMs, 150, 20, true);
+    this.splash(position, "spark.png", 0xb49b4b, 0.24, count, fadeMs, 150, 2, true);
   }
 
   private splash(position: Vec3, texture: ParticleTexture, color: number, size: number, count: number, fadeMs: number,
