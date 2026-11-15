@@ -269,6 +269,11 @@ export class ParticleRenderer {
     this.effects.push({ mesh, started: performance.now(), duration: 2_000, startScale: 1, endScale: 1 });
   }
 
+  // Original: src/fpsgame/capture.h, captureclientmode::updatebase().
+  captureBaseEffect(position: Vec3, color: number): void {
+    this.splash(position, "spark.png", color, 0.24, 200, 250, 150, 2, true);
+  }
+
   clear(): void {
     this.systems.forEach((system) => system.dispose(false));
     this.systems.clear();

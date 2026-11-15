@@ -57,6 +57,7 @@ import { SpectatorHUD } from "../platform/browser/SpectatorHUD";
 import { PlayerRenderer, thirdpersoncamera, type RenderPlayer } from "../platform/browser/PlayerRenderer";
 import { CtfRenderer } from "../platform/browser/CtfRenderer";
 import { CollectRenderer } from "../platform/browser/CollectRenderer";
+import { CaptureRenderer } from "../platform/browser/CaptureRenderer";
 import { ITEM_ICONS } from "../fpsgame/entities";
 import { ClientState, PhysicsState } from "../engine/physics/types";
 import { ctfTeamFlag } from "../fpsgame/ctf";
@@ -160,6 +161,7 @@ export class MapScene {
     itemPickup: (bot, entityIndex, now) => this.fpsClient.multiplayer.tryBotItemPickup(bot, entityIndex, now),
     itemAvailable: (bot, entityIndex) => this.fpsClient.multiplayer.isBotItemAvailable(bot, entityIndex),
     quadExpired: (bot) => this.fpsClient.multiplayer.notifyQuadExpired(bot.position),
+    spawnRating: (team, spawn) => this.captureSpawnRating(team, spawn.position),
   });
   private readonly weaponInput: BrowserWeaponInput;
   private readonly touchControls: TouchControls;
@@ -174,6 +176,7 @@ export class MapScene {
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
   private readonly collectRenderer: CollectRenderer;
+  private readonly captureRenderer: CaptureRenderer;
   private readonly gameAudio: WeaponAudio;
   private cameraMode: CameraMode = "free";
   private thirdperson = false;
@@ -313,6 +316,7 @@ export class MapScene {
     }, (milliseconds) => this.profiler.record("playerGeometry", milliseconds), () => this.profiler.enabled);
     this.ctfRenderer = new CtfRenderer(this.scene);
     this.collectRenderer = new CollectRenderer(this.scene);
+    this.captureRenderer = new CaptureRenderer(this.scene);
     this.physicsInput.enabled = runtimeMode === "game";
     this.weaponInput.enabled = runtimeMode === "game";
     this.touchControls.setGameplayEnabled(runtimeMode === "game");
@@ -404,6 +408,7 @@ export class MapScene {
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
     this.collectRenderer.clear();
+    this.captureRenderer.clear();
     this.scene.meshes.slice().forEach((mesh) => mesh.dispose());
     this.disposeWaterReflections();
     this.mapModelResources?.dispose();
@@ -740,6 +745,7 @@ export class MapScene {
     this.playerRenderer.clear();
     this.ctfRenderer.clear();
     this.collectRenderer.clear();
+    this.captureRenderer.clear();
     this.particleRenderer.clear();
     this.weaponRenderer.clear();
     this.gameAudio.dispose();
@@ -1836,6 +1842,10 @@ export class MapScene {
   }
 
   private handleMultiplayerEvent(event: MultiplayerEvent): void {
+    if (event.type === "capture-effect") {
+      this.particleRenderer.captureBaseEffect(event.position, event.color);
+      return;
+    }
     if (event.type === "item-effect") {
       const icon = ITEM_ICONS[event.entityType - 8];
       if (icon !== undefined) this.particleRenderer.itemIcon(event.position, icon, !event.spawned);
@@ -1950,6 +1960,10 @@ export class MapScene {
         const flagWeight = Number.isFinite(minimumFlagDistance) ? this.nativeProximityScore(minimumFlagDistance, 400, 800) : 1;
         weight = weight + flagWeight > 0 ? 2 * weight * flagWeight / (weight + flagWeight) : 0;
       } else if (clientMode) weight = weight > 0 ? 2 * weight / (weight + 1) : 0;
+      if (gameModeHas(mode, GameModeFlag.Capture)) {
+        const captureRating = this.captureSpawnRating(localPlayer?.team ?? "", start.position);
+        weight = weight + captureRating > 0 ? 2 * weight * captureRating / (weight + captureRating) : 0;
+      }
       return { start, weight };
     });
     const total = weighted.reduce((sum, candidate) => sum + candidate.weight, 0);
@@ -1967,6 +1981,15 @@ export class MapScene {
     if (distance >= upper) return 0;
     const aboveLower = distance - lower, belowUpper = distance - upper;
     return belowUpper * belowUpper / (aboveLower * aboveLower + belowUpper * belowUpper);
+  }
+
+  private captureSpawnRating(team: string, position: RegisteredMapEntity["position"]): number {
+    if (!gameModeHas(this.fpsClient.multiplayer.gameMode, GameModeFlag.Capture)) return 1;
+    let minimum = Number.POSITIVE_INFINITY;
+    for (const base of this.fpsClient.multiplayer.captureMode.bases) {
+      if (base.owner === team) minimum = Math.min(minimum, magnitude(subtract(position, base.o)));
+    }
+    return Number.isFinite(minimum) ? this.nativeProximityScore(minimum, 128, 512) : 1;
   }
 
   private updateNetworkPlayers(localRenderPosition: RegisteredMapEntity["position"]): void {
@@ -2066,6 +2089,8 @@ export class MapScene {
     this.collectRenderer.render(multiplayer.collectMode.bases, multiplayer.collectMode.tokens, multiplayer.players, multiplayer.clientNumber,
       localNetworkPlayer?.team ?? "", multiplayer.gameMode, nowMilliseconds,
       (clientNumber) => this.playerRenderer.flagAttachmentPosition(clientNumber));
+    this.captureRenderer.render(multiplayer.captureMode.bases, multiplayer.players, localNetworkPlayer?.team ?? "", multiplayer.gameMode,
+      nowMilliseconds);
   }
 
   private syncBotTargets(): void {
@@ -2099,6 +2124,30 @@ export class MapScene {
           interests.push({ state: AiStateType.Pursue, node, target: token.id, targetType: AiTargetType.Affinity,
             score: squaredDistance(feet, token.o) / (collectible ? 10 : 1) });
         }
+      }
+      return interests.length > 0;
+    }
+    if (gameModeHas(multiplayer.gameMode, GameModeFlag.Capture)) {
+      const feet = { ...bot.position, z: bot.position.z - bot.eyeHeight };
+      for (let index = 0; index < multiplayer.captureMode.bases.length; index++) {
+        const base = multiplayer.captureMode.bases[index];
+        if (base.ammoType < 1 || base.ammoType > 6) continue;
+        let assigned = 0;
+        for (const other of this.bots.bots.values()) {
+          if (other !== bot && other.ai.state.some((candidate) =>
+            candidate.targetType === AiTargetType.Affinity && candidate.target === index)) assigned++;
+        }
+        for (const player of multiplayer.players.values()) {
+          if (player.clientNumber === bot.clientNumber || player.aiType !== 0 || player.state !== ClientState.Alive || player.team !== bot.team) continue;
+          const playerFeet = { ...player.position, z: player.position.z - player.eyeHeight };
+          if (squaredDistance(playerFeet, base.o) <= 64 * 64) assigned++;
+        }
+        const regen = gameModeHas(multiplayer.gameMode, GameModeFlag.Regen) && bot.health < 100;
+        if (!regen && (assigned > 0 || base.owner === bot.team && !base.enemy)) continue;
+        const node = this.bots.waypoints.closestwaypoint(base.o, SIGHTMIN, false);
+        if (!this.bots.waypoints.iswaypoint(node)) continue;
+        interests.push({ state: AiStateType.Defend, node, target: index, targetType: AiTargetType.Affinity,
+          score: squaredDistance(feet, base.o) / (regen ? 100 : 1) });
       }
       return interests.length > 0;
     }

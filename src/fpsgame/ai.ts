@@ -98,6 +98,7 @@ export interface BotCallbacks {
   itemPickup?: (bot: BotActor, entityIndex: number, now: number) => boolean;
   itemAvailable?: (bot: BotActor, entityIndex: number) => boolean;
   quadExpired?: (bot: BotActor) => void;
+  spawnRating?: (team: string, spawn: RegisteredMapEntity) => number;
 }
 
 export interface AiInterest {
@@ -292,7 +293,8 @@ export class BotManager {
       if (!bot.alive) {
         const delayedCtf = gameModeHas(this.gameMode, GameModeFlag.Hold) || gameModeHas(this.gameMode, GameModeFlag.Protect) &&
           gameModeHas(this.gameMode, GameModeFlag.Efficiency);
-        const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) || delayedCtf ? 5000 : 500;
+        const delayedCapture = gameModeHas(this.gameMode, GameModeFlag.Capture) && !gameModeHas(this.gameMode, GameModeFlag.Regen);
+        const respawnDelay = gameModeHas(this.gameMode, GameModeFlag.Collect) || delayedCtf || delayedCapture ? 5000 : 500;
         if (now - bot.deadAt >= respawnDelay && bot.respawned !== bot.lifeSequence) {
           bot.respawned = bot.lifeSequence;
           if (bot.ownerNumber >= 0) this.callbacks.spawnRequest?.(bot);
@@ -685,12 +687,14 @@ export class BotManager {
 
   private chooseSpawn(team: string): RegisteredMapEntity {
     const spawnGroup = gameModeHas(this.gameMode, GameModeFlag.Hold) ? 0 : team === "good" ? 1 : team === "evil" ? 2 : 0;
-    const grouped = gameModeHas(this.gameMode, GameModeFlag.Team);
+    const grouped = gameModeHas(this.gameMode, GameModeFlag.Ctf) && !gameModeHas(this.gameMode, GameModeFlag.Hold) ||
+      gameModeHas(this.gameMode, GameModeFlag.Collect);
     const candidates = this.entities.filter((entity) => entity.type === 3 && (!grouped || (entity.attributes[1] ?? 0) === spawnGroup));
     const starts = candidates.length ? candidates : this.entities.filter((entity) => entity.type === 3);
     const occupants: Damageable[] = [this.localPlayer, ...this.bots.values()].filter((actor) => actor.alive);
-    const safest = starts.map((start) => ({ start, distance: occupants.length
-      ? Math.min(...occupants.map((actor) => distance(start.position, actor.position))) : Number.POSITIVE_INFINITY }))
+    const safest = starts.map((start) => ({ start, distance: (occupants.length
+      ? Math.min(...occupants.map((actor) => distance(start.position, actor.position))) : Number.POSITIVE_INFINITY) *
+      Math.max(0.01, this.callbacks.spawnRating?.(team, start) ?? 1) }))
       .sort((left, right) => right.distance - left.distance);
     const top = safest.filter((candidate) => candidate.distance >= (safest[0]?.distance ?? 0) * 0.75);
     return top[this.rnd(top.length)]?.start ?? this.entities.find((entity) => entity.type === 3) ?? {
