@@ -108,6 +108,9 @@ interface SavedRagdoll {
 // Keep only the current visual working set. MD5 source topology and compact animation channels are prepared separately, so an evicted
 // frame only needs inexpensive skinning rather than reparsing the mesh and animation files.
 const MAX_GEOMETRY_FRAME_CACHE = 64;
+// A root-centred cube enclosing the initial bounding sphere remains useful across animation poses; padding covers interpolation and
+// attachment sway.
+const ANIMATED_BOUND_SCALE = 1.25;
 
 // Browser counterpart of src/fpsgame/render.cpp's model batching and src/engine/ragdoll.h's death simulation.
 export class PlayerRenderer {
@@ -499,7 +502,7 @@ export class PlayerRenderer {
         positions[offset + 1] = point.y;
         positions[offset + 2] = point.z;
       }
-      this.updateMeshVertices(mesh, positions);
+      this.updateMeshVertices(mesh, positions, undefined, true);
     });
   }
 
@@ -726,9 +729,10 @@ export class PlayerRenderer {
           data.uvs = source.uvs;
           data.normals = buffers.normals;
           data.applyToMesh(mesh, true);
+          retainAnimatedBounds(mesh);
           this.meshVertexBuffers.set(mesh, buffers);
         } else {
-          mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, true);
+          mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, false);
           mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
         }
       });
@@ -750,16 +754,17 @@ export class PlayerRenderer {
     data.uvs = source.uvs;
     data.normals = buffers.normals;
     data.applyToMesh(mesh, true);
+    retainAnimatedBounds(mesh);
     this.meshVertexBuffers.set(mesh, buffers);
   }
 
-  private updateMeshVertices(mesh: Mesh, positions: ArrayLike<number>, normals?: ArrayLike<number>): void {
+  private updateMeshVertices(mesh: Mesh, positions: ArrayLike<number>, normals?: ArrayLike<number>, updateBounds = false): void {
     const buffers = this.meshVertexBuffers.get(mesh);
     if (!buffers || buffers.positions.length !== positions.length) return;
     buffers.positions.set(positions);
     if (normals?.length === buffers.normals.length) buffers.normals.set(normals);
     else VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
-    mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, true);
+    mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, updateBounds);
     mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
   }
 
@@ -870,21 +875,37 @@ function translateAndScalePosition(position: [number, number, number], translate
 function attachModelPositions(positions: number[], attachment: ModelJointPose, playerTranslate: [number, number, number],
                               playerScale: number): number[] {
   const result = new Array<number>(positions.length);
+  const [x, y, z, w] = attachment.orientation;
+  const translateX = (attachment.position[0] + playerTranslate[0]) * playerScale;
+  const translateY = (attachment.position[2] + playerTranslate[2]) * playerScale;
+  const translateZ = (attachment.position[1] + playerTranslate[1]) * playerScale;
   for (let index = 0; index < positions.length; index += 3) {
-    const attached = attachModelPosition(new Vector3(positions[index], positions[index + 1], positions[index + 2]), attachment,
-      playerTranslate, playerScale);
-    result.splice(index, 3, attached.x, attached.y, attached.z);
+    const pointX = positions[index];
+    const pointY = positions[index + 2];
+    const pointZ = positions[index + 1];
+    const tx = 2 * (y * pointZ - z * pointY);
+    const ty = 2 * (z * pointX - x * pointZ);
+    const tz = 2 * (x * pointY - y * pointX);
+    result[index] = pointX + w * tx + y * tz - z * ty + translateX;
+    result[index + 1] = pointZ + w * tz + x * ty - y * tx + translateY;
+    result[index + 2] = pointY + w * ty + z * tx - x * tz + translateZ;
   }
   return result;
 }
 
 function attachModelNormals(normals: number[], attachment: ModelJointPose): number[] {
   const result = new Array<number>(normals.length);
+  const [x, y, z, w] = attachment.orientation;
   for (let index = 0; index < normals.length; index += 3) {
-    const attached = rotateModelPosition(new Vector3(normals[index], normals[index + 1], normals[index + 2]), attachment.orientation);
-    result[index] = attached.x;
-    result[index + 1] = attached.y;
-    result[index + 2] = attached.z;
+    const pointX = normals[index];
+    const pointY = normals[index + 2];
+    const pointZ = normals[index + 1];
+    const tx = 2 * (y * pointZ - z * pointY);
+    const ty = 2 * (z * pointX - x * pointZ);
+    const tz = 2 * (x * pointY - y * pointX);
+    result[index] = pointX + w * tx + y * tz - z * ty;
+    result[index + 1] = pointZ + w * tz + x * ty - y * tx;
+    result[index + 2] = pointY + w * ty + z * tx - x * tz;
   }
   return result;
 }
@@ -904,6 +925,15 @@ function rotateModelPosition(position: Vector3, orientation: [number, number, nu
   const tz = 2 * (x * point[1] - y * point[0]);
   return new Vector3(point[0] + w * tx + y * tz - z * ty, point[2] + w * tz + x * ty - y * tx,
     point[1] + w * ty + z * tx - x * tz);
+}
+
+function retainAnimatedBounds(mesh: Mesh): void {
+  const bounds = mesh.getBoundingInfo().boundingBox;
+  const maximumX = Math.max(Math.abs(bounds.minimum.x), Math.abs(bounds.maximum.x));
+  const maximumY = Math.max(Math.abs(bounds.minimum.y), Math.abs(bounds.maximum.y));
+  const maximumZ = Math.max(Math.abs(bounds.minimum.z), Math.abs(bounds.maximum.z));
+  const radius = Math.hypot(maximumX, maximumY, maximumZ) * ANIMATED_BOUND_SCALE;
+  mesh.buildBoundingInfo(new Vector3(-radius, -radius, -radius), new Vector3(radius, radius, radius));
 }
 
 export function thirdpersoncamera(position: Vec3, yaw: number, pitch: number, distance = 20, up = 0, side = 0): Vector3 {
