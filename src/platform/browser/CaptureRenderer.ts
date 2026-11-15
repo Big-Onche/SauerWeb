@@ -20,6 +20,9 @@ const AMMO_SCALE = 0.25;
 const AMMO_HEIGHT = 5;
 const AMMO_NAMES = ["shells", "bullets", "rockets", "rrounds", "grenades", "cartridges"] as const;
 
+const LABEL_WIDTH = 512;
+const LABEL_HEIGHT = 128;
+
 interface Geometry { name: string; positions: number[]; uvs: number[]; indices: number[]; height: number }
 interface BaseMeshes { base: Mesh[]; ammo: Mesh[]; flame: Mesh; label: Mesh; texture: DynamicTexture }
 
@@ -124,7 +127,7 @@ export class CaptureRenderer {
       for (let part = 1; part < parts.length; part++) parts[part].parent = root;
       ammo.push(root);
     }
-    const texture = new DynamicTexture(`capture-label-${index}`, { width: 512, height: 128 }, this.scene, false);
+    const texture = new DynamicTexture(`capture-label-${index}`, { width: LABEL_WIDTH, height: LABEL_HEIGHT }, this.scene, false);
     texture.hasAlpha = true;
     const material = new StandardMaterial(`capture-label-material-${index}`, this.scene);
     material.diffuseTexture = material.emissiveTexture = texture;
@@ -145,24 +148,37 @@ export class CaptureRenderer {
 
   private drawLabel(texture: DynamicTexture, base: CaptureBase, color: string): void {
     const context = texture.getContext() as unknown as CanvasRenderingContext2D;
-    context.clearRect(0, 0, 512, 128);
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, LABEL_WIDTH, LABEL_HEIGHT);
     context.font = "bold 42px sans-serif";
     context.textAlign = "center";
+    context.lineJoin = "round";
+    context.lineWidth = 8;
+    context.strokeStyle = "#000000";
+    const label = `base ${base.tag}${base.owner ? `: ${base.owner}` : base.enemy ? `: ${base.enemy}` : ""}`;
+    context.strokeText(label, 256, 48);
     context.fillStyle = color === "blue" ? "#6496ff" : color === "red" ? "#ff4b19" : "#1ec850";
-    context.fillText(`base ${base.tag}${base.owner ? `: ${base.owner}` : base.enemy ? `: ${base.enemy}` : ""}`, 256, 48);
+    context.fillText(label, 256, 48);
     if (base.enemy) {
       const progress = Math.min(1, Math.max(0, base.converted / (base.owner ? OCCUPYENEMYLIMIT : OCCUPYNEUTRALLIMIT)));
+      const meterX = 64, meterY = 72, meterWidth = 384, meterHeight = 24, meterRadius = meterHeight / 2;
       context.fillStyle = "rgba(20,20,20,.85)";
-      context.fillRect(64, 72, 384, 24);
+      roundedRect(context, meterX, meterY, meterWidth, meterHeight, meterRadius);
+      context.fill();
       context.fillStyle = base.enemy === base.owner ? "#3219ff" : "#ff1932";
-      context.fillRect(64, 72, 384 * progress, 24);
-      if (base.owner) {
-        context.strokeStyle = "#3219ff";
-        context.lineWidth = 4;
-        context.strokeRect(64, 72, 384, 24);
+      const fillWidth = meterWidth * progress;
+      if (fillWidth > 0) {
+        roundedRect(context, meterX, meterY, fillWidth, meterHeight, Math.min(meterRadius, fillWidth / 2));
+        context.fill();
       }
+      context.strokeStyle = "#000000";
+      context.lineWidth = 6;
+      roundedRect(context, meterX, meterY, meterWidth, meterHeight, meterRadius);
+      context.stroke();
     }
-    texture.update(false);
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    // Canvas Y grows downward while Babylon texture V grows upward. Upload with Y inversion; passing false here makes text and meters upside down.
+    texture.update(true);
   }
 
   private baseMaterial(part: "energy" | "monolith", color: string): StandardMaterial {
@@ -172,12 +188,14 @@ export class CaptureRenderer {
     material = new StandardMaterial(`capture-${key}`, this.scene);
     const energy = part === "energy";
     const texture = new Texture(packageAssetUrl(`models/base/${energy ? "energy.jpg" : "skin.jpg"}`)!, this.scene, false, false);
-    material.diffuseTexture = texture;
+    material.diffuseTexture = material.emissiveTexture = texture;
     if (energy) {
-      material.emissiveTexture = texture;
       material.diffuseColor = material.emissiveColor = color === "blue" ? new Color3(0, 0, 1) : color === "red" ? new Color3(1, 0, 0)
         : new Color3(0, 1, 0);
-    } else material.specularTexture = new Texture(packageAssetUrl("models/base/mask.jpg")!, this.scene, false, false);
+    } else {
+      material.emissiveColor = Color3.White().scale(0.45);
+      material.specularTexture = new Texture(packageAssetUrl("models/base/mask.jpg")!, this.scene, false, false);
+    }
     this.materials.set(key, material);
     return material;
   }
@@ -188,7 +206,9 @@ export class CaptureRenderer {
     if (material) return material;
     const name = AMMO_NAMES[ammoType - 1];
     material = new StandardMaterial(`capture-${key}`, this.scene);
-    material.diffuseTexture = new Texture(packageAssetUrl(`models/ammo/${name}/skin.jpg`)!, this.scene, false, false);
+    const texture = new Texture(packageAssetUrl(`models/ammo/${name}/skin.jpg`)!, this.scene, false, false);
+    material.diffuseTexture = material.emissiveTexture = texture;
+    material.emissiveColor = Color3.White().scale(0.45);
     material.specularTexture = new Texture(packageAssetUrl(`models/ammo/${name}/masks.jpg`)!, this.scene, false, false);
     material.ambientColor = Color3.White().scale(0.5);
     material.specularColor = Color3.White().scale(1.5);
@@ -277,4 +297,19 @@ function createMesh(scene: Scene, name: string, geometry: Geometry): Mesh {
   data.applyToMesh(mesh, true);
   mesh.isPickable = false;
   return mesh;
+}
+
+function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
+  const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.lineTo(x + width - safeRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  context.lineTo(x + width, y + height - safeRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  context.lineTo(x + safeRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  context.lineTo(x, y + safeRadius);
+  context.quadraticCurveTo(x, y, x + safeRadius, y);
+  context.closePath();
 }
