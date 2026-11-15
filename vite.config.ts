@@ -491,7 +491,12 @@ function resolveMapModels(names: string[]): Array<{
       format,
       directory: fs.existsSync(path.join(directory, config)) ? directory : fs.existsSync(path.join(parentDirectory, config)) ? parentDirectory : undefined,
     })).find((candidate) => candidate.directory);
-    if (!detected) return { index, name, status: "missing", reason: `No recognized Sauerbraten model configuration was found for ${name}.` };
+    if (!detected) {
+      const implicitFormat = ["IQM", "OBJ", "MD3", "MD2"].find((format) =>
+        findModelDefault(directory, directory, format.toLowerCase()));
+      if (implicitFormat) return resolveRenderableMapModel(index, name, directory, undefined, implicitFormat);
+      return { index, name, status: "missing", reason: `No recognized Sauerbraten model configuration was found for ${name}.` };
+    }
     const configPath = path.join(detected.directory!, detected.config);
     if (!["MD2", "MD3", "MD5", "OBJ", "IQM"].includes(detected.format)) {
       return {
@@ -558,8 +563,8 @@ function resolvePlayerModels() {
   });
 }
 
-function resolveRenderableMapModel(index: number, name: string, modelDirectory: string, configPath: string, format: string) {
-  const configDirectory = path.dirname(configPath);
+function resolveRenderableMapModel(index: number, name: string, modelDirectory: string, configPath: string | undefined, format: string) {
+  const configDirectory = configPath ? path.dirname(configPath) : modelDirectory;
   let assetDirectory = configDirectory;
   const settings = {
     scale: 0.25,
@@ -582,7 +587,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
   const skins: Array<{ mesh: string; diffusePath: string; masksPath?: string }> = [];
   const meshSettings: Array<{ mesh: string; cullFace?: boolean }> = [];
   const tags: Record<string, string> = {};
-  const source = fs.readFileSync(configPath, "utf8");
+  const source = configPath ? fs.readFileSync(configPath, "utf8") : "";
   for (const statement of splitStatements(source)) {
     const tokens = tokenize(statement.text);
     const command = tokens[0]?.toLowerCase();
@@ -628,7 +633,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
       name,
       status: "missing" as const,
       format,
-      configPath: packageRelativePath(configPath),
+      configPath: configPath ? packageRelativePath(configPath) : undefined,
       reason: `${format} geometry for ${name} was not found.`,
     };
   }
@@ -643,7 +648,7 @@ function resolveRenderableMapModel(index: number, name: string, modelDirectory: 
     name,
     status: "ready" as const,
     format,
-    configPath: packageRelativePath(configPath),
+    configPath: configPath ? packageRelativePath(configPath) : undefined,
     geometryPath,
     skins,
     meshSettings,
