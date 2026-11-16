@@ -5,6 +5,7 @@ import zlib from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeSauerbratenGzip } from "./sauerbratenGzip";
 import { DEFAULT_SAUERBRATEN_DIR, loadSauerbratenDirectory, resolveSauerbratenDirectory, validateSauerbratenDirectory } from "./sauerbratenDirectory";
+import { configureSauerbratenDirectory, readTextureManifest } from "./vite.config";
 
 const temporaryDirectories: string[] = [];
 
@@ -88,5 +89,29 @@ describe("legacy Sauerbraten gzip streams", () => {
     expect(() => zlib.gunzipSync(compressed)).toThrow();
     const map = zlib.gunzipSync(normalizeSauerbratenGzip(compressed));
     expect(map).toEqual(expectedMap);
+  });
+});
+
+describe("map configuration", () => {
+  it("executes loop bodies with Sauerbraten's zero-based iteration count", () => {
+    const assetRoot = temporaryDirectory();
+    createSauerbratenTree(assetRoot);
+    fs.writeFileSync(path.join(assetRoot, "data/default_map_settings.cfg"), "texture 0 textures/sky.png\n");
+    fs.writeFileSync(path.join(assetRoot, "packages/base/loop.cfg"), [
+      "loop i 3 [texture 0 textures/default.png]",
+      "loop i 0 [texture 0 textures/ignored.png]",
+      "loop i -2 [texture 0 textures/ignored.png]",
+    ].join("\n"));
+    configureSauerbratenDirectory(assetRoot);
+
+    const manifest = readTextureManifest("loop");
+
+    expect(manifest.slots.map((slot) => slot.textures[0]?.path)).toEqual([
+      "textures/sky.png",
+      "textures/default.png",
+      "textures/default.png",
+      "textures/default.png",
+    ]);
+    expect(manifest.unsupported).not.toEqual(expect.arrayContaining([expect.objectContaining({ command: "loop" })]));
   });
 });

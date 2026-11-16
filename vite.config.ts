@@ -11,7 +11,7 @@ let sauerRoot = "";
 let mapsDirectory = "";
 let packagesDirectory = "";
 
-function configureSauerbratenDirectory(directory: string): void {
+export function configureSauerbratenDirectory(directory: string): void {
   sauerRoot = directory;
   packagesDirectory = path.join(sauerRoot, "packages");
   mapsDirectory = path.join(packagesDirectory, "base");
@@ -101,7 +101,7 @@ function defaultVSlot(): ServerVSlot {
   return { changed: 0, previous: -1, scale: 1, rotation: 0, offset: [0, 0], scroll: [0, 0], layer: 0, alpha: [0.5, 0], color: [1, 1, 1] };
 }
 
-function readTextureManifest(mapName: string): {
+export function readTextureManifest(mapName: string): {
   slots: ServerTextureSlot[];
   unsupported: ConfigState["unsupported"];
   sources: string[];
@@ -178,6 +178,24 @@ function executeStatement(text: string, source: string, line: number, state: Con
   }
   if (command === "exec") {
     if (args[0]) executeConfig(resolveExecPath(source, args[0]), state, depth + 1);
+    return;
+  }
+  if (command === "loop") {
+    const id = args[0]?.toLowerCase(), n = Math.trunc(numberArg(args[1], 0)), body = stripBlock(args.slice(2).join(" "));
+    if (!id || n <= 0 || !body) return;
+    const previous = state.aliases.get(id), hadPrevious = state.aliases.has(id);
+    try {
+      for (let i = 0; i < n && state.commands < 250_000; i++) {
+        state.aliases.set(id, String(i));
+        for (const statement of splitStatements(body)) {
+          executeStatement(statement.text, source, line + statement.line - 1, state, depth + 1);
+          if (state.commands >= 250_000) break;
+        }
+      }
+    } finally {
+      if (hadPrevious) state.aliases.set(id, previous!);
+      else state.aliases.delete(id);
+    }
     return;
   }
   if (command === "texturereset") {
