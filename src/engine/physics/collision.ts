@@ -228,7 +228,10 @@ export class OctreeCollisionWorld {
       clip === MAT_GAMECLIP && entity.entityType === PhysicsEntityType.Ai;
     if (cube.kind === "empty" && !forcedSolid) return undefined;
     if (forcedSolid || cube.kind === "solid") {
-      return collideSolid(entity, direction, cutoff, cube, this.hiddenFaces.get(cube) ?? 0);
+      // cubecollidesolid() only uses cube.visible for native solid cubes. A deformed cube made solid by MAT_CLIP must keep all
+      // six axis faces; reusing its terrain visibility mask opens collision seams where it meets a slope.
+      const hidden = forcedSolid && cube.kind !== "solid" ? 0 : this.hiddenFaces.get(cube) ?? 0;
+      return collideSolid(entity, direction, cutoff, cube, hidden);
     }
     return collideDeformed(entity, direction, cutoff, this.clipGeometry(cube));
   }

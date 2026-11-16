@@ -50,6 +50,15 @@ describe("materials and mapmodel physics", () => {
     expect(probe(MAT_GLASS | MAT_CLIP, PhysicsEntityType.Camera)).toBeDefined();
   });
 
+  it("keeps the forced-solid face of a clip slope at an adjacent terrain seam", () => {
+    const clipSlope = slopedCube({ x: 0, y: 0, z: 0 }, MAT_CLIP);
+    const adjacentSlope = slopedCube({ x: 8, y: 0, z: 0 }, 0);
+    const world = new OctreeCollisionWorld(mapWith(clipSlope, adjacentSlope));
+    const player = createPlayer({ x: 12, y: 2, z: 18 });
+
+    expect(world.collide(player, { x: -1, y: 0, z: 0 })?.normal).toEqual({ x: 1, y: 0, z: 0 });
+  });
+
   it("collides with native-style elliptical mapmodel definitions", () => {
     const world = new OctreeCollisionWorld(mapWith());
     world.setMapModels([{ entityIndex: 0, origin: { x: 10, y: 10, z: 0 }, yaw: 0, center: { x: 0, y: 0, z: 4 },
@@ -82,6 +91,13 @@ describe("materials and mapmodel physics", () => {
 
 function cube(origin: Vec3, size: number, kind: OctreeCube["kind"], material: number): OctreeCube {
   return { origin, size, kind, material, edges: new Uint8Array(12), textures: [0, 0, 0, 0, 0, 0], merged: 0, surfaces: [] };
+}
+
+function slopedCube(origin: Vec3, material: number): OctreeCube {
+  const result = cube(origin, 8, "normal", material);
+  result.edges.fill(0x80);
+  result.edges.set([0x40, 0x40, 0x80, 0x80], 8);
+  return result;
 }
 
 function mapWith(...world: OctreeCube[]): SauerMap {
