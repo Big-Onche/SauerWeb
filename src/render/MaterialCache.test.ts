@@ -81,6 +81,23 @@ describe("MaterialCache", () => {
     engine.dispose();
   });
 
+  it("culls the backfaces of standard and bump-mapped world geometry", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    scene.useRightHandedSystem = true;
+    const cache = new MaterialCache(scene);
+    const standard = cache.get(describeSauerMaterial(resolvedTexture(), 0, 0));
+    const bumpTexture = resolvedTexture("bumpworld");
+    bumpTexture.normalUrl = "/normal.png";
+    const bump = cache.get(describeSauerMaterial(bumpTexture, 0, 0));
+
+    expect(standard.backFaceCulling).toBe(true);
+    expect(bump.backFaceCulling).toBe(true);
+
+    cache.dispose();
+    engine.dispose();
+  });
+
   it("binds the direction atlas paired with a Sauer bump lightmap", () => {
     const engine = new NullEngine();
     const scene = new Scene(engine);

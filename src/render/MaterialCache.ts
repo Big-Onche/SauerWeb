@@ -117,7 +117,7 @@ export class MaterialCache {
     material.ambientColor = Color3.Black();
     material.emissiveColor = Color3.White();
     material.specularColor = Color3.Black();
-    material.backFaceCulling = false;
+    material.backFaceCulling = true;
     material.disableLighting = true;
     material.alpha = descriptor.alpha;
     if (this.caustics) new StandardMaterialCaustics(material, this.caustics);
@@ -193,7 +193,7 @@ export class MaterialCache {
       needAlphaBlending: descriptor.surfaceMode === "transparent" || descriptor.useLightmapAlpha,
       needAlphaTesting: descriptor.surfaceMode === "alpha-test",
     });
-    material.backFaceCulling = false;
+    material.backFaceCulling = true;
     material.alpha = descriptor.alpha;
     if (descriptor.useLightmapAlpha) material.disableDepthWrite = true;
 
