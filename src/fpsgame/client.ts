@@ -209,7 +209,9 @@ export class MultiplayerClient extends EventTarget {
     this.localIntermission = false;
     this.timeLeftSeconds = 10 * 60;
     const player = this.playerFor(this.clientNumber);
-    Object.assign(player, { name: this.endpoint.playerName, model: playerModel, state: ClientState.Alive, alive: true });
+    const team = gameModeHas(this.gameMode, GameModeFlag.Team) ? "good" : "";
+    Object.assign(player, { name: this.endpoint.playerName, model: playerModel, team, state: ClientState.Alive, alive: true });
+    Object.assign(this.physics.player, { team });
     this.copyLocalSpawnState(player);
     this.entities.setGameMode(this.gameMode);
     this.entities.spawnitems(false, performance.now(), this.players.size);

@@ -1989,8 +1989,7 @@ export class MapScene {
     const groupedMode = (gameModeHas(mode, GameModeFlag.Ctf) && !gameModeHas(mode, GameModeFlag.Hold)) ||
       gameModeHas(mode, GameModeFlag.Collect);
     const tag = groupedMode ? team : 0;
-    const taggedStarts = allStarts.filter((entity) => (entity.attributes[1] ?? 0) === tag);
-    const starts = taggedStarts.length ? taggedStarts : allStarts;
+    const starts = allStarts.filter((entity) => (entity.attributes[1] ?? 0) === tag);
     if (!starts.length) return undefined;
     const clientMode = gameModeHas(mode, GameModeFlag.Ctf) || gameModeHas(mode, GameModeFlag.Capture) ||
       gameModeHas(mode, GameModeFlag.Collect);

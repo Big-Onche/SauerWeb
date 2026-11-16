@@ -66,6 +66,31 @@ describe("bot render ownership", () => {
   });
 });
 
+describe("network spawn groups", () => {
+  it("does not fall back to another team's starts when the requested group is absent", () => {
+    const starts = [1, 2].map((team, index): RegisteredMapEntity => ({
+      index,
+      position: { x: team * 10, y: 0, z: 0 },
+      attributes: [0, team, 0, 0, 0],
+      type: 3,
+      typeName: "playerstart",
+      category: "spawn",
+      namedAttributes: {},
+      orientation: { yawDegrees: 0 },
+    }));
+    const mapScene = Object.create(MapScene.prototype) as MapScene;
+    Object.assign(mapScene, {
+      currentMap: { entityRegistry: starts } as SauerMap,
+      fpsClient: { multiplayer: { gameMode: 11, players: new Map(), ctfMode: { flags: [] }, captureMode: { bases: [] } } },
+      physics: { player: { eyeHeight: 14 }, raycast: () => undefined },
+    });
+
+    const spawn = Reflect.apply(Reflect.get(mapScene, "chooseNetworkSpawn"), mapScene, [{ team: "" }]);
+
+    expect(spawn).toBeUndefined();
+  });
+});
+
 describe("computeTangents", () => {
   it("builds a right-handed tangent frame from world UVs", () => {
     const tangents = computeTangents(

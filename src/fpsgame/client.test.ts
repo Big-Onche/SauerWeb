@@ -51,6 +51,21 @@ describe("Sauerbraten rifle protocol", () => {
     expect(client.multiplayer.requestRespawn()).toBe(true);
   });
 
+  it("assigns the local team before emitting the first spawn in a team game", () => {
+    const client = createClient();
+    client.multiplayer.setGameMode(11);
+    let teamAtSpawn = "";
+    client.multiplayer.addEventListener("multiplayer", (event) => {
+      const detail = (event as CustomEvent<{ type: string }>).detail;
+      if (detail.type === "spawn") teamAtSpawn = client.multiplayer.players.get(client.multiplayer.clientNumber)?.team ?? "";
+    });
+
+    client.multiplayer.startLocalGame("player");
+
+    expect(teamAtSpawn).toBe("good");
+    expect(client.multiplayer.players.get(0)?.team).toBe("good");
+  });
+
   it("sends N_TRYSPAWN as a reliable standalone message", () => {
     const client = createClient();
     client.multiplayer.connected = true;
