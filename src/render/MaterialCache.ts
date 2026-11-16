@@ -397,7 +397,7 @@ const SAUER_BUMP_FRAGMENT_SHADER = `
   varying vec3 vWorldPosition;
 
   void main(void) {
-    vec4 diffuse = texture2D(diffuseSampler, vTextureUV) * vec4(2.0 * vColor.rgb, vColor.a);
+    vec4 diffuse = texture2D(diffuseSampler, vTextureUV) * vColor;
     vec4 lightmap = texture2D(lightmapSampler, vLightmapUV);
     vec3 bump = hasNormalMap > 0.5 ? texture2D(normalSampler, vTextureUV).rgb * 2.0 - 1.0 : vec3(0.0, 0.0, 1.0);
     vec3 lightDirection = texture2D(directionSampler, vLightmapUV).rgb * 2.0 - 1.0;

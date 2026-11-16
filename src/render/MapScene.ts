@@ -105,7 +105,7 @@ interface MemoryPerformance extends Performance {
   memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
 }
 
-export const DEFAULT_VIEWPORT_TUNING: Readonly<ViewportTuning> = { contrast: 1.3, gamma: 1.85, vibrance: 1.65 };
+export const DEFAULT_VIEWPORT_TUNING: Readonly<ViewportTuning> = { contrast: 1, gamma: 1, vibrance: 1 };
 const VIEWPORT_PROJECTED_BOUNDS: Readonly<ProjectedBounds> = { minX: -1, minY: -1, maxX: 1, maxY: 1, minW: 0 };
 
 interface WaterReflectionPlane {

@@ -344,7 +344,9 @@ function appendFace(batch: GeometryBatch, source: SurfaceVertex[], vertices: Vec
   for (let index = 0; index < vertices.length; index++) {
     const vertex = vertices[index];
     batch.positions.push(vertex.x, vertex.z, vertex.y);
-    batch.colors.push(effective.color[0], effective.color[1], effective.color[2], 1);
+    // renderva.cpp uploads colorparams as 2 * vslot.colorscale. Keeping that modulation in the vertex color makes the standard and custom
+    // Babylon material paths match Sauerbraten, including the separate passes used by texture layers.
+    batch.colors.push(2 * effective.color[0], 2 * effective.color[1], 2 * effective.color[2], 1);
     batch.uvs.push(...projectUv(vertex, orientation, effective.scale, effective.rotation, effective.offset));
     // Serialized coordinates point at lumel corners. Sauerbraten samples their centers.
     batch.uv2s.push(

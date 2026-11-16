@@ -10,6 +10,12 @@ describe("generateGeometry", () => {
     expect(totalFaces(batches)).toBe(6);
   });
 
+  it("applies Sauerbraten's doubled world color modulation", () => {
+    const batches = generateGeometry(mapWith([solidCube(0, 0, 0, 2)], 2));
+
+    expect(batches[0].colors.slice(0, 4)).toEqual([2, 2, 2, 1]);
+  });
+
   it("does not generate fallback quads for zero-vertex merged-face participants", () => {
     const cube = solidCube(0, 0, 0, 2);
     cube.merged = 1;
