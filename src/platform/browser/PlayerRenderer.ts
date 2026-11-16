@@ -1,22 +1,23 @@
+import type { AnimationGroup } from "@babylonjs/core/Animations/animationGroup";
+import { AnimationGroupMask, AnimationGroupMaskMode } from "@babylonjs/core/Animations/animationGroupMask";
+import type { AssetContainer, InstantiatedEntries } from "@babylonjs/core/assetContainer";
 import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
+import { loadAssetContainerAsync } from "@babylonjs/core/Loading/sceneLoader";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
-import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import type { Scene } from "@babylonjs/core/scene";
+import "@babylonjs/loaders/glTF/glTFFileLoader";
+import "@babylonjs/loaders/glTF/2.0/glTFLoader";
 import type { MapModelAsset, PlayerModelAnimation, PlayerModelAsset, ViewWeaponAsset } from "../../assets/types";
 import { packageAssetUrl } from "../../assets/TextureResolver";
-import { modelAnimationPosition, type ModelAnimationPosition } from "../../engine/modelanimation";
-import { parseRagdoll, poseRagdollVertices, RAGDOLL_FADE, RAGDOLL_MILLIS, RagdollSimulation, type RagdollCollider,
-  type RagdollSkeleton } from "../../engine/ragdoll";
-import { ensureModelGeometryNormals, interpolateModelGeometry, iqmAnimationInfo, md5AnimationInfo, parseIqm, parseIqmParts, prepareMd5Animation,
-  prepareMd5Model,
-  skinMd5Model, skinMd5ModelParts,
-  type ModelGeometry, type ModelGeometryMesh, type ModelJointPose, type PreparedMd5Animation,
-  type PreparedMd5Model } from "../../engine/rendermodel";
+import { modelAnimationPosition } from "../../engine/modelanimation";
+import type { RagdollCollider } from "../../engine/ragdoll";
+import { ensureModelGeometryNormals, prepareMd5Model, skinMd5Model, type ModelGeometry } from "../../engine/rendermodel";
 import type { Vec3 } from "../../engine/octa";
 import { ClientState } from "../../engine/physics/types";
 import { getplayermodelinfo, playerSkin, renderclient, renderclientLocomotion, type RenderClientState } from "../../fpsgame/render";
@@ -43,17 +44,24 @@ interface PlayerModelInstance {
   meshes: Mesh[];
   weaponMeshes: Mesh[];
   weaponKey: string;
-  muzzle?: Vector3;
   visualKey: string;
   animation: string;
-  frame: number;
+  glbFrameKey: string;
   updateToken: number;
   updating: boolean;
   pendingUpdate?: ModelUpdateRequest;
-  interpolatedGeometry?: ModelGeometry;
-  deadAt?: number;
-  corpseStartedAt?: number;
-  ragdoll?: PlayerRagdollState;
+  glb?: GlbPlayerInstance;
+}
+
+interface GlbPlayerInstance {
+  modelName: string;
+  entries: InstantiatedEntries;
+  holder: TransformNode;
+  groups: Map<string, AnimationGroup>;
+  activeGroups: AnimationGroup[];
+  activeKey: string;
+  attachment?: TransformNode;
+  muzzleLocal?: Vector3;
 }
 
 interface ModelUpdateRequest {
@@ -68,9 +76,6 @@ interface ModelUpdateRequest {
   loop: boolean;
   yaw: number;
   selectedGun: number;
-  deadAt?: number;
-  nowMilliseconds: number;
-  velocity: Vec3;
 }
 
 interface MeshVertexBuffers {
@@ -79,94 +84,36 @@ interface MeshVertexBuffers {
   indices: number[];
 }
 
-interface RagdollMeshBinding {
-  positions: number[];
-  animatedPositions: Float32Array;
-  joints: number[];
-  jointPositions: number[];
-}
-
-interface RagdollJointTransform {
-  origin: Vector3;
-  axes: [Vector3, Vector3, Vector3];
-}
-
-interface PlayerRagdollState {
-  deadAt: number;
-  simulation: RagdollSimulation;
-  bindings: RagdollMeshBinding[];
-  inverseWorld: ReturnType<TransformNode["computeWorldMatrix"]>;
-  sourceVelocity: Vec3;
-  acceptsPushUntil: number;
-}
-
-interface SavedRagdoll {
-  instance: PlayerModelInstance;
-  expiresAt: number;
-}
-
-// Keep only the current visual working set. MD5 source topology and compact animation channels are prepared separately, so an evicted
-// frame only needs inexpensive skinning rather than reparsing the mesh and animation files.
-const MAX_GEOMETRY_FRAME_CACHE = 64;
-// A root-centred cube enclosing the initial bounding sphere remains useful across animation poses; padding covers interpolation and
-// attachment sway.
-const ANIMATED_BOUND_SCALE = 1.25;
-
-// Browser counterpart of src/fpsgame/render.cpp's model batching and src/engine/ragdoll.h's death simulation.
+// Player bodies use native glTF skeletons and GPU skinning. MD5 below is intentionally limited to the separate, static vwep assets.
 export class PlayerRenderer {
   private readonly instances = new Map<number, PlayerModelInstance>();
-  private readonly savedRagdolls: SavedRagdoll[] = [];
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly textSources = new Map<string, Promise<string>>();
-  private readonly binarySources = new Map<string, Promise<ArrayBuffer>>();
-  private readonly geometryFrames = new Map<string, ModelGeometry>();
-  private readonly md5Models = new Map<string, PreparedMd5Model>();
-  private readonly md5Animations = new Map<string, PreparedMd5Animation>();
-  private readonly ragdollSkeletons = new Map<string, Promise<RagdollSkeleton>>();
+  private readonly weaponGeometry = new Map<string, Promise<ModelGeometry>>();
+  private readonly glbContainers = new Map<string, Promise<AssetContainer>>();
   private readonly meshVertexBuffers = new WeakMap<Mesh, MeshVertexBuffers>();
   private assets?: Promise<PlayerModelAsset[]>;
   private viewWeapons?: Promise<ViewWeaponAsset[]>;
-  private geometryGeneration = 0;
 
-  constructor(private readonly scene: Scene, private readonly ragdollCollider?: RagdollCollider,
-              private readonly performanceRecorder?: (milliseconds: number) => void, private readonly profilingEnabled?: () => boolean) {}
+  constructor(private readonly scene: Scene, _ragdollCollider?: RagdollCollider, _performanceRecorder?: (milliseconds: number) => void,
+              _profilingEnabled?: () => boolean) {}
 
   rendergame(players: readonly RenderPlayer[], gameMode: number, teamskins: boolean, localTeam: string, nowMilliseconds: number): void {
     const active = new Set<number>();
     for (const player of players) {
       active.add(player.id);
-      const existing = this.instances.get(player.id);
-      const changedDeath = player.state === ClientState.Dead && (player.deadAt ?? 0) > 0 && existing?.deadAt !== player.deadAt;
-      if (existing?.deadAt !== undefined && (player.state !== ClientState.Dead || changedDeath)) {
-        this.saveRagdoll(player.id, existing, nowMilliseconds);
-      }
       this.renderplayer(player, gameMode, teamskins, localTeam, nowMilliseconds);
     }
     for (const [id, instance] of this.instances) {
       if (active.has(id)) continue;
-      if (instance.deadAt !== undefined && instance.meshes.length) this.saveRagdoll(id, instance, nowMilliseconds);
-      else this.disposeInstance(instance);
+      this.disposeInstance(instance);
       this.instances.delete(id);
-    }
-    for (let index = this.savedRagdolls.length - 1; index >= 0; index--) {
-      const saved = this.savedRagdolls[index];
-      if (nowMilliseconds >= saved.expiresAt) {
-        this.disposeInstance(saved.instance);
-        this.savedRagdolls.splice(index, 1);
-        continue;
-      }
-      saved.instance.ragdoll?.simulation.move(nowMilliseconds);
-      this.applyRagdoll(saved.instance);
-      const visibility = Math.min(1, (saved.expiresAt - nowMilliseconds) / RAGDOLL_FADE);
-      saved.instance.meshes.forEach((mesh) => mesh.visibility = visibility);
     }
   }
 
   clear(): void {
     this.instances.forEach((instance) => this.disposeInstance(instance));
     this.instances.clear();
-    this.savedRagdolls.forEach((saved) => this.disposeInstance(saved.instance));
-    this.savedRagdolls.length = 0;
   }
 
   // Original: src/fpsgame/render.cpp
@@ -174,63 +121,30 @@ export class PlayerRenderer {
   // Sauerbraten reference: SVN r6488
   async preload(modelIndex: number, teamMode: boolean, multiplayer: boolean,
                 progress?: (complete: number, total: number, label: string) => void): Promise<void> {
-    const assets = await (this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
-      if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
-      return response.json() as Promise<PlayerModelAsset[]>;
-    }));
+    const assets = await this.playerAssets();
     const definitions = multiplayer ? assets : [assets[modelIndex] ?? assets[0]].filter(Boolean);
     const work = definitions.flatMap((definition) => {
       const skins: Array<"ffa" | "blueTeam" | "redTeam"> = teamMode ? ["blueTeam", "redTeam"] : ["ffa"];
       return skins.map((skin) => ({ definition, skin, asset: definition[skin] }));
-    }).filter((item) => item.asset?.status === "ready" && item.asset.geometryPath);
+    }).filter((item) => item.definition.glbPath && item.asset?.status === "ready");
     if (!work.length || work.length !== definitions.length * (teamMode ? 2 : 1)) {
-      throw new Error("A required player model is missing or unsupported.");
+      throw new Error("A required GLB player model is missing or unsupported.");
     }
     let complete = 0;
-    const total = Math.max(1, work.length);
-    for (const { definition, skin, asset } of work) {
-      const instance: PlayerModelInstance = {
-        root: new TransformNode(`preload-player-${definition.index}-${skin}`, this.scene), meshes: [], weaponMeshes: [], weaponKey: "",
-        visualKey: "", animation: "", frame: -1, updateToken: 1, updating: false,
-      };
+    for (const { definition, skin } of work) {
+      const instance = this.createInstance(`preload-player-${definition.index}-${skin}`);
       try {
         for (let gun = 0; gun <= 6; gun++) {
+          const token = ++instance.updateToken;
           await this.updateModel(instance, definition.index, skin, `${definition.index}:${skin}:${gun}`, "idle", undefined, undefined, 0, true,
-            0, gun, undefined, 0, { x: 0, y: 0, z: 0 }, instance.updateToken);
+            0, gun, token);
         }
-        const uniqueAnimations = new Map<string, PlayerModelAnimation>();
-        Object.values(definition.animations).forEach((animation) => uniqueAnimations.set(animation.path, animation));
-        definition.animationParts.forEach((part) => Object.values(part.animations)
-          .forEach((animation) => uniqueAnimations.set(animation.path, animation)));
-        await Promise.all([...uniqueAnimations.values()].map(async (animation) => {
-          if (asset.format === "MD5") {
-            const source = await this.fetchText(animation.path);
-            await this.geometryFrame(asset, animation.path, source, undefined, animation.startOffset);
-          } else if (asset.format === "IQM") {
-            const source = await this.fetchBinary(animation.path);
-            await this.geometryFrame(asset, animation.path, undefined, source, animation.startOffset);
-          }
-        }));
-        if (definition.ragdollPath) await this.ragdollSkeleton(definition.ragdollPath);
       } finally {
         this.disposeInstance(instance);
       }
-      progress?.(++complete, total, definition.name);
+      progress?.(++complete, work.length, definition.name);
       await yieldToBrowser();
     }
-  }
-
-  private saveRagdoll(id: number, instance: PlayerModelInstance, nowMilliseconds: number): void {
-    const deadAt = instance.deadAt ?? instance.ragdoll?.deadAt ?? nowMilliseconds;
-    const expiresAt = (instance.corpseStartedAt ?? nowMilliseconds) + RAGDOLL_MILLIS + RAGDOLL_FADE;
-    this.instances.delete(id);
-    if (nowMilliseconds >= expiresAt) {
-      this.disposeInstance(instance);
-      return;
-    }
-    instance.root.name = `ragdoll-${id}-${deadAt}`;
-    instance.meshes.forEach((mesh) => mesh.visibility = 1);
-    this.savedRagdolls.push({ instance, expiresAt });
   }
 
   flagAttachmentPosition(playerId: number, eyeHeight = 14, aboveEye = 1): Vector3 | undefined {
@@ -243,27 +157,19 @@ export class PlayerRenderer {
 
   muzzlePosition(playerId: number): Vec3 | undefined {
     const instance = this.instances.get(playerId);
-    if (!instance?.muzzle || !instance.root.isEnabled()) return undefined;
-    const position = Vector3.TransformCoordinates(instance.muzzle, instance.root.computeWorldMatrix(true));
+    if (!instance?.glb?.attachment || !instance.glb.muzzleLocal || !instance.root.isEnabled()) return undefined;
+    const position = Vector3.TransformCoordinates(instance.glb.muzzleLocal, instance.glb.attachment.computeWorldMatrix(true));
     return { x: position.x, y: position.z, z: position.y };
   }
 
   private renderplayer(player: RenderPlayer, gameMode: number, teamskins: boolean, localTeam: string, nowMilliseconds: number): void {
     let instance = this.instances.get(player.id);
     if (!instance) {
-      instance = { root: new TransformNode(`player-${player.id}`, this.scene), meshes: [], weaponMeshes: [], weaponKey: "", visualKey: "",
-        animation: "", frame: -1, updateToken: 0, updating: false };
+      instance = this.createInstance(`player-${player.id}`);
       this.instances.set(player.id, instance);
     }
     instance.root.setEnabled(player.visible);
-    if (player.state === ClientState.Dead) {
-      instance.deadAt = (player.deadAt ?? 0) > 0 ? player.deadAt : instance.deadAt ?? nowMilliseconds;
-      instance.corpseStartedAt ??= nowMilliseconds;
-    }
-    const targetPosition = toBabylonPosition(player.position);
-    if (!instance.ragdoll || player.state !== ClientState.Dead || instance.ragdoll.deadAt !== instance.deadAt) {
-      instance.root.position.copyFrom(targetPosition);
-    }
+    instance.root.position.copyFrom(toBabylonPosition(player.position));
     if (!player.visible) return;
     const model = getplayermodelinfo(player.model);
     const skin = playerSkin(gameMode, teamskins, localTeam, player.team, player.local);
@@ -276,31 +182,21 @@ export class PlayerRenderer {
       : baseAnimation === "idle" ? `hold ${player.selectedGun + 1}` : baseAnimation;
     const secondaryAnimation = attacking && canAttack || baseAnimation === "pain" ? locomotionAnimation : undefined;
     const secondaryAnimationMilliseconds = locomotionAnimation === "jump" ? player.timeInAir ?? 0 : nowMilliseconds;
-    const animationMilliseconds = animation === "dying" ? Math.max(0, nowMilliseconds - (instance.deadAt ?? nowMilliseconds))
+    const animationMilliseconds = animation === "dying" ? Math.max(0, nowMilliseconds - (player.deadAt ?? nowMilliseconds))
       : animation === "pain" ? Math.max(0, nowMilliseconds - (player.lastPain ?? nowMilliseconds))
         : animation === "jump" ? player.timeInAir ?? 0 : attacking ? Math.max(0, nowMilliseconds - player.lastAction) : nowMilliseconds;
     const loop = !attacking && animation !== "dying" && animation !== "pain" && animation !== "jump";
-    if (player.state !== ClientState.Dead) {
-      instance.deadAt = undefined;
-      instance.corpseStartedAt = undefined;
-      instance.ragdoll = undefined;
-      instance.meshes.forEach((mesh) => mesh.visibility = 1);
-    } else instance.meshes.forEach((mesh) => mesh.visibility = 1);
     this.requestModelUpdate(instance, {
-      modelIndex: model.index,
-      skin,
-      visualKey,
-      animation,
-      secondaryAnimation,
-      secondaryAnimationMilliseconds,
-      animationMilliseconds,
-      loop,
-      yaw: player.yaw,
-      selectedGun: player.selectedGun,
-      deadAt: player.state === ClientState.Dead ? instance.deadAt : undefined,
-      nowMilliseconds,
-      velocity: player.velocity ?? { x: 0, y: 0, z: player.velocityZ ?? 0 },
+      modelIndex: model.index, skin, visualKey, animation, secondaryAnimation, secondaryAnimationMilliseconds, animationMilliseconds, loop,
+      yaw: player.yaw, selectedGun: player.selectedGun,
     });
+  }
+
+  private createInstance(name: string): PlayerModelInstance {
+    return {
+      root: new TransformNode(name, this.scene), meshes: [], weaponMeshes: [], weaponKey: "", visualKey: "", animation: "", glbFrameKey: "",
+      updateToken: 0, updating: false,
+    };
   }
 
   private requestModelUpdate(instance: PlayerModelInstance, request: Omit<ModelUpdateRequest, "token">): void {
@@ -316,8 +212,7 @@ export class PlayerRenderer {
         const request = instance.pendingUpdate;
         instance.pendingUpdate = undefined;
         await this.updateModel(instance, request.modelIndex, request.skin, request.visualKey, request.animation, request.secondaryAnimation,
-          request.secondaryAnimationMilliseconds, request.animationMilliseconds, request.loop, request.yaw, request.selectedGun, request.deadAt,
-          request.nowMilliseconds, request.velocity, request.token);
+          request.secondaryAnimationMilliseconds, request.animationMilliseconds, request.loop, request.yaw, request.selectedGun, request.token);
       }
     } finally {
       instance.updating = false;
@@ -327,422 +222,157 @@ export class PlayerRenderer {
 
   private async updateModel(instance: PlayerModelInstance, modelIndex: number, skin: "ffa" | "blueTeam" | "redTeam", visualKey: string,
                             animation: string, secondaryAnimation: string | undefined, secondaryAnimationMilliseconds: number | undefined,
-                            animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number,
-                            deadAt: number | undefined, nowMilliseconds: number, velocity: Vec3, token: number): Promise<void> {
-    const assets = await (this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
-      if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
-      return response.json() as Promise<PlayerModelAsset[]>;
-    }));
+                            animationMilliseconds: number, loop: boolean, yaw: number, selectedGun: number, token: number): Promise<void> {
+    const assets = await this.playerAssets();
     if (token !== instance.updateToken) return;
     const definition = assets[modelIndex] ?? assets[0];
     const asset = definition?.[skin] ?? definition?.ffa;
-    if (!definition || !asset || asset.status !== "ready" || !asset.geometryPath) return;
-    if (deadAt !== undefined && instance.ragdoll?.deadAt === deadAt) {
-      this.applyLateRagdollPush(instance.ragdoll, velocity, nowMilliseconds);
-      instance.ragdoll.simulation.move(nowMilliseconds);
-      this.applyRagdoll(instance);
-      return;
+    if (!definition?.glbPath || !asset || asset.status !== "ready") return;
+    await this.updateGlbModel(instance, definition, asset, visualKey, animation, secondaryAnimation, secondaryAnimationMilliseconds,
+      animationMilliseconds, loop, yaw, selectedGun, token);
+  }
+
+  private async updateGlbModel(instance: PlayerModelInstance, definition: PlayerModelAsset, asset: MapModelAsset, visualKey: string,
+                               animation: string, secondaryAnimation: string | undefined,
+                               secondaryAnimationMilliseconds: number | undefined, animationMilliseconds: number, loop: boolean, yaw: number,
+                               selectedGun: number, token: number): Promise<void> {
+    if (!definition.glbPath) return;
+    if (!instance.glb || instance.glb.modelName !== definition.name) {
+      this.disposeGlb(instance);
+      const container = await this.glbContainer(definition.glbPath);
+      if (token !== instance.updateToken) return;
+      const entries = container.instantiateModelsToScene((name) => name, false);
+      const holder = new TransformNode(`${instance.root.name}-glb`, this.scene);
+      holder.parent = instance.root;
+      entries.rootNodes.forEach((node) => node.parent = holder);
+      const meshes = entries.rootNodes.flatMap((node) => node instanceof Mesh ? [node, ...node.getChildMeshes(false)] : node.getChildMeshes(false));
+      meshes.forEach((mesh) => {
+        mesh.material = this.assetMaterial(`player:${definition.index}`, asset, glbSourceName(mesh.name));
+        mesh.isPickable = false;
+      });
+      const groups = new Map(entries.animationGroups.map((group) => [group.name.toLowerCase(), group]));
+      instance.glb = { modelName: definition.name, entries, holder, groups, activeGroups: [], activeKey: "" };
+      instance.meshes = meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh);
+      instance.visualKey = "";
+      instance.animation = "";
+      instance.glbFrameKey = "";
     }
-    const animationSpec = definition.animations[animation] ?? definition.animations.idle;
-    const animationPath = animationSpec?.path;
-    let position: ModelAnimationPosition = { frame: 0, nextFrame: 0, interpolation: 0 };
-    let animationSource: string | undefined;
-    let animationBuffer: ArrayBuffer | undefined;
-    let geometry: ModelGeometry | undefined;
-    if (secondaryAnimation) {
-      const selectedParts = definition.animationParts.map((part) => {
-        const primary = part.animations[animation];
-        const secondary = part.animations[secondaryAnimation];
-        const spec = primary && (!secondary || primary.priority >= secondary.priority) ? primary : secondary ?? primary ?? animationSpec;
-        return { spec, roots: part.roots, milliseconds: spec === primary ? animationMilliseconds : secondaryAnimationMilliseconds ?? nowMilliseconds,
-          loop: spec === primary ? loop : secondaryAnimation !== "jump" };
-      }).filter((part): part is typeof part & { spec: NonNullable<typeof part.spec> } => Boolean(part.spec));
-      geometry = await this.geometryParts(asset, selectedParts, instance);
-    } else if (asset.format === "MD5" && animationPath) {
-      animationSource = await this.fetchText(animationPath);
-      const info = md5AnimationInfo(animationSource);
-      position = modelAnimationPosition(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
-        animationSpec.endOffset);
-    } else if (asset.format === "IQM" && animationPath) {
-      animationBuffer = await this.fetchBinary(animationPath);
-      const info = iqmAnimationInfo(animationBuffer);
-      position = modelAnimationPosition(info.frameCount, animationSpec.speed, animationMilliseconds, loop, animationSpec.startOffset,
-        animationSpec.endOffset);
-    }
+    const glb = instance.glb;
+    const translate = asset.translate ?? [0, 0, 0];
+    glb.holder.position.set(translate[0], translate[2], translate[1]);
+    instance.root.scaling.setAll(asset.scale ?? 0.25);
     instance.root.rotationQuaternion = Quaternion.RotationYawPitchRoll(-(yaw + 90 + (asset.yaw ?? 0)) * Math.PI / 180,
       -(asset.pitch ?? 0) * Math.PI / 180, 0);
-    const frame = secondaryAnimation ? nowMilliseconds : position.frame + (position.nextFrame !== position.frame ? position.interpolation : 0);
-    if (instance.visualKey === visualKey && instance.animation === animation && instance.frame === frame) return;
-    geometry ??= await this.geometry(asset, animationPath, animationSource, animationBuffer, position, instance);
-    if (token !== instance.updateToken) return;
-    if (instance.visualKey !== visualKey || instance.meshes.length !== geometry.meshes.length) {
-      this.createMeshes(instance, definition, asset, geometry);
+    const primary = definition.animations[animation] ?? definition.animations.idle;
+    if (!primary) return;
+    const selectedParts = secondaryAnimation ? definition.animationParts.map((part) => {
+      const primaryPart = part.animations[animation];
+      const secondaryPart = part.animations[secondaryAnimation];
+      const spec = primaryPart && (!secondaryPart || primaryPart.priority >= secondaryPart.priority)
+        ? primaryPart : secondaryPart ?? primaryPart ?? primary;
+      return { spec, roots: part.roots, milliseconds: spec === primaryPart ? animationMilliseconds
+        : secondaryAnimationMilliseconds ?? animationMilliseconds, loop: spec === primaryPart ? loop : secondaryAnimation !== "jump" };
+    }) : [{ spec: primary, roots: [] as string[], milliseconds: animationMilliseconds, loop }];
+    const frameKey = selectedParts.map((part) => `${part.spec.path}:${glbAnimationFrame(glb.groups, part.spec, part.milliseconds, part.loop)}`)
+      .join("|");
+    if (instance.visualKey !== visualKey) {
+      instance.meshes.forEach((mesh) => mesh.material = this.assetMaterial(`player:${definition.index}`, asset, glbSourceName(mesh.name)));
     }
-    else this.updateMeshes(instance.meshes, geometry.meshes, asset);
-    await this.updateViewWeapon(instance, asset, geometry, selectedGun);
-    if (token !== instance.updateToken) return;
-    if (deadAt !== undefined && definition.ragdollPath) {
-      await this.startRagdoll(instance, definition.ragdollPath, geometry, asset, deadAt, velocity, yaw, nowMilliseconds, token);
-      if (token !== instance.updateToken) return;
-      this.disposeWeapon(instance);
+    if (instance.visualKey !== visualKey || instance.animation !== animation || instance.glbFrameKey !== frameKey) {
+      this.applyGlbAnimations(glb, selectedParts);
+      instance.visualKey = visualKey;
+      instance.animation = animation;
+      instance.glbFrameKey = frameKey;
     }
-    instance.visualKey = visualKey;
-    instance.animation = animation;
-    instance.frame = frame;
+    await this.updateGlbViewWeapon(instance, asset, selectedGun);
   }
 
-  private async startRagdoll(instance: PlayerModelInstance, path: string, geometry: ModelGeometry, asset: MapModelAsset, deadAt: number,
-                             velocity: Vec3, yaw: number, nowMilliseconds: number, token: number): Promise<void> {
-    const skeleton = await this.ragdollSkeleton(path);
-    if (token !== instance.updateToken || !skeleton.vertices.length || instance.ragdoll?.deadAt === deadAt) return;
-    instance.root.computeWorldMatrix(true);
-    const posedVertices = geometry.joints && geometry.bindJoints
-      ? poseRagdollVertices(skeleton, geometry.joints, geometry.bindJoints) : skeleton.vertices;
-    const initialLocalVertices = posedVertices.map((vertex) => new Vector3((vertex.x + (asset.translate?.[0] ?? 0)) * (asset.scale ?? 0.25),
-      (vertex.z + (asset.translate?.[2] ?? 0)) * (asset.scale ?? 0.25),
-      (vertex.y + (asset.translate?.[1] ?? 0)) * (asset.scale ?? 0.25)));
-    const worldVertices = initialLocalVertices.map((vertex) => {
-      const point = Vector3.TransformCoordinates(vertex, instance.root.getWorldMatrix());
-      return { x: point.x, y: point.y, z: point.z };
-    });
-    const pushedVelocity = ragdollVelocity(velocity, yaw);
-    const simulation = new RagdollSimulation(skeleton, worldVertices,
-      { x: pushedVelocity.x, y: pushedVelocity.z, z: pushedVelocity.y }, nowMilliseconds, this.ragdollCollider, asset.scale ?? 0.25);
-    const inverseWorld = instance.root.getWorldMatrix().clone().invert();
-    instance.ragdoll = {
-      deadAt,
-      simulation,
-      inverseWorld,
-      bindings: geometry.meshes.map((mesh) => this.bindRagdollMesh(mesh, asset, skeleton, initialLocalVertices, geometry.joints)),
-      sourceVelocity: { ...velocity },
-      acceptsPushUntil: nowMilliseconds + 750,
-    };
-  }
-
-  private applyLateRagdollPush(ragdoll: PlayerRagdollState, velocity: Vec3, nowMilliseconds: number): void {
-    if (nowMilliseconds > ragdoll.acceptsPushUntil) return;
-    const delta = {
-      x: velocity.x - ragdoll.sourceVelocity.x,
-      y: velocity.y - ragdoll.sourceVelocity.y,
-      z: velocity.z - ragdoll.sourceVelocity.z,
-    };
-    ragdoll.sourceVelocity = { ...velocity };
-    if (Math.hypot(delta.x, delta.y, delta.z) < 1) return;
-    ragdoll.simulation.addVelocity({ x: delta.x, y: delta.z, z: delta.y });
-  }
-
-  private bindRagdollMesh(mesh: ModelGeometryMesh, asset: MapModelAsset, skeleton: RagdollSkeleton,
-                          particles: readonly Vector3[], modelJoints?: readonly ModelJointPose[]): RagdollMeshBinding {
-    const positions = translateAndScale(mesh.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
-    const transforms = this.ragdollJointTransforms(skeleton, particles);
-    const joints: number[] = [];
-    const jointPositions: number[] = [];
-    for (let index = 0; index < positions.length; index += 3) {
-      const vertex = new Vector3(positions[index], positions[index + 1], positions[index + 2]);
-      const bone = mesh.bones?.[index / 3];
-      let closest = this.ragdollJointForBone(bone, skeleton, modelJoints);
-      let closestDistance = Number.POSITIVE_INFINITY;
-      if (closest < 0) transforms.forEach((transform, jointIndex) => {
-        const distance = Vector3.DistanceSquared(vertex, transform.origin);
-        if (distance < closestDistance) {
-          closest = jointIndex;
-          closestDistance = distance;
-        }
+  private applyGlbAnimations(glb: GlbPlayerInstance,
+                             parts: Array<{ spec: PlayerModelAnimation; roots: string[]; milliseconds: number; loop: boolean }>): void {
+    const upperNames = parts.slice(1).flatMap((part) => glbTargetNames(glb, part.roots));
+    const selected = parts.map((part) => glb.groups.get(animationClipName(part.spec.path)))
+      .filter((group): group is AnimationGroup => Boolean(group));
+    if (selected.length !== parts.length) throw new Error(`GLB ${glb.modelName} is missing a requested animation group.`);
+    const activeKey = parts.map((part, index) => `${animationClipName(part.spec.path)}:${index}:${part.roots.join(",")}`).join("|");
+    if (activeKey !== glb.activeKey) {
+      glb.activeGroups.forEach((group) => group.stop(true));
+      glb.activeGroups = selected;
+      glb.activeKey = activeKey;
+      selected.forEach((group, index) => {
+        group.mask = upperNames.length
+          ? new AnimationGroupMask(upperNames, index === 0 ? AnimationGroupMaskMode.Exclude : AnimationGroupMaskMode.Include) : null;
+        group.start(parts[index].loop, 0);
+        group.pause();
       });
-      closest = Math.max(closest, 0);
-      const transform = transforms[closest];
-      const relative = vertex.subtract(transform.origin);
-      joints.push(closest);
-      jointPositions.push(Vector3.Dot(relative, transform.axes[0]), Vector3.Dot(relative, transform.axes[1]),
-        Vector3.Dot(relative, transform.axes[2]));
     }
-    return { positions, animatedPositions: new Float32Array(positions.length), joints, jointPositions };
-  }
-
-  private ragdollJointForBone(bone: number | undefined, skeleton: RagdollSkeleton,
-                              modelJoints?: readonly ModelJointPose[]): number {
-    let current = bone;
-    while (current !== undefined && current >= 0) {
-      const ragdollJoint = skeleton.joints.findIndex((joint) => joint.bone === current);
-      if (ragdollJoint >= 0) return ragdollJoint;
-      current = modelJoints?.[current]?.parent;
-    }
-    return -1;
-  }
-
-  private applyRagdoll(instance: PlayerModelInstance): void {
-    const profiling = this.performanceRecorder && this.profilingEnabled?.();
-    const startedAt = profiling ? performance.now() : 0;
-    try {
-      this.applyRagdollGeometry(instance);
-    } finally {
-      if (profiling) this.performanceRecorder!(performance.now() - startedAt);
-    }
-  }
-
-  private applyRagdollGeometry(instance: PlayerModelInstance): void {
-    const ragdoll = instance.ragdoll;
-    if (!ragdoll) return;
-    const currentLocalVertices = ragdoll.simulation.vertices.map((vertex) => Vector3.TransformCoordinates(
-      new Vector3(vertex.position.x, vertex.position.y, vertex.position.z), ragdoll.inverseWorld));
-    const currentJoints = this.ragdollJointTransforms(ragdoll.simulation.skeleton, currentLocalVertices);
-    instance.meshes.forEach((mesh, meshIndex) => {
-      const binding = ragdoll.bindings[meshIndex];
-      if (!binding) return;
-      const positions = binding.animatedPositions;
-      positions.set(binding.positions);
-      for (let vertexIndex = 0; vertexIndex < binding.joints.length; vertexIndex++) {
-        const transform = currentJoints[binding.joints[vertexIndex]];
-        const localOffset = vertexIndex * 3;
-        const point = transform.origin.add(transform.axes[0].scale(binding.jointPositions[localOffset]))
-          .addInPlace(transform.axes[1].scale(binding.jointPositions[localOffset + 1]))
-          .addInPlace(transform.axes[2].scale(binding.jointPositions[localOffset + 2]));
-        const offset = vertexIndex * 3;
-        positions[offset] = point.x;
-        positions[offset + 1] = point.y;
-        positions[offset + 2] = point.z;
-      }
-      this.updateMeshVertices(mesh, positions, undefined, true);
+    glb.activeGroups.forEach((group, index) => {
+      const part = parts[index];
+      if (part) group.goToFrame(glbAnimationFrame(glb.groups, part.spec, part.milliseconds, part.loop));
     });
   }
 
-  private ragdollJointTransforms(skeleton: RagdollSkeleton, vertices: readonly Vector3[]): RagdollJointTransform[] {
-    if (!skeleton.joints.length) {
-      return vertices.map((origin) => ({ origin, axes: [Vector3.Right(), Vector3.Up(), Vector3.Forward()] }));
+  private glbContainer(path: string): Promise<AssetContainer> {
+    let container = this.glbContainers.get(path);
+    if (!container) {
+      container = loadAssetContainerAsync(path, this.scene, { pluginOptions: { gltf: { skipMaterials: true } } });
+      this.glbContainers.set(path, container);
     }
-    return skeleton.joints.map((joint) => {
-      const triangle = skeleton.triangles[joint.triangle];
-      const first = vertices[triangle?.vertices[0] ?? 0] ?? Vector3.Zero();
-      const second = vertices[triangle?.vertices[1] ?? 0] ?? first.add(Vector3.Right());
-      const third = vertices[triangle?.vertices[2] ?? 0] ?? first.add(Vector3.Up());
-      const firstAxis = second.subtract(first).normalize();
-      const thirdAxis = Vector3.Cross(firstAxis, third.subtract(first)).normalize();
-      const secondAxis = Vector3.Cross(thirdAxis, firstAxis).normalize();
-      const jointVertices = joint.vertices.filter((index) => index >= 0).map((index) => vertices[index]).filter(Boolean);
-      const origin = jointVertices.length ? jointVertices.reduce((sum, vertex) => sum.addInPlace(vertex), Vector3.Zero())
-        .scaleInPlace(1 / jointVertices.length) : first.add(second).addInPlace(third).scaleInPlace(1 / 3);
-      return { origin, axes: [firstAxis, secondAxis, thirdAxis] };
-    });
+    return container;
   }
 
-  private ragdollSkeleton(path: string): Promise<RagdollSkeleton> {
-    let skeleton = this.ragdollSkeletons.get(path);
-    if (!skeleton) {
-      skeleton = this.fetchText(path).then(parseRagdoll);
-      this.ragdollSkeletons.set(path, skeleton);
-    }
-    return skeleton;
-  }
-
-  private async updateViewWeapon(instance: PlayerModelInstance, playerAsset: MapModelAsset, playerGeometry: ModelGeometry,
-                                 selectedGun: number): Promise<void> {
-    const assets = await (this.viewWeapons ??= fetch("/api/viewweapons", { cache: "no-store" }).then(async (response) => {
-      if (!response.ok) throw new Error(`View-weapon manifest request failed (${response.status}).`);
-      return response.json() as Promise<ViewWeaponAsset[]>;
-    }));
-    const asset = assets[selectedGun];
-    const attachmentBone = playerAsset.tags?.tag_weapon;
-    const attachment = playerGeometry.joints?.find((joint) => joint.name === attachmentBone);
-    if (!asset || asset.status !== "ready" || !asset.geometryPath || !attachment) {
+  private async updateGlbViewWeapon(instance: PlayerModelInstance, playerAsset: MapModelAsset, selectedGun: number): Promise<void> {
+    const glb = instance.glb;
+    if (!glb) return;
+    const attachmentName = playerAsset.tags?.tag_weapon;
+    glb.attachment = attachmentName ? findGlbTransform(glb, attachmentName) : undefined;
+    const asset = (await this.weaponAssets())[selectedGun];
+    if (!glb.attachment || !asset || asset.status !== "ready" || !asset.geometryPath) {
       this.disposeWeapon(instance);
       return;
     }
-    const geometry = await this.geometryFrame(asset, undefined, undefined, undefined, 0);
+    const attachment = glb.attachment;
+    const geometry = await this.staticWeaponGeometry(asset);
     if (instance.weaponKey !== asset.name || instance.weaponMeshes.length !== geometry.meshes.length) {
       this.disposeWeapon(instance);
       instance.weaponMeshes = geometry.meshes.map((source) => {
         const mesh = new Mesh(`${instance.root.name}-${asset.name}-${source.name}`, this.scene);
-        mesh.parent = instance.root;
+        mesh.parent = attachment;
         mesh.material = this.assetMaterial(`vwep:${asset.gun}`, asset, source.name);
         mesh.isPickable = false;
         return mesh;
       });
       instance.weaponKey = asset.name;
     }
-    const playerScale = playerAsset.scale ?? 0.25;
-    const playerTranslate = playerAsset.translate ?? [0, 0, 0];
-    geometry.meshes.forEach((source, index) => {
-      const local = translateAndScale(source.positions, asset.translate ?? [0, 0, 0], asset.scale ?? 0.25);
-      const positions = attachModelPositions(local, attachment, playerTranslate, playerScale);
-      const normals = source.normals ? attachModelNormals(source.normals, attachment) : undefined;
-      this.applyMesh(instance.weaponMeshes[index], source, positions, normals);
-    });
-    const muzzleBone = asset.tags?.tag_muzzle;
-    const muzzle = geometry.joints?.find((joint) => joint.name === muzzleBone);
-    instance.muzzle = muzzle ? attachModelPosition(translateAndScalePosition(muzzle.position, asset.translate ?? [0, 0, 0],
-      asset.scale ?? 0.25), attachment, playerTranslate, playerScale) : undefined;
+    const scale = (asset.scale ?? 0.25) / (playerAsset.scale ?? 0.25);
+    geometry.meshes.forEach((source, index) => this.applyMesh(instance.weaponMeshes[index], source,
+      translateAndScale(source.positions, asset.translate ?? [0, 0, 0], scale), source.normals));
+    const muzzle = geometry.joints?.find((joint) => joint.name === asset.tags?.tag_muzzle);
+    glb.muzzleLocal = muzzle ? new Vector3((muzzle.position[0] + (asset.translate?.[0] ?? 0)) * scale,
+      (muzzle.position[2] + (asset.translate?.[2] ?? 0)) * scale,
+      (muzzle.position[1] + (asset.translate?.[1] ?? 0)) * scale) : undefined;
   }
 
-  private async geometry(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
-                         animationBuffer: ArrayBuffer | undefined, position: ModelAnimationPosition,
-                         instance?: PlayerModelInstance): Promise<ModelGeometry> {
-    const current = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.frame);
-    if (position.interpolation <= 0 || position.nextFrame === position.frame) return current;
-    const next = await this.geometryFrame(asset, animationPath, animationSource, animationBuffer, position.nextFrame);
-    const geometry = this.profile(() => interpolateModelGeometry(current, next, position.interpolation, instance?.interpolatedGeometry));
-    if (instance) instance.interpolatedGeometry = geometry;
+  private staticWeaponGeometry(asset: MapModelAsset): Promise<ModelGeometry> {
+    let geometry = this.weaponGeometry.get(asset.geometryPath!);
+    if (!geometry) {
+      geometry = this.fetchText(asset.geometryPath!).then((source) => {
+        const result = skinMd5Model(prepareMd5Model(source));
+        ensureModelGeometryNormals(result);
+        return result;
+      });
+      this.weaponGeometry.set(asset.geometryPath!, geometry);
+    }
     return geometry;
   }
 
-  private async geometryParts(asset: MapModelAsset,
-                              parts: Array<{ spec: PlayerModelAnimation; roots: string[]; milliseconds: number; loop: boolean }>,
-                              instance: PlayerModelInstance): Promise<ModelGeometry> {
-    const positions: ModelAnimationPosition[] = [];
-    const sources: Array<string | ArrayBuffer> = [];
-    for (const part of parts) {
-      if (asset.format === "MD5") {
-        const source = await this.fetchText(part.spec.path);
-        const info = md5AnimationInfo(source);
-        sources.push(source);
-        positions.push(modelAnimationPosition(info.frameCount, part.spec.speed, part.milliseconds, part.loop, part.spec.startOffset,
-          part.spec.endOffset));
-      } else {
-        const source = await this.fetchBinary(part.spec.path);
-        const info = iqmAnimationInfo(source);
-        sources.push(source);
-        positions.push(modelAnimationPosition(info.frameCount, part.spec.speed, part.milliseconds, part.loop, part.spec.startOffset,
-          part.spec.endOffset));
-      }
-    }
-    const key = `${asset.geometryPath}:parts:${parts.map((part, index) => {
-      const position = positions[index];
-      return `${part.spec.path}:${position.frame}:${position.nextFrame}:${position.interpolation}:${part.roots.join(",")}`;
-    }).join("|")}`;
-    const cached = this.cachedGeometryFrame(key);
-    if (cached) return cached;
-    let current: ModelGeometry;
-    if (asset.format === "MD5") {
-      const modelSource = await this.fetchText(asset.geometryPath!);
-      let model = this.md5Models.get(asset.geometryPath!);
-      if (!model) {
-        model = this.profile(() => prepareMd5Model(modelSource));
-        this.md5Models.set(asset.geometryPath!, model);
-      }
-      const animations = parts.map((part, index) => {
-        let prepared = this.md5Animations.get(part.spec.path);
-        if (!prepared) {
-          prepared = this.profile(() => prepareMd5Animation(sources[index] as string));
-          this.md5Animations.set(part.spec.path, prepared);
-        }
-        return prepared;
-      });
-      current = this.profile(() => skinMd5ModelParts(model!, parts.map((part, index) => ({ animation: animations[index],
-        frame: positions[index].frame, nextFrame: positions[index].nextFrame, interpolation: positions[index].interpolation,
-        roots: part.roots }))));
-    } else if (asset.format === "IQM") {
-      const model = await this.fetchBinary(asset.geometryPath!);
-      current = this.profile(() => parseIqmParts(model, parts.map((part, index) => ({ buffer: sources[index] as ArrayBuffer,
-        frame: positions[index].frame, nextFrame: positions[index].nextFrame, interpolation: positions[index].interpolation,
-        roots: part.roots }))));
-    } else return this.geometry(asset, undefined, undefined, undefined, { frame: 0, nextFrame: 0, interpolation: 0 }, instance);
-    ensureModelGeometryNormals(current);
-    this.storeGeometryFrame(key, current);
-    return current;
-  }
-
-  private async geometryFrame(asset: MapModelAsset, animationPath: string | undefined, animationSource: string | undefined,
-                              animationBuffer: ArrayBuffer | undefined, frame: number): Promise<ModelGeometry> {
-    const generation = this.geometryGeneration;
-    const key = `${asset.geometryPath}:${animationPath ?? "bind"}:${frame}`;
-    const cached = this.cachedGeometryFrame(key);
-    if (cached) return cached;
-    let geometry: ModelGeometry;
-    if (asset.format === "MD5") {
-      const source = await this.fetchText(asset.geometryPath!);
-      const shared = this.cachedGeometryFrame(key);
-      if (shared) return shared;
-      let model = this.md5Models.get(asset.geometryPath!);
-      if (!model) {
-        model = this.profile(() => prepareMd5Model(source));
-        if (generation === this.geometryGeneration) this.md5Models.set(asset.geometryPath!, model);
-      }
-      let animation = animationPath ? this.md5Animations.get(animationPath) : undefined;
-      if (animationPath && animationSource && !animation) {
-        animation = this.profile(() => prepareMd5Animation(animationSource));
-        if (generation === this.geometryGeneration) this.md5Animations.set(animationPath, animation);
-      }
-      geometry = this.profile(() => skinMd5Model(model!, animation, frame));
-    } else if (asset.format === "IQM") {
-      const source = await this.fetchBinary(asset.geometryPath!);
-      const shared = this.cachedGeometryFrame(key);
-      if (shared) return shared;
-      geometry = this.profile(() => parseIqm(source, animationBuffer, frame));
-    }
-    else throw new Error(`Player model format ${asset.format ?? "unknown"} is not supported.`);
-    if (generation !== this.geometryGeneration) return geometry;
-    ensureModelGeometryNormals(geometry);
-    this.storeGeometryFrame(key, geometry);
-    return geometry;
-  }
-
-  private storeGeometryFrame(key: string, geometry: ModelGeometry): void {
-    this.geometryFrames.set(key, geometry);
-    while (this.geometryFrames.size > MAX_GEOMETRY_FRAME_CACHE) {
-      const oldest = this.geometryFrames.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      this.geometryFrames.delete(oldest);
-    }
-  }
-
-  private cachedGeometryFrame(key: string): ModelGeometry | undefined {
-    const cached = this.geometryFrames.get(key);
-    if (!cached) return undefined;
-    this.geometryFrames.delete(key);
-    this.geometryFrames.set(key, cached);
-    return cached;
-  }
-
-  private createMeshes(instance: PlayerModelInstance, definition: PlayerModelAsset, asset: MapModelAsset, geometry: ModelGeometry): void {
-    instance.meshes.forEach((mesh) => mesh.dispose());
-    instance.meshes = geometry.meshes.map((source) => {
-      const mesh = new Mesh(`${instance.root.name}-${definition.name}-${source.name}`, this.scene);
-      mesh.parent = instance.root;
-      mesh.material = this.assetMaterial(`player:${definition.index}`, asset, source.name);
-      mesh.isPickable = false;
-      return mesh;
-    });
-    this.updateMeshes(instance.meshes, geometry.meshes, asset);
-  }
-
-  private updateMeshes(meshes: Mesh[], sources: ModelGeometryMesh[], asset: MapModelAsset): void {
-    this.profile(() => {
-      sources.forEach((source, index) => {
-        const mesh = meshes[index];
-        const translate = asset.translate ?? [0, 0, 0];
-        const scale = asset.scale ?? 0.25;
-        const existing = this.meshVertexBuffers.get(mesh);
-        const created = !existing || existing.positions.length !== source.positions.length;
-        const buffers = created
-          ? { positions: new Float32Array(source.positions.length), normals: new Float32Array(source.positions.length), indices: source.indices }
-          : existing;
-        for (let offset = 0; offset < buffers.positions.length; offset += 3) {
-          buffers.positions[offset] = (source.positions[offset] + translate[0]) * scale;
-          buffers.positions[offset + 1] = (source.positions[offset + 1] + translate[2]) * scale;
-          buffers.positions[offset + 2] = (source.positions[offset + 2] + translate[1]) * scale;
-        }
-        if (source.normals?.length === buffers.normals.length) writePlayerNormals(buffers.normals, source.normals);
-        else VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
-        if (created) {
-          const data = new VertexData();
-          data.positions = buffers.positions;
-          data.indices = source.indices;
-          data.uvs = source.uvs;
-          data.normals = buffers.normals;
-          data.applyToMesh(mesh, true);
-          retainAnimatedBounds(mesh);
-          this.meshVertexBuffers.set(mesh, buffers);
-        } else {
-          mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, false);
-          mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
-        }
-      });
-    });
-  }
-
-  private applyMesh(mesh: Mesh, source: ModelGeometryMesh, positions: number[], normals?: number[]): void {
+  private applyMesh(mesh: Mesh, source: ModelGeometry["meshes"][number], positions: number[], normals?: number[]): void {
     let buffers = this.meshVertexBuffers.get(mesh);
     if (buffers && buffers.positions.length === positions.length) {
-      this.updateMeshVertices(mesh, positions, normals);
+      buffers.positions.set(positions);
+      if (normals?.length === buffers.normals.length) buffers.normals.set(normals);
+      else VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
+      mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, false);
+      mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
       return;
     }
     buffers = { positions: Float32Array.from(positions), normals: new Float32Array(positions.length), indices: source.indices };
@@ -754,18 +384,7 @@ export class PlayerRenderer {
     data.uvs = source.uvs;
     data.normals = buffers.normals;
     data.applyToMesh(mesh, true);
-    retainAnimatedBounds(mesh);
     this.meshVertexBuffers.set(mesh, buffers);
-  }
-
-  private updateMeshVertices(mesh: Mesh, positions: ArrayLike<number>, normals?: ArrayLike<number>, updateBounds = false): void {
-    const buffers = this.meshVertexBuffers.get(mesh);
-    if (!buffers || buffers.positions.length !== positions.length) return;
-    buffers.positions.set(positions);
-    if (normals?.length === buffers.normals.length) buffers.normals.set(normals);
-    else VertexData.ComputeNormals(buffers.positions, buffers.indices, buffers.normals);
-    mesh.updateVerticesData(VertexBuffer.PositionKind, buffers.positions, updateBounds);
-    mesh.updateVerticesData(VertexBuffer.NormalKind, buffers.normals, false);
   }
 
   private assetMaterial(prefix: string, asset: MapModelAsset, meshName: string): StandardMaterial {
@@ -789,6 +408,20 @@ export class PlayerRenderer {
     return material;
   }
 
+  private playerAssets(): Promise<PlayerModelAsset[]> {
+    return this.assets ??= fetch("/api/playermodels", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) throw new Error(`Could not load player model manifest (${response.status}).`);
+      return response.json() as Promise<PlayerModelAsset[]>;
+    });
+  }
+
+  private weaponAssets(): Promise<ViewWeaponAsset[]> {
+    return this.viewWeapons ??= fetch("/api/viewweapons", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) throw new Error(`View-weapon manifest request failed (${response.status}).`);
+      return response.json() as Promise<ViewWeaponAsset[]>;
+    });
+  }
+
   private fetchText(path: string): Promise<string> {
     let source = this.textSources.get(path);
     if (!source) {
@@ -801,42 +434,73 @@ export class PlayerRenderer {
     return source;
   }
 
-  private fetchBinary(path: string): Promise<ArrayBuffer> {
-    let source = this.binarySources.get(path);
-    if (!source) {
-      source = fetch(packageAssetUrl(path)!, { cache: "no-cache" }).then((response) => {
-        if (!response.ok) throw new Error(`Could not load ${path} (${response.status}).`);
-        return response.arrayBuffer();
-      });
-      this.binarySources.set(path, source);
-    }
-    return source;
-  }
-
   private disposeInstance(instance: PlayerModelInstance): void {
     instance.updateToken++;
     instance.pendingUpdate = undefined;
-    instance.meshes.forEach((mesh) => mesh.dispose());
     this.disposeWeapon(instance);
+    this.disposeGlb(instance);
     instance.root.dispose();
+  }
+
+  private disposeGlb(instance: PlayerModelInstance): void {
+    instance.glb?.activeGroups.forEach((group) => group.stop(true));
+    instance.glb?.entries.dispose();
+    instance.glb?.holder.dispose();
+    instance.glb = undefined;
+    instance.meshes = [];
   }
 
   private disposeWeapon(instance: PlayerModelInstance): void {
     instance.weaponMeshes.forEach((mesh) => mesh.dispose());
     instance.weaponMeshes = [];
     instance.weaponKey = "";
-    instance.muzzle = undefined;
   }
+}
 
-  private profile<T>(operation: () => T): T {
-    if (!this.performanceRecorder || !this.profilingEnabled?.()) return operation();
-    const startedAt = performance.now();
-    try {
-      return operation();
-    } finally {
-      this.performanceRecorder(performance.now() - startedAt);
+function animationClipName(path: string): string {
+  return path.replaceAll("\\", "/").split("/").pop()!.replace(/\.(?:md5anim|iqm)$/i, "").toLowerCase();
+}
+
+function glbAnimationFrame(groups: Map<string, AnimationGroup>, spec: PlayerModelAnimation, milliseconds: number, loop: boolean): number {
+  const group = groups.get(animationClipName(spec.path));
+  if (!group) return 0;
+  const frameCount = Math.max(1, Math.round(group.to - group.from + 1));
+  const position = modelAnimationPosition(frameCount, spec.speed, milliseconds, loop, spec.startOffset, spec.endOffset);
+  return group.from + position.frame + (position.nextFrame !== position.frame ? position.interpolation : 0);
+}
+
+function glbTargetNames(glb: GlbPlayerInstance, roots: readonly string[]): string[] {
+  if (!roots.length) return [];
+  const selected = new Set<string>();
+  const rootNames = new Set(roots.map((root) => root.toLowerCase()));
+  for (const group of glb.groups.values()) {
+    for (const targeted of group.targetedAnimations) {
+      let target = targeted.target as { name?: string; parent?: unknown } | undefined;
+      while (target) {
+        if (target.name && rootNames.has(target.name.toLowerCase())) {
+          const name = (targeted.target as { name?: string }).name;
+          if (name) selected.add(name);
+          break;
+        }
+        target = target.parent as typeof target;
+      }
     }
+    if (selected.size) break;
   }
+  return [...selected];
+}
+
+function findGlbTransform(glb: GlbPlayerInstance, name: string): TransformNode | undefined {
+  for (const root of glb.entries.rootNodes) {
+    if (root instanceof TransformNode && root.name === name) return root;
+    const match = root.getDescendants(false).find((node) => node instanceof TransformNode && node.name === name);
+    if (match instanceof TransformNode) return match;
+  }
+  return undefined;
+}
+
+function glbSourceName(name: string): string {
+  return name.replace(/\.\d+$/, "");
 }
 
 function translateAndScale(positions: number[], translate: [number, number, number], scale: number): number[] {
@@ -849,91 +513,8 @@ function translateAndScale(positions: number[], translate: [number, number, numb
   return result;
 }
 
-function writePlayerNormals(target: Float32Array, source: number[]): void {
-  for (let index = 0; index < target.length; index += 3) {
-    target[index] = -source[index];
-    target[index + 1] = -source[index + 2];
-    target[index + 2] = -source[index + 1];
-  }
-}
-
 function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-}
-
-export function ragdollVelocity(velocity: Vec3, yaw: number): Vec3 {
-  if (Math.hypot(velocity.x, velocity.y, velocity.z) >= 6) return { ...velocity };
-  const radians = yaw * Math.PI / 180;
-  return { x: velocity.x - Math.sin(radians) * 20, y: velocity.y + Math.cos(radians) * 20, z: Math.max(velocity.z, 8) };
-}
-
-function translateAndScalePosition(position: [number, number, number], translate: [number, number, number], scale: number): Vector3 {
-  return new Vector3((position[0] + translate[0]) * scale, (position[2] + translate[2]) * scale,
-    (position[1] + translate[1]) * scale);
-}
-
-function attachModelPositions(positions: number[], attachment: ModelJointPose, playerTranslate: [number, number, number],
-                              playerScale: number): number[] {
-  const result = new Array<number>(positions.length);
-  const [x, y, z, w] = attachment.orientation;
-  const translateX = (attachment.position[0] + playerTranslate[0]) * playerScale;
-  const translateY = (attachment.position[2] + playerTranslate[2]) * playerScale;
-  const translateZ = (attachment.position[1] + playerTranslate[1]) * playerScale;
-  for (let index = 0; index < positions.length; index += 3) {
-    const pointX = positions[index];
-    const pointY = positions[index + 2];
-    const pointZ = positions[index + 1];
-    const tx = 2 * (y * pointZ - z * pointY);
-    const ty = 2 * (z * pointX - x * pointZ);
-    const tz = 2 * (x * pointY - y * pointX);
-    result[index] = pointX + w * tx + y * tz - z * ty + translateX;
-    result[index + 1] = pointZ + w * tz + x * ty - y * tx + translateY;
-    result[index + 2] = pointY + w * ty + z * tx - x * tz + translateZ;
-  }
-  return result;
-}
-
-function attachModelNormals(normals: number[], attachment: ModelJointPose): number[] {
-  const result = new Array<number>(normals.length);
-  const [x, y, z, w] = attachment.orientation;
-  for (let index = 0; index < normals.length; index += 3) {
-    const pointX = normals[index];
-    const pointY = normals[index + 2];
-    const pointZ = normals[index + 1];
-    const tx = 2 * (y * pointZ - z * pointY);
-    const ty = 2 * (z * pointX - x * pointZ);
-    const tz = 2 * (x * pointY - y * pointX);
-    result[index] = pointX + w * tx + y * tz - z * ty;
-    result[index + 1] = pointZ + w * tz + x * ty - y * tx;
-    result[index + 2] = pointY + w * ty + z * tx - x * tz;
-  }
-  return result;
-}
-
-function attachModelPosition(position: Vector3, attachment: ModelJointPose, playerTranslate: [number, number, number],
-                             playerScale: number): Vector3 {
-  const point = rotateModelPosition(position, attachment.orientation);
-  return point.add(new Vector3((attachment.position[0] + playerTranslate[0]) * playerScale,
-    (attachment.position[2] + playerTranslate[2]) * playerScale, (attachment.position[1] + playerTranslate[1]) * playerScale));
-}
-
-function rotateModelPosition(position: Vector3, orientation: [number, number, number, number]): Vector3 {
-  const point: [number, number, number] = [position.x, position.z, position.y];
-  const [x, y, z, w] = orientation;
-  const tx = 2 * (y * point[2] - z * point[1]);
-  const ty = 2 * (z * point[0] - x * point[2]);
-  const tz = 2 * (x * point[1] - y * point[0]);
-  return new Vector3(point[0] + w * tx + y * tz - z * ty, point[2] + w * tz + x * ty - y * tx,
-    point[1] + w * ty + z * tx - x * tz);
-}
-
-function retainAnimatedBounds(mesh: Mesh): void {
-  const bounds = mesh.getBoundingInfo().boundingBox;
-  const maximumX = Math.max(Math.abs(bounds.minimum.x), Math.abs(bounds.maximum.x));
-  const maximumY = Math.max(Math.abs(bounds.minimum.y), Math.abs(bounds.maximum.y));
-  const maximumZ = Math.max(Math.abs(bounds.minimum.z), Math.abs(bounds.maximum.z));
-  const radius = Math.hypot(maximumX, maximumY, maximumZ) * ANIMATED_BOUND_SCALE;
-  mesh.buildBoundingInfo(new Vector3(-radius, -radius, -radius), new Vector3(radius, radius, radius));
 }
 
 export function thirdpersoncamera(position: Vec3, yaw: number, pitch: number, distance = 20, up = 0, side = 0): Vector3 {

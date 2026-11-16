@@ -122,12 +122,12 @@ export interface MapModelMeshSettings {
 export interface PlayerModelAsset {
   index: number;
   name: string;
+  glbPath?: string;
   ffa: MapModelAsset;
   blueTeam: MapModelAsset;
   redTeam: MapModelAsset;
   animations: Record<string, PlayerModelAnimation>;
   animationParts: PlayerModelAnimationPart[];
-  ragdollPath?: string;
 }
 
 export interface PlayerModelAnimationPart {

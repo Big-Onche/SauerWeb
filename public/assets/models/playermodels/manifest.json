@@ -1,0 +1,1281 @@
+{
+  "generator": "scripts/convert-player-models.py",
+  "models": {
+    "mrfixit": {
+      "glb": "mrfixit/mrfixit.glb",
+      "sourceMesh": "mrfixit.md5mesh",
+      "sourceMeshSha256": "602984e0272e287536decd47f06451e37639fe55db4fbc16177cd25bfc168705",
+      "clips": [
+        {
+          "name": "backward",
+          "source": "backward.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "5ea1ed2f82d9e2adaa59aa005e49ab4bf2026e32f05ec5ff27210755fc47282b"
+        },
+        {
+          "name": "chainsaw_attack",
+          "source": "chainsaw_attack.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "b8fdbc08590307740480b1ba1718274996507b96556501e2ceb5f9f78c255351"
+        },
+        {
+          "name": "chainsaw_idle",
+          "source": "chainsaw_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "f03e88c3886518b515d82acfe1953cb74bb306e31391a831d68959875a56d08b"
+        },
+        {
+          "name": "dead",
+          "source": "dead.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "cc546b9db098d17ec4a737806b47b0b80db64f8c002cbe25835a7f3bf0f7aca5"
+        },
+        {
+          "name": "dead2",
+          "source": "dead2.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "18a253bd89dc9d19cb51e3ac110707f0b0b7b71882db947346823425120fdc3b"
+        },
+        {
+          "name": "dying",
+          "source": "dying.md5anim",
+          "frames": 26,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "175fd34ceb0d2da24ee1415196e556d14aea925f4705f35b1509d2589185fa42"
+        },
+        {
+          "name": "dying2",
+          "source": "dying2.md5anim",
+          "frames": 29,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "4a18610380962526564cc7853631635ce8b21162670c1192205d015d09959cd6"
+        },
+        {
+          "name": "edit",
+          "source": "edit.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "f7e7739e062e29bbfabbf696c6c820f3f0808e1e08e195691b82058ff4383be9"
+        },
+        {
+          "name": "forward",
+          "source": "forward.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "05124da63b0aade050adff3d248e3260d67109794dc1bb5d0ebeb4a04cdd2538"
+        },
+        {
+          "name": "gl_idle",
+          "source": "gl_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "004ceca5815aeb9a181febd86c4ddbc4b44395f42c53c7a2ff4a486a0e059daa"
+        },
+        {
+          "name": "gl_shoot",
+          "source": "gl_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "f2c1883b02b9f0d85ee4da581d5271a09a9557dc5a4e77f2ca5aa08048d57d99"
+        },
+        {
+          "name": "idle",
+          "source": "idle.md5anim",
+          "frames": 101,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "8fe9bbffb4df0246f20abe40196ab6e0cd54762bab0a26ff8aa1f308efcd2a11"
+        },
+        {
+          "name": "jump",
+          "source": "jump.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "b9c4f93a63769cc89ee577ed36b06f0fb38077fad6a65d79d5789f797503f5f2"
+        },
+        {
+          "name": "lag",
+          "source": "lag.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "7af9f26afeee67abf8d729e890e8a8a5e3b44f8686de886d4d00ff69ff60d551"
+        },
+        {
+          "name": "left",
+          "source": "left.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "6af2bc979431d6679ddde3f1079bf441f14ab964203b4fd29e9e87d58610e744"
+        },
+        {
+          "name": "lose",
+          "source": "lose.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "46f5b41e78a4dd002616c76f7368e101ea82907e1474ecbb0889bae5ccfde044"
+        },
+        {
+          "name": "minigun_idle",
+          "source": "minigun_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "e65a67b555b1781c2df562aa6cd9ef5756536dce222e80c0c5bb19a163f0bf19"
+        },
+        {
+          "name": "minigun_shoot",
+          "source": "minigun_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "7a8e2086bee231607e42fa400ef6723570795414b852923d39a10289f7c5a775"
+        },
+        {
+          "name": "pain",
+          "source": "pain.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "dd0f6ea5b2543b262dfc799e16a96a72ee62d54024ed6810188effd56e278820"
+        },
+        {
+          "name": "pain2",
+          "source": "pain2.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "6a12bfb2a2bc92a7bbad44130fa7373eb76c528156a0ab49853be4838c1328a1"
+        },
+        {
+          "name": "punch",
+          "source": "punch.md5anim",
+          "frames": 26,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "763ebdfcf91e96d7555feccbf8e66f06280c85b7c7d4b7c20be662285e732db1"
+        },
+        {
+          "name": "right",
+          "source": "right.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "c057d8b33859da6eb73c1364bd084d8ba0ca0a540b26bbb57a6afd2536a9bf8b"
+        },
+        {
+          "name": "rl_idle",
+          "source": "rl_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "02a3393886133099fead2ab345974c3e612d5d48686b4f524957e4438813f839"
+        },
+        {
+          "name": "rl_shoot",
+          "source": "rl_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "d4b6618f996d13c6d94fdc16412e00d7a3c341d7725f65f8dfb1bdfe7377cd0d"
+        },
+        {
+          "name": "shoot",
+          "source": "shoot.md5anim",
+          "frames": 10,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "e08e10de0596a65d0a80bf7eeb1a579e685f088b1166f121bc39f91a4d5ec6e8"
+        },
+        {
+          "name": "shotgun_idle",
+          "source": "shotgun_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "c12de3de5f4517a5f44f963a365f99d8c82f4f2fb5b8e60dae488ec950e4ce10"
+        },
+        {
+          "name": "shotgun_shoot",
+          "source": "shotgun_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "50b56a629fbc947855ce9d6278b20d9cfb2055d44dd0ecdfe76d7559e0bc42a6"
+        },
+        {
+          "name": "sink",
+          "source": "sink.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "e9527d7c512f6dd7300d063f5d54b271c558f7bc7862546faa319b3f82cd04d0"
+        },
+        {
+          "name": "sniper_idle",
+          "source": "sniper_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "ceb185dcc2d7bd3af7ed25d6d77f3b16b8f2657e46951902804df24c2ba34ebc"
+        },
+        {
+          "name": "sniper_shoot",
+          "source": "sniper_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "99880295f60afa7c2bd753b5330842dd809d43847ab55fc5f2a79d0905874f14"
+        },
+        {
+          "name": "swim",
+          "source": "swim.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "69510b4dac4290c83c2bee181d08a1612e4abe3ae65e8fa97bc919a3577ba6ed"
+        },
+        {
+          "name": "taunt",
+          "source": "taunt.md5anim",
+          "frames": 40,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "84f7eb4898a4843221cc384ffd0df6e40c6061c54ed7b676d5217899c66444e5"
+        },
+        {
+          "name": "win",
+          "source": "win.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "1e26245d5c7b1bc2910e83f0a72ade047100cf932540805376402b6538a25874"
+        }
+      ],
+      "animations": 33,
+      "joints": 75,
+      "meshes": 2,
+      "materials": 0,
+      "bytes": 2806772
+    },
+    "snoutx10k": {
+      "glb": "snoutx10k/snoutx10k.glb",
+      "sourceMesh": "snoutx10k.md5mesh",
+      "sourceMeshSha256": "d4666c8044d822b11abcd50f206fa3c1177df1876a7ed8c2c217e4cd1a8861e6",
+      "clips": [
+        {
+          "name": "backward",
+          "source": "backward.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "5ea1ed2f82d9e2adaa59aa005e49ab4bf2026e32f05ec5ff27210755fc47282b"
+        },
+        {
+          "name": "chainsaw_attack",
+          "source": "chainsaw_attack.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "b8fdbc08590307740480b1ba1718274996507b96556501e2ceb5f9f78c255351"
+        },
+        {
+          "name": "chainsaw_idle",
+          "source": "chainsaw_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "f03e88c3886518b515d82acfe1953cb74bb306e31391a831d68959875a56d08b"
+        },
+        {
+          "name": "dead",
+          "source": "dead.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "cc546b9db098d17ec4a737806b47b0b80db64f8c002cbe25835a7f3bf0f7aca5"
+        },
+        {
+          "name": "dead2",
+          "source": "dead2.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "18a253bd89dc9d19cb51e3ac110707f0b0b7b71882db947346823425120fdc3b"
+        },
+        {
+          "name": "dying",
+          "source": "dying.md5anim",
+          "frames": 26,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "175fd34ceb0d2da24ee1415196e556d14aea925f4705f35b1509d2589185fa42"
+        },
+        {
+          "name": "dying2",
+          "source": "dying2.md5anim",
+          "frames": 29,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "4a18610380962526564cc7853631635ce8b21162670c1192205d015d09959cd6"
+        },
+        {
+          "name": "edit",
+          "source": "edit.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "f7e7739e062e29bbfabbf696c6c820f3f0808e1e08e195691b82058ff4383be9"
+        },
+        {
+          "name": "forward",
+          "source": "forward.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "05124da63b0aade050adff3d248e3260d67109794dc1bb5d0ebeb4a04cdd2538"
+        },
+        {
+          "name": "gl_idle",
+          "source": "gl_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "004ceca5815aeb9a181febd86c4ddbc4b44395f42c53c7a2ff4a486a0e059daa"
+        },
+        {
+          "name": "gl_shoot",
+          "source": "gl_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "f2c1883b02b9f0d85ee4da581d5271a09a9557dc5a4e77f2ca5aa08048d57d99"
+        },
+        {
+          "name": "idle",
+          "source": "idle.md5anim",
+          "frames": 101,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "8fe9bbffb4df0246f20abe40196ab6e0cd54762bab0a26ff8aa1f308efcd2a11"
+        },
+        {
+          "name": "jump",
+          "source": "jump.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "b9c4f93a63769cc89ee577ed36b06f0fb38077fad6a65d79d5789f797503f5f2"
+        },
+        {
+          "name": "lag",
+          "source": "lag.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "7af9f26afeee67abf8d729e890e8a8a5e3b44f8686de886d4d00ff69ff60d551"
+        },
+        {
+          "name": "left",
+          "source": "left.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "6af2bc979431d6679ddde3f1079bf441f14ab964203b4fd29e9e87d58610e744"
+        },
+        {
+          "name": "lose",
+          "source": "lose.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "46f5b41e78a4dd002616c76f7368e101ea82907e1474ecbb0889bae5ccfde044"
+        },
+        {
+          "name": "minigun_idle",
+          "source": "minigun_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "e65a67b555b1781c2df562aa6cd9ef5756536dce222e80c0c5bb19a163f0bf19"
+        },
+        {
+          "name": "minigun_shoot",
+          "source": "minigun_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "7a8e2086bee231607e42fa400ef6723570795414b852923d39a10289f7c5a775"
+        },
+        {
+          "name": "pain",
+          "source": "pain.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "dd0f6ea5b2543b262dfc799e16a96a72ee62d54024ed6810188effd56e278820"
+        },
+        {
+          "name": "pain2",
+          "source": "pain2.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "6a12bfb2a2bc92a7bbad44130fa7373eb76c528156a0ab49853be4838c1328a1"
+        },
+        {
+          "name": "punch",
+          "source": "punch.md5anim",
+          "frames": 26,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "763ebdfcf91e96d7555feccbf8e66f06280c85b7c7d4b7c20be662285e732db1"
+        },
+        {
+          "name": "right",
+          "source": "right.md5anim",
+          "frames": 78,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "c057d8b33859da6eb73c1364bd084d8ba0ca0a540b26bbb57a6afd2536a9bf8b"
+        },
+        {
+          "name": "rl_idle",
+          "source": "rl_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "02a3393886133099fead2ab345974c3e612d5d48686b4f524957e4438813f839"
+        },
+        {
+          "name": "rl_shoot",
+          "source": "rl_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "d4b6618f996d13c6d94fdc16412e00d7a3c341d7725f65f8dfb1bdfe7377cd0d"
+        },
+        {
+          "name": "shoot",
+          "source": "shoot.md5anim",
+          "frames": 10,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "e08e10de0596a65d0a80bf7eeb1a579e685f088b1166f121bc39f91a4d5ec6e8"
+        },
+        {
+          "name": "shotgun_idle",
+          "source": "shotgun_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "c12de3de5f4517a5f44f963a365f99d8c82f4f2fb5b8e60dae488ec950e4ce10"
+        },
+        {
+          "name": "shotgun_shoot",
+          "source": "shotgun_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "50b56a629fbc947855ce9d6278b20d9cfb2055d44dd0ecdfe76d7559e0bc42a6"
+        },
+        {
+          "name": "sink",
+          "source": "sink.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "e9527d7c512f6dd7300d063f5d54b271c558f7bc7862546faa319b3f82cd04d0"
+        },
+        {
+          "name": "sniper_idle",
+          "source": "sniper_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "ceb185dcc2d7bd3af7ed25d6d77f3b16b8f2657e46951902804df24c2ba34ebc"
+        },
+        {
+          "name": "sniper_shoot",
+          "source": "sniper_shoot.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "99880295f60afa7c2bd753b5330842dd809d43847ab55fc5f2a79d0905874f14"
+        },
+        {
+          "name": "swim",
+          "source": "swim.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "69510b4dac4290c83c2bee181d08a1612e4abe3ae65e8fa97bc919a3577ba6ed"
+        },
+        {
+          "name": "taunt",
+          "source": "taunt.md5anim",
+          "frames": 40,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "84f7eb4898a4843221cc384ffd0df6e40c6061c54ed7b676d5217899c66444e5"
+        },
+        {
+          "name": "win",
+          "source": "win.md5anim",
+          "frames": 20,
+          "fps": 24,
+          "joints": 75,
+          "sha256": "1e26245d5c7b1bc2910e83f0a72ade047100cf932540805376402b6538a25874"
+        }
+      ],
+      "animations": 33,
+      "joints": 75,
+      "meshes": 2,
+      "materials": 0,
+      "bytes": 2986040
+    },
+    "inky": {
+      "glb": "inky/inky.glb",
+      "sourceMesh": "inky.md5mesh",
+      "sourceMeshSha256": "3ad703996e6cbfa99db177ec3e478eb6bd5c289d9a592ca5b3681d1506f637e0",
+      "clips": [
+        {
+          "name": "i_backward",
+          "source": "i_backward.md5anim",
+          "frames": 79,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "f4f6e9f4e9e3dfa14581de64a95af9c32b891c8abf52a69e1388b5ce38fbb716"
+        },
+        {
+          "name": "i_chainsaw",
+          "source": "i_chainsaw.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "75d13b6bdc891f7576eb09575a14d28ec28f344fac874b9c29c8e858827f751e"
+        },
+        {
+          "name": "i_chainsaw_attack",
+          "source": "i_chainsaw_attack.md5anim",
+          "frames": 7,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "80f25b002b3d9aa9bbf25699b93231d782bbefadfa011b7e78f9ad082d54da6e"
+        },
+        {
+          "name": "i_dead",
+          "source": "i_dead.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "fbf20d0c993a44b80ce47f82e68ae554757c7edc3c3aebb7ec096ca507ced20f"
+        },
+        {
+          "name": "i_dying",
+          "source": "i_dying.md5anim",
+          "frames": 51,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "e5683121c005c26529bc02769e3d3912f7e067e282627cc1ddb5611bc4f08092"
+        },
+        {
+          "name": "i_edit",
+          "source": "i_edit.md5anim",
+          "frames": 29,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "9eadb86b8f674ed2f37bde5f96d5582236638ae543bbb2c7cfd76236406babd1"
+        },
+        {
+          "name": "i_forward",
+          "source": "i_forward.md5anim",
+          "frames": 79,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "6ec054929d502ea24959942ef0589b85a6147cca6ee636528e03a1a5e2550d82"
+        },
+        {
+          "name": "i_gl",
+          "source": "i_gl.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "56827e60f343d1fe0ea8d66c7eddeec1c46282d5359ca972f2337b58336504dc"
+        },
+        {
+          "name": "i_gl_attack",
+          "source": "i_gl_attack.md5anim",
+          "frames": 7,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "fcff31580679ca7d009670631ed7b6ff6dc63acef5c4a26bb3f5aa17dcb12bab"
+        },
+        {
+          "name": "i_idle",
+          "source": "i_idle.md5anim",
+          "frames": 79,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "d0ecaa51cc9981c1177550113a6b31b28e425d19ee762cb1739ed38d466d06b3"
+        },
+        {
+          "name": "i_jump",
+          "source": "i_jump.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "05a6c232314d3f230f1d445a56792bb96068f9e2c20c129ad1afb0552edba3a5"
+        },
+        {
+          "name": "i_lag",
+          "source": "i_lag.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "619e37fd52d242b42122d2231a2ca62f8e326ade5d86a72fb76d201caacd7f8f"
+        },
+        {
+          "name": "i_left",
+          "source": "i_left.md5anim",
+          "frames": 79,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "6324ba3438792827a718591c4abc8c195395949f18e9691f3f325d8c8434acd5"
+        },
+        {
+          "name": "i_lose",
+          "source": "i_lose.md5anim",
+          "frames": 159,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "86ff9c0c390d87592ae00e6c61af432c51420b734f827e531c667f050b7e32ee"
+        },
+        {
+          "name": "i_minigun",
+          "source": "i_minigun.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "ad2dc3b1786534fda92023f4ca0c931190ad8804edcb83bc76bd4f49c0e48951"
+        },
+        {
+          "name": "i_minigun_attack",
+          "source": "i_minigun_attack.md5anim",
+          "frames": 5,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "df7231b275befa16ec9b8397016d17ae39d4cc0334bb7f84848b1662a89603a7"
+        },
+        {
+          "name": "i_pain",
+          "source": "i_pain.md5anim",
+          "frames": 21,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "79610180327f611d0520b823017b7771a2d2765e00b42ce6e453d504ed1e3dba"
+        },
+        {
+          "name": "i_pain_attack",
+          "source": "i_pain_attack.md5anim",
+          "frames": 21,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "fed4a436765e8d191189e66260e850c48f24e9427482df658816bb02c90c8378"
+        },
+        {
+          "name": "i_pistol",
+          "source": "i_pistol.md5anim",
+          "frames": 7,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "78314fd94fb3ce7369a6fbfeb17d96337ecddd724cf5539f755c59de216015ab"
+        },
+        {
+          "name": "i_pistol_attack",
+          "source": "i_pistol_attack.md5anim",
+          "frames": 7,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "8d45c6424eddf59cf867eed9c934f7c65bec8b6930f81219e8cea2d954169309"
+        },
+        {
+          "name": "i_rifle",
+          "source": "i_rifle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "6f1fe6c00baedbabd219b0ba88f051515fc3ad4069a1c90285a232edb2806c40"
+        },
+        {
+          "name": "i_rifle_attack",
+          "source": "i_rifle_attack.md5anim",
+          "frames": 9,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "ad2fe47c0054deb11e7e78fdb8a956a16f2d50dda0240034bf5807a3d1195c94"
+        },
+        {
+          "name": "i_right",
+          "source": "i_right.md5anim",
+          "frames": 79,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "c1f30b2e6702a02d71a4bd50b8c339f9ad52be8f004d16d23a481ed0dcebed4b"
+        },
+        {
+          "name": "i_rl",
+          "source": "i_rl.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "1afd24c071712cf35965532e4fb805c711c50b3bac6bc6fb8b9512a27e3a4d28"
+        },
+        {
+          "name": "i_rl_attack",
+          "source": "i_rl_attack.md5anim",
+          "frames": 7,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "885646d1176c159a403071b030d30a2208ebd54993887cb22be7559d8e9fce5b"
+        },
+        {
+          "name": "i_shotgun",
+          "source": "i_shotgun.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "9d3b4380d316a8565a0b7d27b9ef7498ec8d8b129bf6933cb6e3c5dd63d44704"
+        },
+        {
+          "name": "i_shotgun_attack",
+          "source": "i_shotgun_attack.md5anim",
+          "frames": 11,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "5ece2c6bddca63a0ccec3198714a075bb7b858a84f6e98f6938f2c49ddd256dc"
+        },
+        {
+          "name": "i_sink",
+          "source": "i_sink.md5anim",
+          "frames": 28,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "8e54a4662590bc44d9eeaa9853dea212387528150d44202510ad179feedb14d2"
+        },
+        {
+          "name": "i_swim",
+          "source": "i_swim.md5anim",
+          "frames": 37,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "c53a89504764e6cc1ed36acb6749dbf369596344948b65aed9840afcdab2c01a"
+        },
+        {
+          "name": "i_taunt",
+          "source": "i_taunt.md5anim",
+          "frames": 42,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "938f9271f7a6da782da10908f63e208e58153fabb08f27c290b9487a5db7a0e4"
+        },
+        {
+          "name": "i_win",
+          "source": "i_win.md5anim",
+          "frames": 155,
+          "fps": 24,
+          "joints": 99,
+          "sha256": "b2bb20a0f649be8dc6daa0c0b7727a1c6aed868ea0ef8c856401d6852c1c2f75"
+        }
+      ],
+      "animations": 31,
+      "joints": 99,
+      "meshes": 3,
+      "materials": 0,
+      "bytes": 3941460
+    },
+    "captaincannon": {
+      "glb": "captaincannon/captaincannon.glb",
+      "sourceMesh": "captaincannon.md5mesh",
+      "sourceMeshSha256": "dfe38f89a0ab33c5d87d320d77499fb49b8e6be7b8a6f3717f15d3212783f492",
+      "clips": [
+        {
+          "name": "cc_backward",
+          "source": "cc_backward.md5anim",
+          "frames": 59,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "a374a7dbad20d566d64b7fc410a5a5fc9671a520669a002b1dd3ae0002aa03f7"
+        },
+        {
+          "name": "cc_chainsaw_attack",
+          "source": "cc_chainsaw_attack.md5anim",
+          "frames": 6,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "5548909fc79bed1b82a7b90a24f6b1ddd00a363e998b3ab2f4256bf4eb5c8b6e"
+        },
+        {
+          "name": "cc_chainsaw_idle",
+          "source": "cc_chainsaw_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "5fd0fc2ff5ae8f5178db4dc971dae06e3a5bd5d61c34b8e24000b24ef5f31824"
+        },
+        {
+          "name": "cc_dead",
+          "source": "cc_dead.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "2ef834b28ae84a9210297140d5b551f7bc5efecd0ab5a935a117644ed37a5a9f"
+        },
+        {
+          "name": "cc_dying",
+          "source": "cc_dying.md5anim",
+          "frames": 39,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "a5abaed2b319a853abd8359e23515bd8c919431bb2b483ac98f45348ee8de9e5"
+        },
+        {
+          "name": "cc_edit",
+          "source": "cc_edit.md5anim",
+          "frames": 59,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "fedd0d55a1149d41ea66f04c321ac4eb5872c534a2bcc3b6db32b24f8d50c8e4"
+        },
+        {
+          "name": "cc_forward",
+          "source": "cc_forward.md5anim",
+          "frames": 59,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "967ab97749d8cd82d0676ba2bdc8851d7aafc2239b76487df273c76f473665b1"
+        },
+        {
+          "name": "cc_gl_idle",
+          "source": "cc_gl_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "68b75a3f78654d3592fa4e35c405065949221ac311ca3fb53e9ad51d50e0700d"
+        },
+        {
+          "name": "cc_gl_shoot",
+          "source": "cc_gl_shoot.md5anim",
+          "frames": 6,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "b1081d203de77660682de48406e8e36ac212769108fd5dce9ce011056b278b90"
+        },
+        {
+          "name": "cc_idle",
+          "source": "cc_idle.md5anim",
+          "frames": 59,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "9cd33c054270688a5224232850c727ca9d6d30c713cca84a1b49de86539a2c1a"
+        },
+        {
+          "name": "cc_jump",
+          "source": "cc_jump.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "266a1e58ef1f234117d61311eab3a6ad89069054410f17cacd86140a9569b8ea"
+        },
+        {
+          "name": "cc_lag",
+          "source": "cc_lag.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "b1fd36ae952747c5000942fe96d0f7751be21e620c02c991b9b9d55894302f6c"
+        },
+        {
+          "name": "cc_left",
+          "source": "cc_left.md5anim",
+          "frames": 59,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "86fd4000c73d0cc476df12a01c1473c709a9dddfa6a0754ca288e793d0f7a1a1"
+        },
+        {
+          "name": "cc_lose",
+          "source": "cc_lose.md5anim",
+          "frames": 29,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "fd76978cb1fcb1b09340f138252caa3b25ead8b81df883a7f505a38f3509287c"
+        },
+        {
+          "name": "cc_minigun_idle",
+          "source": "cc_minigun_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "30924df1310733e38fa026415b318976219ff178a742ebb9c60ec6e1940612fb"
+        },
+        {
+          "name": "cc_minigun_shoot",
+          "source": "cc_minigun_shoot.md5anim",
+          "frames": 7,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "c82fd66bee238cfe6fdd330d7a85c8a77b26f2c576d0ef70e5dd260a445c6799"
+        },
+        {
+          "name": "cc_pain",
+          "source": "cc_pain.md5anim",
+          "frames": 19,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "99b0e30e77f4ce9bf02ab3e834e154aba548e6b431b7d06dd8c2ad8eefeb55e4"
+        },
+        {
+          "name": "cc_pistol_shoot",
+          "source": "cc_pistol_shoot.md5anim",
+          "frames": 19,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "ca5c0b20fc5be69297797b9d9c82e3b8492bad7f38298d37f9c8e463b361e3c7"
+        },
+        {
+          "name": "cc_right",
+          "source": "cc_right.md5anim",
+          "frames": 59,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "9c64964278ed0759b0d37ff8df4e2351d0c4c09ba49a8dc0aaabbf07e959dae5"
+        },
+        {
+          "name": "cc_rl_idle",
+          "source": "cc_rl_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "007f49a785f6bb5d764e895c0dc5d7e0be0de47526da62972e372f1a92b48eca"
+        },
+        {
+          "name": "cc_rl_shoot",
+          "source": "cc_rl_shoot.md5anim",
+          "frames": 7,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "1e19dfc210e85b2477d37bec7ca5bb076a58268e01af4c01083c9bbe1d6cfa94"
+        },
+        {
+          "name": "cc_shotgun_idle",
+          "source": "cc_shotgun_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "8baba7d6be11f5107fd609d27f54ee26bb7dec8ff4d1db7d3024b0765faa9127"
+        },
+        {
+          "name": "cc_shotgun_shoot",
+          "source": "cc_shotgun_shoot.md5anim",
+          "frames": 10,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "ec60b0edc6bebdc05234e1a76f8a35c554f01035377bce674817957f0b21561b"
+        },
+        {
+          "name": "cc_sink",
+          "source": "cc_sink.md5anim",
+          "frames": 39,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "3759255fbc1396c33ff9cf3e259c588d5a35afc6963141b96ea1598983e84c78"
+        },
+        {
+          "name": "cc_sniper_idle",
+          "source": "cc_sniper_idle.md5anim",
+          "frames": 1,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "fbd5497cb23e134c278726fae3330669ce36e53ac00fbdad35c8ad5d0646f6e6"
+        },
+        {
+          "name": "cc_sniper_shoot",
+          "source": "cc_sniper_shoot.md5anim",
+          "frames": 12,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "9cb9e7afd88adf84cef7b33953bea7c2e067822dc2d2b1df83839bd63ca1f8b7"
+        },
+        {
+          "name": "cc_swim",
+          "source": "cc_swim.md5anim",
+          "frames": 39,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "12ad8357b784e38a7310c34ab700d9d4de4bbf18fc504cd1dc39c029decb56f0"
+        },
+        {
+          "name": "cc_taunt",
+          "source": "cc_taunt.md5anim",
+          "frames": 45,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "07e2a4966a2078c3a3996125d18da7a0ec1fde49ca13278625375b28688328a9"
+        },
+        {
+          "name": "cc_win",
+          "source": "cc_win.md5anim",
+          "frames": 49,
+          "fps": 24,
+          "joints": 55,
+          "sha256": "9736a793f83d836f214d4f55e8d05a934e47ee73fdd273c4a59cc24c4e9dc16b"
+        }
+      ],
+      "animations": 29,
+      "joints": 55,
+      "meshes": 2,
+      "materials": 0,
+      "bytes": 2354776
+    },
+    "ogro2": {
+      "glb": "ogro2/ogro2.glb",
+      "sourceMesh": "ogro.iqm",
+      "sourceMeshSha256": "b84ede1564a65a4155fdd4256c5ec064dddfeb0bb11714a7ce8c12602f01e7de",
+      "clips": [
+        {
+          "name": "attack",
+          "source": "attack.iqm",
+          "frames": 8,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "40cf9c443b0c855636a220cf03638f7fb030181b6ea55ee7180ecb3cbe63292d"
+        },
+        {
+          "name": "backwards",
+          "source": "backwards.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "e8f55b5726f6214c6bd8ed5227311b19a7f4a0837a1f3b50cff9a886fe0dec2d"
+        },
+        {
+          "name": "bumflop",
+          "source": "bumflop.iqm",
+          "frames": 17,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "6e47dc7c8988ebac6ae2cfff3599768df9f1271fe09bbfa53bf182ee328f8334"
+        },
+        {
+          "name": "chain_shoot",
+          "source": "chain_shoot.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "6aed15a77ad825cb57163e9c31e0b6f8939900f9c4dadd6381238fb9fc108903"
+        },
+        {
+          "name": "deatha",
+          "source": "deatha.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "1882f78007b3de78bd75aa89198f1bdd96aa116fb709728a4d7d98dbc1dcdeee"
+        },
+        {
+          "name": "deathb",
+          "source": "deathb.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "d26b85feefd3efeb8e72da58b7f4fd0c7f29097940b8e30728bc1ee37d34fe79"
+        },
+        {
+          "name": "deathc",
+          "source": "deathc.iqm",
+          "frames": 8,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "e198b3608eb32364bd433104ad2fabafea85eb9d4fe34dcd1f773fcc45e719b1"
+        },
+        {
+          "name": "edit",
+          "source": "edit.iqm",
+          "frames": 2,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "4c570126243e2fa66308d5e0222d982e399cd296aee6d40e33249d2d234fad3b"
+        },
+        {
+          "name": "flip",
+          "source": "flip.iqm",
+          "frames": 12,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "8dcb36a5b2f29b07aefa6df73d5fa3778cc008d1959d122b173f202a903d2f1d"
+        },
+        {
+          "name": "gl_shoot",
+          "source": "gl_shoot.iqm",
+          "frames": 5,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "bcfad1b1857050d4087337e2378a49465fed3aa157093a0adb500e9071092991"
+        },
+        {
+          "name": "idle",
+          "source": "idle.iqm",
+          "frames": 40,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "1656a45157206033dc03100ef1b6aadc4e90252edc99bcd6e22bb78ef6b200fa"
+        },
+        {
+          "name": "jump",
+          "source": "jump.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "680bae2bc8743f10b0e3f73a8c1ea542ffd4b2524d159144d9ebc95645683998"
+        },
+        {
+          "name": "left",
+          "source": "left.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "5e755455dcb4d439fbf5bbd70fd3895a876750cac9bcaa92936708686c097476"
+        },
+        {
+          "name": "mg_shoot",
+          "source": "mg_shoot.iqm",
+          "frames": 3,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "6a714ec3813f82e087fe5333e2fde9afbc8f283c83920de773e3db23857f634d"
+        },
+        {
+          "name": "paina",
+          "source": "paina.iqm",
+          "frames": 4,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "7e30709d031c8aaf11e7fd588b2318d27fd537e7f5bbdd7eba15b501e341622f"
+        },
+        {
+          "name": "painb",
+          "source": "painb.iqm",
+          "frames": 4,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "e76e47e68f90ef1c8a92940dad965e5a48dcb1301962a6f2dd96ebc45aece28a"
+        },
+        {
+          "name": "painc",
+          "source": "painc.iqm",
+          "frames": 5,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "18fdd0feaedfdee83c4c86016cbff380f57329d116f49ba564b8a18d28ff76e3"
+        },
+        {
+          "name": "right",
+          "source": "right.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "b5a7e8176edfb307832fd11df0636a27263a319169d1fb55917f86b5a7540496"
+        },
+        {
+          "name": "rl_shoot",
+          "source": "rl_shoot.iqm",
+          "frames": 4,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "bfee932d828c49388c0da84f94a807d9706e9829425a8d0f03f5aa04b825857b"
+        },
+        {
+          "name": "run",
+          "source": "run.iqm",
+          "frames": 6,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "987d90ed36312a4e46e480bc37bf96fdc13c954da23fa2dc0ec3b5d05d3e8cb0"
+        },
+        {
+          "name": "salute_alt",
+          "source": "salute_alt.iqm",
+          "frames": 11,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "07e9e174e77f879063773545df5f87e598359e249a8b2653ddd6146277c0d8f7"
+        },
+        {
+          "name": "shotgun_shoot",
+          "source": "shotgun_shoot.iqm",
+          "frames": 4,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "5df1b7079f599cc3bcc5c531db6eb3644c352d20e3099f48c464a841e720c455"
+        },
+        {
+          "name": "sink",
+          "source": "sink.iqm",
+          "frames": 3,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "948ef2afc7fe97811c920ebab67165da907c50557f1fe710bfd12d308c89a164"
+        },
+        {
+          "name": "sniper_shoot",
+          "source": "sniper_shoot.iqm",
+          "frames": 3,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "def7f7b037c3d62d48d6a3cad0833739fa2961696f7566aeee789f5e9c466edb"
+        },
+        {
+          "name": "swim",
+          "source": "swim.iqm",
+          "frames": 5,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "e9f0be48b2f7ee5867608ed91e09435306571d9e542cd94e4bb00b58525e6fbf"
+        },
+        {
+          "name": "wave_alt",
+          "source": "wave_alt.iqm",
+          "frames": 11,
+          "fps": 10,
+          "joints": 29,
+          "sha256": "ab474ed235b7ea16523880bc80bc0df941a9a050bae355ccd749ea1299bf50a2"
+        }
+      ],
+      "animations": 26,
+      "joints": 29,
+      "meshes": 1,
+      "materials": 0,
+      "bytes": 584184
+    }
+  }
+}

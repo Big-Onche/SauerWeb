@@ -8,10 +8,12 @@
     "relay": "node relay/relay.mjs",
     "build:enet": "powershell -ExecutionPolicy Bypass -File scripts/build-enet-wasm.ps1",
     "build": "tsc -b && vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "validate:player-glbs": "node scripts/validate-player-glbs.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^8.38.0",
+    "@babylonjs/loaders": "^8.56.2",
     "ws": "^8.18.3"
   },
   "devDependencies": {
