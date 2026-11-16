@@ -184,6 +184,10 @@ def export_model(model: str, rig: bpy.types.Object, output_root: Path) -> Path:
     for obj in bpy.context.scene.objects:
         if obj.type == "MESH" and obj.find_armature() == rig:
             obj.select_set(True)
+    # Babylon converts glTF seconds to its 60 FPS animation timeline. Export at the same rate so each source action frame remains exactly one
+    # Babylon frame; Sauerbraten's cfg speed can then advance the original frames without a 24/60 slowdown.
+    bpy.context.scene.render.fps = 60
+    bpy.context.scene.render.fps_base = 1.0
     result = bpy.ops.export_scene.gltf(
         filepath=str(output_path),
         export_format="GLB",

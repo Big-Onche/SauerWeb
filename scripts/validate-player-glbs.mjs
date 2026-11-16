@@ -31,6 +31,14 @@ for (const [name, model] of Object.entries(manifest.models)) {
   const clips = new Set(container.animationGroups.map((group) => group.name));
   const missing = model.clips.map((clip) => clip.name).filter((clip) => !clips.has(clip));
   if (missing.length) throw new Error(`${name}: missing Babylon animation groups: ${missing.join(", ")}`);
+  const groups = new Map(container.animationGroups.map((group) => [group.name, group]));
+  for (const clip of model.clips) {
+    const group = groups.get(clip.name);
+    const expectedSpan = Math.max(0, clip.frames - 1);
+    if (group && Math.abs((group.to - group.from) - expectedSpan) > 0.01) {
+      throw new Error(`${name}/${clip.name}: Babylon span ${group.to - group.from} does not preserve ${clip.frames} source frames`);
+    }
+  }
   if (!container.skeletons.length || container.meshes.every((mesh) => !mesh.skeleton)) {
     throw new Error(`${name}: Babylon did not create a GPU-skinned mesh and skeleton`);
   }
