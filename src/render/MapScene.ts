@@ -209,6 +209,8 @@ export class MapScene {
   private readonly activeWaterReflections = new Set<WaterReflectionPlane>();
   private readonly waterReflectionCandidates: WaterReflectionPlane[] = [];
   private selectedWaterReflection?: WaterReflectionPlane;
+  private readonly waterRenderTargetHiddenMeshes: Mesh[] = [];
+  private waterRenderTargetPassDepth = 0;
   private mapCaustics?: MapCausticResources;
   private waterParameters: MapWaterMaterial[] = [];
   private mapFog?: MapFog;
@@ -510,10 +512,8 @@ export class MapScene {
         mapModelIssues: loadedMapModels.issues,
       };
     }
-    if (this.runtimeMode === "game" && loadedMapModels.issues.length) {
-      loadedMapModels.resources.dispose();
-      throw new Error(`Required map assets failed to load: ${loadedMapModels.issues[0]}`);
-    }
+    // Mapmodels are decorative map content. Native maps commonly reference models from optional content packs, so a missing model must
+    // leave a visible gap rather than aborting the session after the world and physics have already been installed.
     if (this.mapCaustics) {
       const materials = new Set<StandardMaterial>();
       loadedMapModels.meshes.forEach((mesh) => {
@@ -1215,6 +1215,7 @@ export class MapScene {
     let reflection!: WaterReflectionPlane;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
     texture.onBeforeRenderObservable.add(() => {
+      this.beginWaterRenderTargetPass();
       this.mapCaustics?.pushCausticBlend(0);
       const fog = this.mapFog;
       if (!fog) return;
@@ -1240,6 +1241,7 @@ export class MapScene {
         this.scene.clearColor.copyFrom(previousFog.clearColor);
         previousFog = undefined;
       }
+      this.endWaterRenderTargetPass();
       // MirrorTexture's own observer has restored the main view at this point. Capture that exact frame's matrix after the reflected image
       // is complete, matching Sauerbraten's saved watermatrix and avoiding a one-frame mismatch with camera input processed by Scene.render.
       reflection.projectiveMatrix.copyFrom(this.scene.getTransformMatrix());
@@ -1404,6 +1406,7 @@ export class MapScene {
     refraction.ignoreCameraViewport = true;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
     refraction.onBeforeRenderObservable.add(() => {
+      this.beginWaterRenderTargetPass();
       this.mapCaustics?.pushCausticBlend(1);
       const fog = this.mapFog;
       if (!fog) return;
@@ -1419,14 +1422,16 @@ export class MapScene {
     refraction.onAfterRenderObservable.add(() => {
       this.engine.disableScissor();
       this.mapCaustics?.popCausticBlend();
-      if (!previousFog) return;
-      this.scene.fogEnabled = previousFog.enabled;
-      this.scene.fogMode = previousFog.mode;
-      this.scene.fogStart = previousFog.start;
-      this.scene.fogEnd = previousFog.end;
-      this.scene.fogColor.copyFrom(previousFog.color);
-      this.scene.clearColor.copyFrom(previousFog.clearColor);
-      previousFog = undefined;
+      if (previousFog) {
+        this.scene.fogEnabled = previousFog.enabled;
+        this.scene.fogMode = previousFog.mode;
+        this.scene.fogStart = previousFog.start;
+        this.scene.fogEnd = previousFog.end;
+        this.scene.fogColor.copyFrom(previousFog.color);
+        this.scene.clearColor.copyFrom(previousFog.clearColor);
+        previousFog = undefined;
+      }
+      this.endWaterRenderTargetPass();
     });
     refraction.onClearObservable.add(() => {
       const scissor = this.waterRefractionScissor;
@@ -1457,6 +1462,22 @@ export class MapScene {
 
   private configureWaterRefractionDepthTexture(refraction: RenderTargetTexture): void {
     refraction.createDepthStencilTexture(0, false, false, 1, Constants.TEXTUREFORMAT_DEPTH32_FLOAT, "water-refraction-depth");
+  }
+
+  private beginWaterRenderTargetPass(): void {
+    if (this.waterRenderTargetPassDepth++ > 0) return;
+    this.waterRenderTargetHiddenMeshes.length = 0;
+    for (const mesh of this.volumeMeshes) {
+      if (mesh.metadata?.materialKind !== "water" || !mesh.isEnabled()) continue;
+      mesh.setEnabled(false);
+      this.waterRenderTargetHiddenMeshes.push(mesh);
+    }
+  }
+
+  private endWaterRenderTargetPass(): void {
+    if (this.waterRenderTargetPassDepth <= 0 || --this.waterRenderTargetPassDepth > 0) return;
+    for (const mesh of this.waterRenderTargetHiddenMeshes) mesh.setEnabled(true);
+    this.waterRenderTargetHiddenMeshes.length = 0;
   }
 
   private createRepeatingWaterTexture(path: string): Texture {

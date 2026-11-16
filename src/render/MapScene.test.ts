@@ -1,6 +1,7 @@
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
 import type { RegisteredMapEntity, SauerMap } from "../engine/octa";
@@ -88,6 +89,26 @@ describe("network spawn groups", () => {
     const spawn = Reflect.apply(Reflect.get(mapScene, "chooseNetworkSpawn"), mapScene, [{ team: "" }]);
 
     expect(spawn).toBeUndefined();
+  });
+});
+
+describe("water render targets", () => {
+  it("hides water meshes while their reflection and refraction textures are bound", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const water = new Mesh("water", scene), world = new Mesh("world", scene);
+    water.metadata = { materialKind: "water" };
+    const mapScene = Object.create(MapScene.prototype) as MapScene;
+    Object.assign(mapScene, { volumeMeshes: [water, world], waterRenderTargetHiddenMeshes: [], waterRenderTargetPassDepth: 0 });
+
+    Reflect.apply(Reflect.get(mapScene, "beginWaterRenderTargetPass"), mapScene, []);
+    expect(water.isEnabled()).toBe(false);
+    expect(world.isEnabled()).toBe(true);
+
+    Reflect.apply(Reflect.get(mapScene, "endWaterRenderTargetPass"), mapScene, []);
+    expect(water.isEnabled()).toBe(true);
+    expect(world.isEnabled()).toBe(true);
+    engine.dispose();
   });
 });
 
