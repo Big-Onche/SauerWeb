@@ -289,25 +289,33 @@ export class PlayerRenderer {
 
   private applyGlbAnimations(glb: GlbPlayerInstance,
                              parts: Array<{ spec: PlayerModelAnimation; roots: string[]; milliseconds: number; loop: boolean }>): void {
-    const upperNames = parts.slice(1).flatMap((part) => glbTargetNames(glb, part.roots));
+    const partTargetNames = parts.map((part) => glbTargetNames(glb, part.roots));
+    const upperNames = [...new Set(partTargetNames.slice(1).flat())];
     const selected = parts.map((part) => glb.groups.get(animationClipName(part.spec.path)))
       .filter((group): group is AnimationGroup => Boolean(group));
     if (selected.length !== parts.length) throw new Error(`GLB ${glb.modelName} is missing a requested animation group.`);
+    const overlayTargetNames = new Map<AnimationGroup, Set<string>>();
+    selected.slice(1).forEach((group, index) => {
+      const names = overlayTargetNames.get(group) ?? new Set<string>();
+      partTargetNames[index + 1].forEach((name) => names.add(name));
+      overlayTargetNames.set(group, names);
+    });
     const activeKey = parts.map((part, index) => `${animationClipName(part.spec.path)}:${index}:${part.roots.join(",")}`).join("|");
     if (activeKey !== glb.activeKey) {
       glb.activeGroups.forEach((group) => group.stop(true));
       glb.activeGroups = selected;
       glb.activeKey = activeKey;
       selected.forEach((group, index) => {
-        group.mask = upperNames.length
-          ? new AnimationGroupMask(upperNames, index === 0 ? AnimationGroupMaskMode.Exclude : AnimationGroupMaskMode.Include) : null;
+        const names = index === 0 ? upperNames : [...(overlayTargetNames.get(group) ?? [])];
+        group.mask = names.length
+          ? new AnimationGroupMask(names, index === 0 ? AnimationGroupMaskMode.Exclude : AnimationGroupMaskMode.Include) : null;
         group.start(parts[index].loop, 0);
         group.pause();
       });
     }
     glb.activeGroups.forEach((group, index) => {
       const part = parts[index];
-      if (part) group.goToFrame(glbAnimationFrame(glb.groups, part.spec, part.milliseconds, part.loop));
+      if (part) goToMaskedAnimationFrame(group, glbAnimationFrame(glb.groups, part.spec, part.milliseconds, part.loop));
     });
   }
 
@@ -485,9 +493,14 @@ function glbTargetNames(glb: GlbPlayerInstance, roots: readonly string[]): strin
         target = target.parent as typeof target;
       }
     }
-    if (selected.size) break;
   }
   return [...selected];
+}
+
+export function goToMaskedAnimationFrame(group: AnimationGroup, frame: number): void {
+  for (const animatable of group.animatables) {
+    if (!group.mask || group.mask.disabled || group.mask.retainsTarget(animatable.target.name)) animatable.goToFrame(frame);
+  }
 }
 
 function findGlbTransform(glb: GlbPlayerInstance, name: string): TransformNode | undefined {
