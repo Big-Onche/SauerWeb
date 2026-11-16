@@ -1,6 +1,7 @@
 import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
+import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTexture } from "../assets/types";
@@ -96,7 +97,27 @@ describe("MaterialCache", () => {
     expect(standard).toBeInstanceOf(StandardMaterial);
     if (!(standard instanceof StandardMaterial)) throw new Error("Expected a standard world material.");
     expect(standard.diffuseTexture?.gammaSpace).toBe(false);
-    expect(bump.getActiveTextures().find((texture) => texture.url === "/bump.png")?.gammaSpace).toBe(false);
+    expect(bump.getActiveTextures().find((active) => active instanceof Texture && active.url === "/bump.png")?.gammaSpace).toBe(false);
+
+    cache.dispose();
+    engine.dispose();
+  });
+
+  it("preserves Sauerbraten's uploaded row orientation for every world texture channel", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const texture = resolvedTexture("bumpspecmapparallaxglowworld");
+    texture.diffuseUrl = "/diffuse.png";
+    texture.normalUrl = "/normal.png";
+    texture.glowUrl = "/glow.png";
+    texture.specularUrl = "/specular.png";
+    texture.alphaUrl = "/alpha.png";
+    const cache = new MaterialCache(scene);
+    const material = cache.get(describeSauerMaterial(texture, 0, 0));
+    const worldTextures = material.getActiveTextures().filter((active): active is Texture => active instanceof Texture && Boolean(active.url));
+
+    expect(worldTextures).toHaveLength(5);
+    expect(worldTextures.every((active) => active.invertY === false)).toBe(true);
 
     cache.dispose();
     engine.dispose();

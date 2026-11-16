@@ -249,7 +249,9 @@ export class MaterialCache {
     const key = `${url}|${scroll[0]},${scroll[1]}|${hasAlpha ? 1 : 0}|${linear ? 1 : 0}`;
     const cached = this.textures.get(key);
     if (cached) return cached;
-    const texture = new Texture(url, this.scene, false, true, Texture.TRILINEAR_SAMPLINGMODE, () => {
+    // Sauerbraten uploads SDL_image rows directly to OpenGL. Babylon's usual invertY conversion would mirror the texture-space V axis;
+    // after a swapped vslot rotation that same mismatch appears as a horizontal world-space flip.
+    const texture = new Texture(url, this.scene, false, false, Texture.TRILINEAR_SAMPLINGMODE, () => {
       const size = texture.getBaseSize();
       texture.uScale = size.width > 0 ? 1 / size.width : 1;
       texture.vScale = size.height > 0 ? 1 / size.height : 1;
