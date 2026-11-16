@@ -685,6 +685,8 @@ function renderServerList(): void {
 
 function launchServer(server: ServerListItem): void {
   const query = new URLSearchParams({ map: server.map ?? "", server: server.host, port: String(server.port) });
+  const mode = server.attributes?.[1];
+  if (Number.isInteger(mode)) query.set("mode", String(mode));
   launchGame(`/game?${query}`);
 }
 
