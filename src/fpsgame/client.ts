@@ -149,6 +149,7 @@ export class MultiplayerClient extends EventTarget {
   private relayAuthPrivilegeObserved = false;
   private relayAuthUnspectate?: AuthUnspectateState;
   private relayAuthMessageCount = 0;
+  private suicided = -1;
 
   constructor(readonly physics: PhysicsSimulation, readonly weapons: WeaponSystem,
               teamkillProtection = browserTeamkillProtection(), chatModeration = new ChatModeration()) {
@@ -166,6 +167,7 @@ export class MultiplayerClient extends EventTarget {
     });
     this.transport.addEventListener("enet", (event) => this.handleEnet((event as CustomEvent<EnetEvent>).detail));
     this.weapons.events.on((event) => this.handleWeaponEvent(event));
+    this.physics.suicideRequest = () => this.requestLocalSuicide();
   }
 
   async connect(endpoint: ServerEndpoint): Promise<void> {
@@ -228,6 +230,7 @@ export class MultiplayerClient extends EventTarget {
     this.clientNumber = -1;
     this.players.clear();
     this.pendingClientPing = undefined;
+    this.suicided = -1;
     this.respawnRequested = false;
     this.lastSpawnAttempt = Number.NEGATIVE_INFINITY;
     this.mapInfoPending = Boolean(this.loadedMapName);
@@ -587,6 +590,23 @@ export class MultiplayerClient extends EventTarget {
   requestOwnedBotSuicide(clientNumber: number): void {
     if (!this.connected) return;
     this.transport.send(1, new PacketWriter().putInt(NetworkMessage.FromAi).putInt(clientNumber).putInt(NetworkMessage.Suicide).finish(), true);
+  }
+
+  // Original: src/fpsgame/fps.cpp
+  // Function: suicide(physent *d)
+  // Sauerbraten reference: SVN r6488
+  private requestLocalSuicide(): void {
+    if (this.physics.player.clientState !== ClientState.Alive) return;
+    if (this.localGame) {
+      this.localDied(this.clientNumber, this.clientNumber);
+      return;
+    }
+    if (!this.connected || this.clientNumber < 0) return;
+    const lifeSequence = this.players.get(this.clientNumber)?.lifeSequence ?? 0;
+    const sequence = (lifeSequence << 16) | (Math.trunc(performance.now() / 1000) & 0xFFFF);
+    if (this.suicided === sequence) return;
+    this.transport.send(1, new PacketWriter().putInt(NetworkMessage.Suicide).finish(), true);
+    this.suicided = sequence;
   }
 
   // Original: src/fpsgame/fps.cpp
@@ -2116,6 +2136,7 @@ export class MultiplayerClient extends EventTarget {
     player.alive = true;
     player.positionReady = true;
     player.lifeSequence++;
+    this.suicided = -1;
     player.tokens = 0;
     this.physics.player.clientState = ClientState.Alive;
     this.physics.player.alive = true;

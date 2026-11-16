@@ -34,6 +34,19 @@ describe("materials and mapmodel physics", () => {
     expect(simulation.player.clientState).toBe(ClientState.Dead);
   });
 
+  it("treats lava as intrinsically lethal and delegates the local-player suicide to the game layer", () => {
+    const simulation = new PhysicsSimulation(), suicides: string[] = [];
+    simulation.setMap(mapWith(cube({ x: 0, y: 0, z: 0 }, 64, "empty", MAT_LAVA)));
+    simulation.suicideRequest = (player) => suicides.push(player.id);
+    simulation.spawn({ x: 8, y: 8, z: 20 }, 0, 0);
+
+    simulation.update(5, createInputState());
+
+    expect(simulation.player.inWater).toBe(MAT_LAVA);
+    expect(simulation.player.clientState).toBe(ClientState.Alive);
+    expect(suicides).toEqual(["player"]);
+  });
+
   it("filters noclip, clip, and gameclip like the native entity rules", () => {
     const direction = { x: 1, y: 0, z: 0 };
     const probe = (material: number, type = PhysicsEntityType.Player) => {

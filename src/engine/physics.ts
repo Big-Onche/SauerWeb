@@ -2,7 +2,7 @@ import type { SauerMap, Vec3 } from "./octa";
 import { FLOOR_Z, GRAVITY, JUMP_VELOCITY, SLOPE_Z } from "./physics/constants";
 import { OctreeCollisionWorld } from "./physics/collision";
 import type { DynamicEntityCollision, MapModelCollision, MaterialLookup, RaycastResult } from "./physics/collision";
-import { MAT_DEATH, MATF_VOLUME, MAT_LAVA, MAT_WATER } from "./material";
+import { isDeadlyMaterial, MATF_VOLUME, MAT_LAVA, MAT_WATER } from "./material";
 import { GroundMover } from "./physics/ground";
 import type { PhysicsInputState } from "./physics/input";
 import { movementAxis } from "./physics/input";
@@ -37,6 +37,7 @@ export class PhysicsSimulation {
   raycastPerformanceRecorder?: (milliseconds: number) => void;
   raycastPerformanceEnabled?: () => boolean;
   soundEvent?: (event: PhysicsSoundEvent, player: PhysicsEntity) => void;
+  suicideRequest?: (player: PhysicsEntity) => void;
 
   setMap(map: SauerMap): void {
     this.collisionWorld = new OctreeCollisionWorld(map);
@@ -237,9 +238,12 @@ export class PhysicsSimulation {
     if (previousPhysicsState === PhysicsState.Fall && player.physicsState >= PhysicsState.Slope && previousTimeInAir > 50) {
       this.soundEvent?.("land", player);
     }
-    if (player.clientState === ClientState.Alive && (player.position.z < 0 || (material & MAT_DEATH) !== 0)) {
-      player.clientState = ClientState.Dead;
-      player.move = player.strafe = 0;
+    if (player.clientState === ClientState.Alive && (player.position.z < 0 || isDeadlyMaterial(material))) {
+      if (player === this.player && this.suicideRequest) this.suicideRequest(player);
+      else {
+        player.clientState = ClientState.Dead;
+        player.move = player.strafe = 0;
+      }
     }
   }
 }

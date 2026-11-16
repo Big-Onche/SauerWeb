@@ -101,6 +101,37 @@ describe("Sauerbraten rifle protocol", () => {
     expect(packet.remaining).toBe(0);
   });
 
+  it("routes a deadly-material suicide through the local death path", () => {
+    const client = createClient();
+    client.multiplayer.startLocalGame("player");
+
+    client.physics.suicideRequest?.(client.physics.player);
+
+    expect(client.physics.player.alive).toBe(false);
+    expect(client.physics.player.clientState).toBe(ClientState.Dead);
+    expect(client.multiplayer.players.get(0)?.state).toBe(ClientState.Dead);
+    expect(client.multiplayer.players.get(0)?.deaths).toBe(1);
+  });
+
+  it("sends one reliable N_SUICIDE when multiplayer physics enters a deadly material", () => {
+    const client = createClient();
+    client.multiplayer.connected = true;
+    client.multiplayer.clientNumber = 4;
+    const send = vi.spyOn(client.multiplayer.transport, "send").mockImplementation(() => undefined);
+    const now = vi.spyOn(performance, "now").mockReturnValue(2500);
+
+    client.physics.suicideRequest?.(client.physics.player);
+    client.physics.suicideRequest?.(client.physics.player);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toBe(1);
+    expect(send.mock.calls[0][2]).toBe(true);
+    const packet = new PacketReader(send.mock.calls[0][1]);
+    expect(packet.getInt()).toBe(NetworkMessage.Suicide);
+    expect(packet.remaining).toBe(0);
+    now.mockRestore();
+  });
+
   it("measures N_PONG at the browser and reports the vanilla-smoothed RTT with N_CLIENTPING", () => {
     const client = createClient(), multiplayer = client.multiplayer;
     multiplayer.connected = true;

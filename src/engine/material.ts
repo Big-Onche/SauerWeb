@@ -39,6 +39,11 @@ export function materialClipType(material: number): MaterialClipType {
   return "none";
 }
 
+/** Lava receives MAT_DEATH when authored by the native editor, but remains intrinsically deadly if that redundant flag is absent. */
+export function isDeadlyMaterial(material: number): boolean {
+  return (material & MAT_DEATH) !== 0 || (material & MATF_VOLUME) === MAT_LAVA;
+}
+
 function visitMaterialLeaves(cube: OctreeCube, volumes: MaterialVolume[]): void {
   if (cube.children) {
     cube.children.forEach((child) => visitMaterialLeaves(child, volumes));
