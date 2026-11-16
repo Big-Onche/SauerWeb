@@ -135,7 +135,7 @@ export class MaterialCache {
     }
 
     if (descriptor.diffuseUrl) {
-      material.diffuseTexture = this.getTexture(descriptor.diffuseUrl, descriptor.scroll, descriptor.surfaceMode !== "opaque");
+      material.diffuseTexture = this.getTexture(descriptor.diffuseUrl, descriptor.scroll, descriptor.surfaceMode !== "opaque", true);
     }
     if (descriptor.normalUrl) {
       const bump = this.getTexture(descriptor.normalUrl, descriptor.scroll);
@@ -198,7 +198,7 @@ export class MaterialCache {
     if (descriptor.useLightmapAlpha) material.disableDepthWrite = true;
 
     const diffuse = descriptor.diffuseUrl
-      ? this.getTexture(descriptor.diffuseUrl, descriptor.scroll, descriptor.surfaceMode !== "opaque")
+      ? this.getTexture(descriptor.diffuseUrl, descriptor.scroll, descriptor.surfaceMode !== "opaque", true)
       : undefined;
     const normal = descriptor.normalUrl ? this.getTexture(descriptor.normalUrl, descriptor.scroll, false, true) : undefined;
     const specular = descriptor.specularUrl ? this.getTexture(descriptor.specularUrl, descriptor.scroll, false, true) : undefined;

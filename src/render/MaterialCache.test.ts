@@ -81,6 +81,27 @@ describe("MaterialCache", () => {
     engine.dispose();
   });
 
+  it("samples world diffuse textures without sRGB decoding like Sauerbraten", () => {
+    const engine = new NullEngine();
+    const scene = new Scene(engine);
+    const standardTexture = resolvedTexture();
+    standardTexture.diffuseUrl = "/standard.png";
+    const bumpTexture = resolvedTexture("bumpworld");
+    bumpTexture.diffuseUrl = "/bump.png";
+    bumpTexture.normalUrl = "/normal.png";
+    const cache = new MaterialCache(scene);
+    const standard = cache.get(describeSauerMaterial(standardTexture, 0, 0));
+    const bump = cache.get(describeSauerMaterial(bumpTexture, 0, 0));
+
+    expect(standard).toBeInstanceOf(StandardMaterial);
+    if (!(standard instanceof StandardMaterial)) throw new Error("Expected a standard world material.");
+    expect(standard.diffuseTexture?.gammaSpace).toBe(false);
+    expect(bump.getActiveTextures().find((texture) => texture.url === "/bump.png")?.gammaSpace).toBe(false);
+
+    cache.dispose();
+    engine.dispose();
+  });
+
   it("culls the backfaces of standard and bump-mapped world geometry", () => {
     const engine = new NullEngine();
     const scene = new Scene(engine);
