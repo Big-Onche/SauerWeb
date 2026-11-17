@@ -33,7 +33,7 @@ import type { MapFogOverrides, MapLightingOverrides, MapModelAsset, MapSkyOverri
 import { packageAssetUrl } from "../assets/TextureResolver";
 import { generateGeometry, type GeometryBatch } from "../engine/renderva";
 import { buildWaterLodIndices, generateMaterialGeometry, type MaterialGeometryBatch, type MaterialRenderKind } from "./materialGeometry";
-import { describeSauerMaterial, MaterialCache } from "./MaterialCache";
+import { describeSauerMaterial, MaterialCache, sauerMaterialKey } from "./MaterialCache";
 import { toBabylonDirection, toBabylonPosition, toBabylonYawDirection } from "./coordinates";
 import { resolveMapLighting } from "./MapLighting";
 import { animateEntityModels, loadMapModels, type EntityModelAnimation, type MapModelResources } from "./MapModelLoader";
@@ -78,7 +78,7 @@ import { DevToolsProfiler } from "../platform/browser/DevToolsProfiler";
 import { TouchControls } from "../platform/browser/TouchControls";
 import { KillFeed } from "../platform/browser/KillFeed";
 import { MinimapHUD, minimapRadiusFromGeometry } from "../platform/browser/MinimapHUD";
-import { RenderStatsOverlay } from "../platform/browser/RenderStatsOverlay";
+import { RenderStatsOverlay, type RenderPassSample } from "../platform/browser/RenderStatsOverlay";
 import { expandProjectedBounds, mergeProjectedBounds, projectWorldBounds, projectedBoundsIntersect, projectedBoundsToScissor,
   type PixelScissor, type ProjectedBounds } from "./ReflectionBounds";
 
@@ -123,6 +123,20 @@ interface WaterReflectionPlane {
   scissor?: PixelScissor;
   initialized: boolean;
   distanceSquared: number;
+}
+
+interface RenderPassAccumulator extends RenderPassSample {
+  drawCalls: number;
+  triangles: number;
+  vertices: number;
+  cpuTime: number;
+  drawCpuTime: number;
+  meshes: number;
+  startedAt: number;
+  drawStartedAt: number;
+  drawCallsStartedAt: number;
+  indicesStartedAt: number;
+  verticesStartedAt: number;
 }
 
 export class MapScene {
@@ -179,6 +193,12 @@ export class MapScene {
   private readonly killFeed: KillFeed;
   private readonly minimapHUD: MinimapHUD;
   private readonly renderStatsOverlay: RenderStatsOverlay;
+  private readonly mainPass = createRenderPassAccumulator("Main");
+  private readonly reflectionPass = createRenderPassAccumulator("Reflection");
+  private readonly refractionPass = createRenderPassAccumulator("Refraction");
+  private readonly renderPasses = [this.mainPass, this.reflectionPass, this.refractionPass];
+  private activeRenderPass?: RenderPassAccumulator;
+  private frameDrawCallsStartedAt = 0;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
   private readonly collectRenderer: CollectRenderer;
@@ -300,6 +320,14 @@ export class MapScene {
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.renderStatsOverlay = new RenderStatsOverlay(viewport, this.engine, this.scene,
       () => ({ engine: this.engineInstrumentation, scene: this.sceneInstrumentation }), this.setRenderStatsEnabled);
+    this.scene.onBeforeDrawPhaseObservable.add(() => {
+      if (this.renderStatsOverlay.detailed) this.mainPass.drawStartedAt = performance.now();
+    });
+    this.scene.onAfterDrawPhaseObservable.add(() => {
+      if (this.renderStatsOverlay.detailed && this.mainPass.drawStartedAt) {
+        this.mainPass.drawCpuTime += performance.now() - this.mainPass.drawStartedAt;
+      }
+    });
     this.touchControls = new TouchControls(viewport, this.physicsInput, this.weaponInput);
     this.initializeRendererProfiling();
     this.physics.raycastPerformanceRecorder = (milliseconds) => this.profiler.recordRaycast(milliseconds);
@@ -401,6 +429,7 @@ export class MapScene {
         }
         const measureSceneRender = this.profiler.enabled || this.renderStatsOverlay.visible;
         const sceneRenderStartedAt = measureSceneRender ? performance.now() : 0;
+        if (this.renderStatsOverlay.detailed) this.beginRenderPassFrame();
         try {
           this.scene.render();
         } finally {
@@ -408,8 +437,9 @@ export class MapScene {
         }
         if (this.renderStatsOverlay.visible) {
           const sceneRenderFinishedAt = performance.now();
+          if (this.renderStatsOverlay.detailed) this.finishRenderPassFrame(sceneRenderFinishedAt - sceneRenderStartedAt);
           this.renderStatsOverlay.sample(this.engine.getDeltaTime(), sceneRenderStartedAt - frameStartedAt,
-            sceneRenderFinishedAt - sceneRenderStartedAt);
+            sceneRenderFinishedAt - sceneRenderStartedAt, this.renderPasses);
         }
         if (this.profiler.shouldSampleFrame()) this.sampleRendererDiagnostics();
       } finally {
@@ -477,7 +507,11 @@ export class MapScene {
     await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
     progress?.(0.08, "loading octree...");
     const { batches, materialBatches } = this.profiler.measure("mapGeometry", () => ({
-      batches: generateGeometry(map, textures),
+      batches: generateGeometry(map, textures, this.engine.getCaps().uintIndices ? (textureIndex, cubeMaterial, lightmapId, useLightmapAlpha) => {
+        const texture = textures[textureIndex];
+        return texture ? sauerMaterialKey(describeSauerMaterial(texture, cubeMaterial, lightmapId, useLightmapAlpha))
+          : `fallback:${cubeMaterial}:${lightmapId}:${useLightmapAlpha ? 1 : 0}`;
+      } : undefined),
       materialBatches: generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug"),
     }));
     this.minimapHUD.setMinimapRadius(minimapRadiusFromGeometry(batches, map.header.worldSize));
@@ -505,7 +539,6 @@ export class MapScene {
       // sphere against a water surface is unstable and may put a texture-blend layer on the wrong side of the water pass.
       if (batch.useLightmapAlpha) mesh.alphaIndex = 0;
       mesh.freezeWorldMatrix();
-      mesh.alwaysSelectAsActiveMesh = true;
       faces += batch.faceCount;
       triangles += batch.indices.length / 3;
       vertices += batch.positions.length / 3;
@@ -1301,6 +1334,7 @@ export class MapScene {
     let reflection!: WaterReflectionPlane;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
     texture.onBeforeRenderObservable.add(() => {
+      this.beginRenderPass(this.reflectionPass);
       this.beginWaterRenderTargetPass();
       this.mapCaustics?.pushCausticBlend(0);
       const fog = this.mapFog;
@@ -1331,6 +1365,7 @@ export class MapScene {
       // MirrorTexture's own observer has restored the main view at this point. Capture that exact frame's matrix after the reflected image
       // is complete, matching Sauerbraten's saved watermatrix and avoiding a one-frame mismatch with camera input processed by Scene.render.
       reflection.projectiveMatrix.copyFrom(this.scene.getTransformMatrix());
+      this.finishRenderPass(this.reflectionPass);
     });
     reflection = {
       height, texture, meshes: new Set(), surfaces: [], projectiveMatrix: Matrix.Identity(), renderMeshes: [],
@@ -1359,9 +1394,11 @@ export class MapScene {
         const projected = projectWorldBounds(box.minimumWorld, box.maximumWorld, transform, reflection.projectionScratch);
         if (projected && projectedBoundsIntersect(projected, reflection.projectedBounds)) reflection.renderMeshes.push(mesh);
       }
+      if (this.renderStatsOverlay.detailed) this.reflectionPass.meshes += reflection.renderMeshes.length;
       return reflection.renderMeshes;
     };
     this.waterReflections.set(height, reflection);
+    this.installRenderTargetDrawTiming(texture);
     return reflection;
   }
 
@@ -1492,6 +1529,7 @@ export class MapScene {
     refraction.ignoreCameraViewport = true;
     let previousFog: { enabled: boolean; mode: number; start: number; end: number; color: Color3; clearColor: Color4 } | undefined;
     refraction.onBeforeRenderObservable.add(() => {
+      this.beginRenderPass(this.refractionPass);
       this.beginWaterRenderTargetPass();
       this.mapCaustics?.pushCausticBlend(1);
       const fog = this.mapFog;
@@ -1518,6 +1556,7 @@ export class MapScene {
         previousFog = undefined;
       }
       this.endWaterRenderTargetPass();
+      this.finishRenderPass(this.refractionPass);
     });
     refraction.onClearObservable.add(() => {
       const scissor = this.waterRefractionScissor;
@@ -1541,9 +1580,60 @@ export class MapScene {
           this.waterRefractionRenderMeshes.push(mesh);
         }
       }
+      if (this.renderStatsOverlay.detailed) this.refractionPass.meshes += this.waterRefractionRenderMeshes.length;
       return this.waterRefractionRenderMeshes;
     };
     this.waterRefractionTexture = refraction;
+    this.installRenderTargetDrawTiming(refraction);
+  }
+
+  private beginRenderPassFrame(): void {
+    for (const pass of this.renderPasses) resetRenderPass(pass);
+    this.frameDrawCallsStartedAt = this.engine._drawCalls.current;
+  }
+
+  private finishRenderPassFrame(cpuTime: number): void {
+    const targets = this.reflectionPass.drawCalls + this.refractionPass.drawCalls;
+    const targetTriangles = this.reflectionPass.triangles + this.refractionPass.triangles;
+    const targetVertices = this.reflectionPass.vertices + this.refractionPass.vertices;
+    this.mainPass.drawCalls = Math.max(0, this.engine._drawCalls.current - this.frameDrawCallsStartedAt - targets);
+    this.mainPass.triangles = Math.max(0, Math.floor(this.scene.getActiveIndices() / 3) - targetTriangles);
+    this.mainPass.vertices = Math.max(0, this.scene.getTotalVertices() - targetVertices);
+    this.mainPass.cpuTime = Math.max(0, cpuTime - this.reflectionPass.cpuTime - this.refractionPass.cpuTime);
+    this.mainPass.meshes = this.scene.getActiveMeshes().length;
+  }
+
+  private beginRenderPass(pass: RenderPassAccumulator): void {
+    if (!this.renderStatsOverlay.detailed) return;
+    this.activeRenderPass = pass;
+    pass.startedAt = performance.now();
+    pass.drawCallsStartedAt = this.engine._drawCalls.current;
+    pass.indicesStartedAt = this.scene.getActiveIndices();
+    pass.verticesStartedAt = this.scene.getTotalVertices();
+  }
+
+  private finishRenderPass(pass: RenderPassAccumulator): void {
+    if (!this.renderStatsOverlay.detailed || this.activeRenderPass !== pass) return;
+    pass.cpuTime += performance.now() - pass.startedAt;
+    pass.drawCalls += this.engine._drawCalls.current - pass.drawCallsStartedAt;
+    pass.triangles += Math.floor((this.scene.getActiveIndices() - pass.indicesStartedAt) / 3);
+    pass.vertices += this.scene.getTotalVertices() - pass.verticesStartedAt;
+    this.activeRenderPass = undefined;
+  }
+
+  private installRenderTargetDrawTiming(texture: RenderTargetTexture): void {
+    const renderer = (texture as unknown as { _objectRenderer: {
+      onBeforeRenderingManagerRenderObservable: { add(callback: () => void): unknown };
+      onAfterRenderingManagerRenderObservable: { add(callback: () => void): unknown };
+    } })._objectRenderer;
+    renderer.onBeforeRenderingManagerRenderObservable.add(() => {
+      if (this.renderStatsOverlay.detailed && this.activeRenderPass) this.activeRenderPass.drawStartedAt = performance.now();
+    });
+    renderer.onAfterRenderingManagerRenderObservable.add(() => {
+      if (this.renderStatsOverlay.detailed && this.activeRenderPass?.drawStartedAt) {
+        this.activeRenderPass.drawCpuTime += performance.now() - this.activeRenderPass.drawStartedAt;
+      }
+    });
   }
 
   private configureWaterRefractionDepthTexture(refraction: RenderTargetTexture): void {
@@ -2892,6 +2982,16 @@ export function setSauerCameraOrientation(camera: UniversalCamera, yawDegrees: n
     camera.rotationQuaternion);
   // setcammatrix() rotates camdir, camright, and camup together. Babylon must likewise rotate up or its look-at matrix is singular at +/-90 pitch.
   camera.updateUpVectorFromRotation = true;
+}
+
+function createRenderPassAccumulator(name: string): RenderPassAccumulator {
+  return { name, drawCalls: 0, triangles: 0, vertices: 0, cpuTime: 0, drawCpuTime: 0, meshes: 0, startedAt: 0, drawStartedAt: 0,
+    drawCallsStartedAt: 0, indicesStartedAt: 0, verticesStartedAt: 0 };
+}
+
+function resetRenderPass(pass: RenderPassAccumulator): void {
+  pass.drawCalls = pass.triangles = pass.vertices = pass.cpuTime = pass.drawCpuTime = pass.meshes = 0;
+  pass.startedAt = pass.drawStartedAt = pass.drawCallsStartedAt = pass.indicesStartedAt = pass.verticesStartedAt = 0;
 }
 
 function formatMegabytes(bytes: number): string {

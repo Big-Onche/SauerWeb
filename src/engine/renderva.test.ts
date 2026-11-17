@@ -78,6 +78,23 @@ describe("generateGeometry", () => {
     expect(batches.find((batch) => batch.lightmapId === 6)?.useLightmapAlpha).toBe(true);
     expect(batches.find((batch) => batch.lightmapId === 7)?.useLightmapAlpha).toBe(false);
   });
+
+  it("merges identical material and lightmap batches across root octants", () => {
+    const batches = generateGeometry(mapWith([solidCube(0, 0, 0, 1), solidCube(3, 3, 3, 1)], 4));
+
+    expect(batches).toHaveLength(1);
+    expect(totalFaces(batches)).toBe(12);
+  });
+
+  it("supports renderer-provided material keys for draw-call batching", () => {
+    const first = solidCube(0, 0, 0, 1), second = solidCube(3, 3, 3, 1);
+    second.textures.fill(2);
+    const batches = generateGeometry(mapWith([first, second], 4), [], (_texture, material, lightmap, alpha) =>
+      `${material}:${lightmap}:${alpha ? 1 : 0}`);
+
+    expect(batches).toHaveLength(1);
+    expect(totalFaces(batches)).toBe(12);
+  });
 });
 
 function solidCube(x: number, y: number, z: number, size: number): OctreeCube {

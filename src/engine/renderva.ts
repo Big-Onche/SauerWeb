@@ -25,6 +25,8 @@ export interface WorldFaceOccluder {
   v1: number;
 }
 
+export type GeometryBatchKey = (textureIndex: number, cubeMaterial: number, lightmapId: number, useLightmapAlpha: boolean) => string;
+
 export function worldFaceOccluder(cube: OctreeCube, orientation: number): WorldFaceOccluder | undefined {
   if (cube.material & MAT_ALPHA || cube.textures[orientation] === DEFAULT_SKY) return undefined;
   if (cubeSolidFaceMask(cube) & (1 << orientation)) return solidCubeFaceRectangle(cube, orientation);
@@ -62,12 +64,12 @@ const LAYER_DUPLICATED = 1 << 7;
 // Original: src/engine/octarender.cpp
 // Functions: gencubeverts(), addcubeverts()
 // Sauerbraten reference: SVN r6488
-export function generateGeometry(map: SauerMap, textures: ResolvedTexture[] = []): GeometryBatch[] {
+export function generateGeometry(map: SauerMap, textures: ResolvedTexture[] = [], batchKey: GeometryBatchKey = defaultBatchKey): GeometryBatch[] {
   const batches = new Map<string, GeometryBatch>();
   const coincidentFaces = findCoincidentFaces(map.world);
   const emittedTriangles = new Set<string>();
-  map.world.forEach((root, rootIndex) => {
-    visitLeaves(root, (cube) => appendCube(map, cube, rootIndex, textures, batches, coincidentFaces.get(cube) ?? 0, emittedTriangles));
+  map.world.forEach((root) => {
+    visitLeaves(root, (cube) => appendCube(map, cube, textures, batches, coincidentFaces.get(cube) ?? 0, emittedTriangles, batchKey));
   });
   return [...batches.values()].filter((batch) => batch.indices.length > 0);
 }
@@ -144,8 +146,8 @@ function visitLeaves(cube: OctreeCube, callback: (cube: OctreeCube) => void): vo
   else if (cube.kind !== "empty") callback(cube);
 }
 
-function appendCube(map: SauerMap, cube: OctreeCube, rootIndex: number, textures: ResolvedTexture[], batches: Map<string, GeometryBatch>,
-                    coincidentMask: number, emittedTriangles: Set<string>): void {
+function appendCube(map: SauerMap, cube: OctreeCube, textures: ResolvedTexture[], batches: Map<string, GeometryBatch>,
+                    coincidentMask: number, emittedTriangles: Set<string>, batchKey: GeometryBatchKey): void {
   for (let orientation = 0; orientation < 6; orientation++) {
     if (coincidentMask & (1 << orientation)) continue;
     // Slot 0 is Sauerbraten's DEFAULT_SKY portal, not an ordinary world material.
@@ -170,12 +172,12 @@ function appendCube(map: SauerMap, cube: OctreeCube, rootIndex: number, textures
     if (hasBottom) {
       const secondarySource = layerFlags & LAYER_DUPLICATED ? surface!.vertices.slice(layerCount, layerCount * 2) : primarySource;
       const secondaryTextureIndex = textures[primaryTextureIndex]?.vslot.layer ?? primaryTextureIndex;
-      appendSurface(batches, cube, rootIndex, orientation, secondarySource, secondaryTextureIndex, surface?.lightmapIds[1] ?? 0, false, textures,
-        emittedTriangles);
+      appendSurface(batches, cube, orientation, secondarySource, secondaryTextureIndex, surface?.lightmapIds[1] ?? 0, false, textures,
+        emittedTriangles, batchKey);
     }
     if (hasTop) {
-      appendSurface(batches, cube, rootIndex, orientation, primarySource, primaryTextureIndex, surface?.lightmapIds[0] ?? 0, hasBottom, textures,
-        emittedTriangles);
+      appendSurface(batches, cube, orientation, primarySource, primaryTextureIndex, surface?.lightmapIds[0] ?? 0, hasBottom, textures,
+        emittedTriangles, batchKey);
     }
   }
 }
@@ -212,16 +214,16 @@ function facePositionKey(cube: OctreeCube, source: SurfaceVertex[]): string | un
   return positions.map((position) => `${position.x},${position.y},${position.z}`).sort().join("|");
 }
 
-function appendSurface(batches: Map<string, GeometryBatch>, cube: OctreeCube, rootIndex: number, orientation: number, source: SurfaceVertex[],
+function appendSurface(batches: Map<string, GeometryBatch>, cube: OctreeCube, orientation: number, source: SurfaceVertex[],
                        textureIndex: number, lightmapId: number, useLightmapAlpha: boolean, textures: ResolvedTexture[],
-                       emittedTriangles: Set<string>): void {
+                       emittedTriangles: Set<string>, batchKey: GeometryBatchKey): void {
   if (source.length < 3) return;
   const surfaceMaterial = cube.material & MAT_ALPHA;
-  const key = `${rootIndex}:${textureIndex}:${surfaceMaterial}:${lightmapId}:${useLightmapAlpha ? 1 : 0}`;
+  const key = batchKey(textureIndex, surfaceMaterial, lightmapId, useLightmapAlpha);
   let batch = batches.get(key);
   if (!batch) {
     batch = {
-      name: `octant-${rootIndex}-texture-${textureIndex}-material-${surfaceMaterial}-lightmap-${lightmapId}${useLightmapAlpha ? "-blend" : ""}`,
+      name: `world-texture-${textureIndex}-material-${surfaceMaterial}-lightmap-${lightmapId}${useLightmapAlpha ? "-blend" : ""}`,
       textureIndex,
       cubeMaterial: surfaceMaterial,
       lightmapId,
@@ -236,6 +238,10 @@ function appendSurface(batches: Map<string, GeometryBatch>, cube: OctreeCube, ro
     batches.set(key, batch);
   }
   appendFace(batch, source, source.map((vertex) => decodeVertex(cube, vertex)), orientation, textures[textureIndex]?.vslot, emittedTriangles);
+}
+
+function defaultBatchKey(textureIndex: number, cubeMaterial: number, lightmapId: number, useLightmapAlpha: boolean): string {
+  return `${textureIndex}:${cubeMaterial}:${lightmapId}:${useLightmapAlpha ? 1 : 0}`;
 }
 
 function isFaceVisible(map: SauerMap, cube: OctreeCube, orientation: number): boolean {

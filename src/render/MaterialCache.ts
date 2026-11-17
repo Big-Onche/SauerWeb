@@ -5,6 +5,7 @@ import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { RawTexture } from "@babylonjs/core/Materials/Textures/rawTexture";
 import { Constants } from "@babylonjs/core/Engines/constants";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { Vector2 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 import type { ResolvedTexture } from "../assets/types";
 import type { Lightmap } from "../engine/octa";
@@ -77,6 +78,10 @@ export function describeSauerMaterial(resolved: ResolvedTexture, cubeMaterial: n
   };
 }
 
+export function sauerMaterialKey(descriptor: SauerMaterialDescriptor): string {
+  return stableKey(descriptor);
+}
+
 export class MaterialCache {
   private readonly materials = new Map<string, StandardMaterial | ShaderMaterial>();
   private readonly textures = new Map<string, Texture>();
@@ -87,7 +92,7 @@ export class MaterialCache {
               private readonly ambient = DEFAULT_MAP_LIGHTING.ambient, private readonly caustics?: MapCausticResources) {}
 
   get(descriptor: SauerMaterialDescriptor): StandardMaterial | ShaderMaterial {
-    const key = stableKey(descriptor);
+    const key = sauerMaterialKey(descriptor);
     const cached = this.materials.get(key);
     if (cached) return cached;
     const material = this.createMaterial(descriptor, this.materials.size);
@@ -226,13 +231,13 @@ export class MaterialCache {
     material.setFloat("hasGlowMap", glow ? 1 : 0);
     material.setFloat("hasOpacityMap", opacity ? 1 : 0);
     material.setFloat("alphaCutoff", descriptor.surfaceMode === "alpha-test" ? 0.5 : 0);
+    const textureScale = new Vector2(1, 1), textureOffset = new Vector2(0, 0);
     material.onBindObservable.add(() => {
       const size = diffuse?.getBaseSize();
-      material.setVector2("textureScale", {
-        x: size?.width ? 1 / size.width : 1,
-        y: size?.height ? 1 / size.height : 1,
-      });
-      material.setVector2("textureOffset", { x: diffuse?.uOffset ?? 0, y: diffuse?.vOffset ?? 0 });
+      textureScale.set(size?.width ? 1 / size.width : 1, size?.height ? 1 / size.height : 1);
+      textureOffset.set(diffuse?.uOffset ?? 0, diffuse?.vOffset ?? 0);
+      material.setVector2("textureScale", textureScale);
+      material.setVector2("textureOffset", textureOffset);
       const cameraPosition = this.scene.activeCamera?.globalPosition ?? this.scene.activeCamera?.position ?? { x: 0, y: 0, z: 0 };
       material.setVector3("cameraPosition", cameraPosition);
       material.setColor3("fogColor", this.scene.fogColor);

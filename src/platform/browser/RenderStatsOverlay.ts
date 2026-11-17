@@ -13,11 +13,31 @@ interface RenderInstrumentation {
   readonly scene?: SceneInstrumentation;
 }
 
+export interface RenderPassSample {
+  readonly name: string;
+  readonly drawCalls: number;
+  readonly triangles: number;
+  readonly vertices: number;
+  readonly cpuTime: number;
+  readonly drawCpuTime: number;
+  readonly meshes: number;
+}
+
+interface RenderPassTotal {
+  drawCalls: number;
+  triangles: number;
+  vertices: number;
+  cpuTime: number;
+  drawCpuTime: number;
+  meshes: number;
+}
+
 const REFRESH_INTERVAL = 250;
 
 export class RenderStatsOverlay {
   private readonly element: HTMLPreElement;
   private enabled = false;
+  private showPasses = false;
   private sampleCount = 0;
   private frameTimeTotal = 0;
   private updateTimeTotal = 0;
@@ -26,6 +46,7 @@ export class RenderStatsOverlay {
   private triangleTotal = 0;
   private vertexTotal = 0;
   private lastRefresh = 0;
+  private readonly passTotals = new Map<string, RenderPassTotal>();
 
   constructor(private readonly container: HTMLElement, private readonly engine: Engine, private readonly scene: Scene,
               private readonly instrumentation: () => RenderInstrumentation,
@@ -42,7 +63,11 @@ export class RenderStatsOverlay {
     return this.enabled;
   }
 
-  sample(frameTime: number, updateTime: number, renderTime: number): void {
+  get detailed(): boolean {
+    return this.enabled && this.showPasses;
+  }
+
+  sample(frameTime: number, updateTime: number, renderTime: number, passes: readonly RenderPassSample[]): void {
     if (!this.enabled) return;
     const sceneInstrumentation = this.instrumentation().scene;
     this.sampleCount++;
@@ -52,6 +77,19 @@ export class RenderStatsOverlay {
     this.drawCallTotal += sceneInstrumentation?.drawCallsCounter.current ?? 0;
     this.triangleTotal += Math.floor(this.scene.getActiveIndices() / 3);
     this.vertexTotal += this.scene.getTotalVertices();
+    if (this.showPasses) for (const pass of passes) {
+      let total = this.passTotals.get(pass.name);
+      if (!total) {
+        total = { drawCalls: 0, triangles: 0, vertices: 0, cpuTime: 0, drawCpuTime: 0, meshes: 0 };
+        this.passTotals.set(pass.name, total);
+      }
+      total.drawCalls += pass.drawCalls;
+      total.triangles += pass.triangles;
+      total.vertices += pass.vertices;
+      total.cpuTime += pass.cpuTime;
+      total.drawCpuTime += pass.drawCpuTime;
+      total.meshes += pass.meshes;
+    }
 
     const now = performance.now();
     if (now - this.lastRefresh >= REFRESH_INTERVAL) this.refresh(now);
@@ -64,9 +102,16 @@ export class RenderStatsOverlay {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (event.code !== "KeyO" || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.repeat || isEditable(event.target)) return;
+    if (event.code !== "KeyO" || !event.shiftKey || event.ctrlKey || event.metaKey || event.repeat || isEditable(event.target)) return;
     event.preventDefault();
+    if (event.altKey && this.enabled) {
+      this.showPasses = !this.showPasses;
+      this.resetSamples(performance.now() - REFRESH_INTERVAL);
+      return;
+    }
+    if (event.altKey) return;
     this.enabled = !this.enabled;
+    if (!this.enabled) this.showPasses = false;
     this.visibilityChanged(this.enabled);
     this.element.hidden = !this.enabled;
     this.resetSamples(performance.now() - REFRESH_INTERVAL);
@@ -82,6 +127,7 @@ export class RenderStatsOverlay {
       : 0;
     const heapBytes = (performance as MemoryPerformance).memory?.usedJSHeapSize;
     const average = (total: number): number => total / this.sampleCount;
+    const passBreakdown = this.showPasses ? this.formatPassBreakdown() : "";
     this.element.textContent = `SAUERWEB | RENDER STATS
 FPS              ${this.engine.getFps().toFixed(0)}
 Frame            ${formatMilliseconds(average(this.frameTimeTotal))}
@@ -97,8 +143,19 @@ Materials        ${formatCount(activeResources.materials)}
 Textures         ${formatCount(activeResources.textures)}
 Chunks           N/A
 
-JS Heap          ${heapBytes === undefined ? "N/A" : `${(heapBytes / (1024 * 1024)).toFixed(0)} MB`}`;
+JS Heap          ${heapBytes === undefined ? "N/A" : `${(heapBytes / (1024 * 1024)).toFixed(0)} MB`}${passBreakdown}`;
     this.resetSamples(now);
+  }
+
+  private formatPassBreakdown(): string {
+    let result = "\n\nPASS           DRAWS     TRI   PREP   DRAW  MESHES";
+    for (const [name, total] of this.passTotals) {
+      const average = (value: number): number => value / this.sampleCount;
+      const prepare = Math.max(0, average(total.cpuTime - total.drawCpuTime));
+      result += `\n${name.padEnd(13)}${formatCount(average(total.drawCalls)).padStart(6)}${formatCount(average(total.triangles)).padStart(8)}` +
+        `${prepare.toFixed(1).padStart(7)}${average(total.drawCpuTime).toFixed(1).padStart(7)}${formatCount(average(total.meshes)).padStart(8)}`;
+    }
+    return result;
   }
 
   private activeResources(): { materials: number; textures: number } {
@@ -123,6 +180,9 @@ JS Heap          ${heapBytes === undefined ? "N/A" : `${(heapBytes / (1024 * 102
     this.drawCallTotal = 0;
     this.triangleTotal = 0;
     this.vertexTotal = 0;
+    for (const total of this.passTotals.values()) {
+      total.drawCalls = total.triangles = total.vertices = total.cpuTime = total.drawCpuTime = total.meshes = 0;
+    }
     this.lastRefresh = now;
   }
 }
