@@ -16,7 +16,8 @@ import { sauerFormattedMarkup } from "./sauerFormatting";
 import { TEAMKILL_PROTECTION_MESSAGE } from "./fpsgame/teamkillProtection";
 import { loadWaterQuality, saveWaterQuality, waterQualityLabel, type WaterQuality } from "./render/WaterSettings";
 import { decalQualityLabel, loadDecalQuality, saveDecalQuality, type DecalQuality } from "./render/DecalSettings";
-import { loadEngineSettings, saveEngineSettings, STATIC_CHUNK_SIZES, staticChunkSizeLabel } from "./render/EngineSettings";
+import { loadEngineSettings, PARTICLE_BACKENDS, PARTICLE_QUALITIES, particleBackendLabel, particleQualityLabel, saveEngineSettings,
+  STATIC_CHUNK_SIZES, staticChunkSizeLabel } from "./render/EngineSettings";
 
 interface MapListItem {
   name: string;
@@ -368,9 +369,23 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
   const staticChunkSize = document.querySelector<HTMLInputElement>("#static-chunk-size");
   staticChunkSize?.addEventListener("input", () => {
     const size = STATIC_CHUNK_SIZES[Number(staticChunkSize.value)] ?? STATIC_CHUNK_SIZES[2];
-    saveEngineSettings({ staticChunkSize: size });
+    saveEngineSettings({ ...loadEngineSettings(), staticChunkSize: size });
     const output = document.querySelector<HTMLOutputElement>("output[for='static-chunk-size']");
     if (output) output.value = staticChunkSizeLabel(size);
+  });
+  const particleBackend = document.querySelector<HTMLInputElement>("#particle-backend");
+  particleBackend?.addEventListener("input", () => {
+    const backend = PARTICLE_BACKENDS[Number(particleBackend.value)] ?? "auto";
+    saveEngineSettings({ ...loadEngineSettings(), particleBackend: backend });
+    const output = document.querySelector<HTMLOutputElement>("output[for='particle-backend']");
+    if (output) output.value = particleBackendLabel(backend);
+  });
+  const particleQuality = document.querySelector<HTMLInputElement>("#particle-quality");
+  particleQuality?.addEventListener("input", () => {
+    const quality = PARTICLE_QUALITIES[Number(particleQuality.value)] ?? "high";
+    saveEngineSettings({ ...loadEngineSettings(), particleQuality: quality });
+    const output = document.querySelector<HTMLOutputElement>("output[for='particle-quality']");
+    if (output) output.value = particleQualityLabel(quality);
   });
   document.querySelector<HTMLButtonElement>("[data-action='open-crosshair']")?.addEventListener("click", () => {
     navigate("/");
@@ -427,10 +442,17 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
   if (tab === "engine") {
     const settings = loadEngineSettings();
     const chunkIndex = Math.max(0, STATIC_CHUNK_SIZES.indexOf(settings.staticChunkSize));
+    const particleBackendIndex = Math.max(0, PARTICLE_BACKENDS.indexOf(settings.particleBackend));
+    const particleQualityIndex = Math.max(0, PARTICLE_QUALITIES.indexOf(settings.particleQuality));
     return optionGroup("engine", [
       optionSlider("static world chunk size", "static-chunk-size", chunkIndex, 0, STATIC_CHUNK_SIZES.length - 1,
         staticChunkSizeLabel(settings.staticChunkSize)),
+      optionSlider("particle backend", "particle-backend", particleBackendIndex, 0, PARTICLE_BACKENDS.length - 1,
+        particleBackendLabel(settings.particleBackend)),
+      optionSlider("particle quality", "particle-quality", particleQualityIndex, 0, PARTICLE_QUALITIES.length - 1,
+        particleQualityLabel(settings.particleQuality)),
       optionNote("Smaller chunks improve spatial culling but can increase draw calls. The setting applies when the next map loads."),
+      optionNote("Particle backend and quality changes apply when the next map loads. Automatic uses GPU particles when supported."),
     ]);
   }
   return optionGroup("console", [

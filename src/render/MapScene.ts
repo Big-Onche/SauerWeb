@@ -331,7 +331,7 @@ export class MapScene {
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.renderStatsOverlay = new RenderStatsOverlay(viewport, this.engine, this.scene,
       () => ({ engine: this.engineInstrumentation, scene: this.sceneInstrumentation }), this.setRenderStatsEnabled,
-      this.collectStaticRenderStats);
+      this.collectStaticRenderStats, () => this.particleRenderer.getParticleStats());
     this.scene.onBeforeDrawPhaseObservable.add(() => {
       if (!this.renderStatsOverlay.detailed) return;
       this.mainPass.drawStartedAt = performance.now();
@@ -407,7 +407,7 @@ export class MapScene {
       normalize(direction);
       const hit = this.physics.raycast(from, direction, distance + 1, 0, false);
       return hit ? { position: hit.position, normal: hit.normal } : undefined;
-    });
+    }, loadEngineSettings());
     this.weaponRenderer.setHudGunVisible(this.cameraMode === "player" && !this.thirdperson);
     this.gameAudio = new WeaponAudio(this.weapons.events, this.fpsClient.multiplayer, this.physics.player);
     this.physics.soundEvent = (event, player) => this.gameAudio.physicsSound(event, player);
@@ -2173,6 +2173,7 @@ export class MapScene {
   }
 
   private readonly setRenderStatsEnabled = (enabled: boolean): void => {
+    this.particleRenderer.setProfilingEnabled(enabled);
     if (enabled) {
       this.enableRendererInstrumentation();
       return;

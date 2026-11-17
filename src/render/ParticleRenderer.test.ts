@@ -4,6 +4,7 @@ import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { GPUParticleSystem } from "@babylonjs/core/Particles/gpuParticleSystem";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it, vi } from "vitest";
 import { WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
@@ -148,6 +149,33 @@ describe("Sauerbraten particle entity helpers", () => {
     });
 
     expect(splash).toHaveBeenCalledWith({ x: 10, y: 0, z: 0 }, "spark.png", 0xb49b4b, 0.24, 200, 250, 150, 2, true);
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("batches compatible static map emitters into one GPU simulation and render submission", () => {
+    const engine = new NullEngine();
+    engine.getCaps().supportTransformFeedbacks = true;
+    const scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined, undefined, {
+      particleBackend: "gpu", particleQuality: "high",
+    });
+    const entities = Array.from({ length: 292 }, (_, index) => ({
+      index,
+      typeName: "particles",
+      category: "effect" as const,
+      namedAttributes: {},
+      type: 5,
+      position: { x: index * 8, y: 0, z: 0 },
+      attributes: [1, 0, 0, 0, 0] as [number, number, number, number, number],
+    }));
+
+    renderer.loadMap(entities);
+
+    expect(scene.particleSystems).toHaveLength(1);
+    expect(scene.particleSystems[0]).toBeInstanceOf(GPUParticleSystem);
+    expect(renderer.getParticleStats()).toMatchObject({ backend: "GPU", activeEmitters: 292, gpuBatches: 1 });
     renderer.clear();
     engine.dispose();
   });

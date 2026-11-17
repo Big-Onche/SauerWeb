@@ -2,6 +2,7 @@ import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import type { Camera } from "@babylonjs/core/Cameras/camera";
 import "@babylonjs/core/Culling/ray";
 import { Constants } from "@babylonjs/core/Engines/constants";
+import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { Material } from "@babylonjs/core/Materials/material";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
@@ -15,6 +16,9 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { InstancedMesh } from "@babylonjs/core/Meshes/instancedMesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import type { Particle } from "@babylonjs/core/Particles/particle";
+import { CustomParticleEmitter } from "@babylonjs/core/Particles/EmitterTypes/customParticleEmitter";
+import { GPUParticleSystem } from "@babylonjs/core/Particles/gpuParticleSystem";
+import "@babylonjs/core/Particles/webgl2ParticleSystem";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
 import type { Scene } from "@babylonjs/core/scene";
 import "@babylonjs/core/Shaders/particles.fragment";
@@ -29,6 +33,7 @@ import { projectileRenderPose, projectileVisualPosition } from "../fpsgame/weapo
 import { GameModeFlag, gameModeHas } from "../fpsgame/game";
 import { toBabylonDirection, toBabylonPosition } from "./coordinates";
 import { DECAL_QUALITY_SETTINGS, loadDecalQuality, type DecalQuality } from "./DecalSettings";
+import { DEFAULT_ENGINE_SETTINGS, PARTICLE_CAPACITY_LIMITS, type EngineSettings, type ParticleBackend } from "./EngineSettings";
 import { selectModelSkin } from "./modelSkin";
 
 type ParticleTexture = "ball1.png" | "ball2.png" | "ball3.png" | "base.png" | "explosion.png" | "flames.png" | "flare.jpg" |
@@ -55,9 +60,29 @@ export interface DecalSurface {
 }
 
 interface PooledParticleSystem {
-  system: ParticleSystem;
+  system: CosmeticParticleSystem;
   capacity: number;
   tiled: boolean;
+  backend: ResolvedParticleBackend;
+  recipe: string;
+}
+
+type CosmeticParticleSystem = ParticleSystem | GPUParticleSystem;
+type ResolvedParticleBackend = Exclude<ParticleBackend, "auto">;
+type CosmeticParticleRender = (preWarm?: boolean, forceUpdateOnly?: boolean) => number;
+
+export interface ParticleRenderStats {
+  readonly backend: "GPU" | "CPU";
+  readonly activeEmitters: number;
+  readonly capacity: number;
+  readonly estimatedActiveParticles?: number;
+  readonly drawCalls?: number;
+  readonly gpuBatches: number;
+  readonly gpuSimulationDraws: number;
+  readonly gpuRenderingDraws: number;
+  readonly cpuParticleDraws: number;
+  readonly cpuUpdateTime: number;
+  readonly gpuTime?: number;
 }
 
 interface ProjectileEffect {
@@ -113,6 +138,9 @@ interface ParticleOptions {
   additive?: boolean;
   startPosition?: () => Vector3;
   fadeAtIndex?: (index: number) => number;
+  forceCpu?: boolean;
+  emitBoxMin?: Vector3;
+  emitBoxMax?: Vector3;
 }
 
 interface SauerParticleState {
@@ -121,6 +149,12 @@ interface SauerParticleState {
   gravity: number;
   fadeMs: number;
   ageMs: number;
+}
+
+interface MapParticleEmitter {
+  name: string;
+  position: Vec3;
+  options: ParticleOptions;
 }
 
 const SAUER_EMIT_MILLIS = 17;
@@ -211,7 +245,12 @@ const BULLET_DECAL_FRAGMENT_SHADER = `
 
 /** Babylon presentation of Sauerbraten's renderparticles.cpp particle recipes. */
 export class ParticleRenderer {
-  private readonly systems = new Set<ParticleSystem>();
+  private readonly systems = new Set<CosmeticParticleSystem>();
+  private readonly systemRecipes = new Map<CosmeticParticleSystem, string>();
+  private readonly systemExpiresAt = new Map<CosmeticParticleSystem, number>();
+  private readonly systemEmitterCounts = new Map<CosmeticParticleSystem, number>();
+  private readonly pendingMapEmitters: MapParticleEmitter[] = [];
+  private readonly originalSystemRender = new Map<CosmeticParticleSystem, CosmeticParticleRender>();
   private readonly systemPool: PooledParticleSystem[] = [];
   private readonly spritePool: Mesh[] = [];
   private readonly beamPool: Mesh[] = [];
@@ -232,16 +271,79 @@ export class ParticleRenderer {
   private renderingEnabled = true;
   private updateRegistered = false;
   private decalQuality = loadDecalQuality();
+  private readonly particleBackend: ResolvedParticleBackend;
+  private readonly particleCapacityLimit: number;
+  private particleCpuUpdateTime = 0;
+  private collectingMapEmitters = false;
+  private profilingEnabled = false;
+  private gpuSimulationDraws = 0;
+  private gpuRenderingDraws = 0;
+  private cpuParticleDraws = 0;
 
   constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera,
               private readonly taggedMuzzle: (event: WeaponEvent) => Vec3 | undefined,
-              private readonly resolveSurface?: (from: Vec3, to: Vec3) => DecalSurface | undefined) {
+              private readonly resolveSurface?: (from: Vec3, to: Vec3) => DecalSurface | undefined,
+              settings: Pick<EngineSettings, "particleBackend" | "particleQuality"> = DEFAULT_ENGINE_SETTINGS) {
+    this.particleBackend = resolveParticleBackend(settings.particleBackend);
+    this.particleCapacityLimit = PARTICLE_CAPACITY_LIMITS[settings.particleQuality];
+    if (this.particleBackend === "gpu") enableBatchedCustomEmitterSimulation();
     events.on((event) => this.handleWeaponEvent(event));
+  }
+
+  getParticleStats(): ParticleRenderStats {
+    let capacity = 0, active = 0, emitters = 0, gpuBatches = 0;
+    this.systems.forEach((system) => {
+      capacity += system.getCapacity();
+      active += system.getActiveCount();
+      emitters += this.systemEmitterCounts.get(system) ?? 1;
+      if (system instanceof GPUParticleSystem) gpuBatches++;
+    });
+    return {
+      backend: this.particleBackend === "gpu" ? "GPU" : "CPU",
+      activeEmitters: emitters,
+      capacity,
+      estimatedActiveParticles: active,
+      drawCalls: this.systems.size,
+      gpuBatches,
+      gpuSimulationDraws: this.gpuSimulationDraws,
+      gpuRenderingDraws: this.gpuRenderingDraws,
+      cpuParticleDraws: this.cpuParticleDraws,
+      cpuUpdateTime: this.particleCpuUpdateTime,
+    };
+  }
+
+  setProfilingEnabled(enabled: boolean): void {
+    if (this.profilingEnabled === enabled) return;
+    this.profilingEnabled = enabled;
+    if (enabled) this.systems.forEach((system) => this.instrumentParticleSystem(system));
+    else {
+      this.originalSystemRender.forEach((render, system) => { system.render = render; });
+      this.originalSystemRender.clear();
+    }
+  }
+
+  private instrumentParticleSystem(system: CosmeticParticleSystem): void {
+    if (!this.profilingEnabled || this.originalSystemRender.has(system)) return;
+    const render = system.render.bind(system) as CosmeticParticleRender;
+    this.originalSystemRender.set(system, render);
+    system.render = ((preWarm?: boolean, forceUpdateOnly?: boolean): number => {
+      const before = this.scene.getEngine()._drawCalls.current;
+      const rendered = render(preWarm, forceUpdateOnly);
+      const draws = Math.max(0, this.scene.getEngine()._drawCalls.current - before);
+      if (system instanceof GPUParticleSystem) {
+        if (draws > 0) this.gpuSimulationDraws++;
+        this.gpuRenderingDraws += Math.max(0, draws - 1);
+      } else this.cpuParticleDraws += draws;
+      return rendered;
+    }) as typeof system.render;
   }
 
   loadMap(entities: readonly RegisteredMapEntity[]): void {
     this.clear();
+    this.collectingMapEmitters = this.particleBackend === "gpu";
     entities.filter((entity) => entity.typeName === "particles").forEach((entity) => this.createMapEmitter(entity));
+    this.collectingMapEmitters = false;
+    this.flushMapEmitterBatches();
     if (!this.updateRegistered) {
       this.scene.onBeforeRenderObservable.add(() => this.update());
       this.updateRegistered = true;
@@ -319,14 +421,16 @@ export class ParticleRenderer {
       }
       const particleCapacities = mobile ? [8, 32, 128, 256] : [8, 32, 128, 256, 512];
       for (const capacity of particleCapacities) {
-        if (this.systemPool.some((entry) => !entry.tiled && entry.capacity === capacity)) continue;
-        const system = new ParticleSystem(`combat-particle-pooled-${capacity}`, capacity, this.scene);
+        if (this.systemPool.some((entry) => entry.backend === this.particleBackend && !entry.tiled && entry.capacity === capacity)) continue;
+        const system: CosmeticParticleSystem = this.particleBackend === "gpu"
+          ? new GPUParticleSystem(`combat-particle-pooled-${capacity}`, { capacity, randomTextureSize: 256 }, this.scene)
+          : new ParticleSystem(`combat-particle-pooled-${capacity}`, capacity, this.scene);
         system.particleTexture = particleTexture;
         system.layerMask = 0;
         system.isReady();
         system.stop();
         system.reset();
-        this.systemPool.push({ system, capacity, tiled: false });
+        this.systemPool.push({ system, capacity, tiled: false, backend: this.particleBackend, recipe: "prewarm" });
       }
       progress?.(0.45, "loading combat models...");
       const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates(generation));
@@ -403,6 +507,11 @@ export class ParticleRenderer {
   clear(): void {
     this.systems.forEach((system) => system.dispose(false));
     this.systems.clear();
+    this.systemRecipes.clear();
+    this.systemExpiresAt.clear();
+    this.systemEmitterCounts.clear();
+    this.pendingMapEmitters.length = 0;
+    this.originalSystemRender.clear();
     this.effects.forEach((effect) => this.disposeEffect(effect, false));
     this.effects.length = 0;
     this.decals.length = 0;
@@ -523,9 +632,14 @@ export class ParticleRenderer {
 
   private directionalEmitter(position: Vec3, direction: number, texture: ParticleTexture, color: number, size: number, count: number,
                              fadeMs: number, velocityRadius: number, gravity: number): void {
-    this.particleSystem(`map-${texture}`, position, {
+    const end = toBabylonPosition(sauerParticleOffset(position, direction, 9));
+    const origin = toBabylonPosition(position);
+    const center = Vector3.Center(origin, end);
+    const halfExtent = end.subtract(origin).scale(0.5);
+    halfExtent.set(Math.abs(halfExtent.x), Math.abs(halfExtent.y), Math.abs(halfExtent.z));
+    this.particleSystem(`map-${texture}`, { x: center.x, y: center.z, z: center.y }, {
       texture, color, size, fadeMinMs: 1, fadeMaxMs: fadeMs * 3, rate: count * 1000 / SAUER_EMIT_MILLIS, velocityRadius, gravity,
-      startPosition: () => toBabylonPosition(sauerParticleOffset(position, direction, Math.floor(Math.random() * 10))),
+      emitBoxMin: halfExtent.negate(), emitBoxMax: halfExtent,
     });
   }
 
@@ -976,17 +1090,147 @@ export class ParticleRenderer {
     let emitted = 0;
     this.particleSystem("weapon-trail", from, {
       texture, color, size, fadeMinMs: fade, fadeMaxMs: fade * 2 - 1, count, velocityBox: 5, gravity,
-      startPosition: () => Vector3.Lerp(start, end, Math.min(1, ++emitted / count)),
+      startPosition: () => Vector3.Lerp(start, end, Math.min(1, ++emitted / count)), forceCpu: true,
     });
   }
 
-  private particleSystem(name: string, position: Vec3, options: ParticleOptions): ParticleSystem {
-    const capacity = Math.max(8, options.count ?? Math.ceil((options.rate ?? 10) * options.fadeMaxMs / 1000 * 1.1));
+  private flushMapEmitterBatches(): void {
+    if (!this.pendingMapEmitters.length) return;
+    const groups = new Map<string, MapParticleEmitter[]>();
+    for (const emitter of this.pendingMapEmitters) {
+      const key = this.mapBatchRecipe(emitter.options);
+      let group = groups.get(key);
+      if (!group) groups.set(key, group = []);
+      group.push(emitter);
+    }
+    const maximumBatchCapacity = Math.max(8_192, this.particleCapacityLimit * 4);
+    for (const group of groups.values()) {
+      let chunk: MapParticleEmitter[] = [], capacity = 0;
+      for (const emitter of group) {
+        const emitterCapacity = this.mapEmitterCapacity(emitter.options);
+        if (chunk.length && capacity + emitterCapacity > maximumBatchCapacity) {
+          this.gpuMapParticleBatch(chunk, capacity);
+          chunk = [];
+          capacity = 0;
+        }
+        chunk.push(emitter);
+        capacity += emitterCapacity;
+      }
+      if (chunk.length) this.gpuMapParticleBatch(chunk, capacity);
+    }
+    this.pendingMapEmitters.length = 0;
+  }
+
+  private gpuMapParticleBatch(emitters: readonly MapParticleEmitter[], capacity: number): void {
+    const options = emitters[0].options;
     const tiled = options.texture === "flames.png" || options.texture === "snow.png";
-    const pooledIndex = this.systemPool.findIndex((entry) => entry.tiled === tiled && entry.capacity >= capacity &&
+    const system = new GPUParticleSystem(`map-particle-batch-${options.texture}-${this.systems.size}`, {
+      capacity,
+      randomTextureSize: Math.min(4_096, Math.max(256, capacity)),
+      emitRateControl: true,
+    }, this.scene, undefined, tiled);
+    const owner = new Uint16Array(capacity);
+    const positions = emitters.map((emitter) => toBabylonPosition(emitter.position));
+    for (let slot = 0; slot < capacity; slot++) owner[slot] = slot % emitters.length;
+    const emitter = new CustomParticleEmitter();
+    emitter.particlePositionGenerator = (index, _particle, target) => {
+      const definition = emitters[owner[index]].options;
+      const center = positions[owner[index]];
+      const low = definition.emitBoxMin ?? new Vector3(-(definition.radius ?? 0), 0, -(definition.radius ?? 0));
+      const high = definition.emitBoxMax ?? new Vector3(definition.radius ?? 0, 0, definition.radius ?? 0);
+      target.set(center.x + randomRange(low.x, high.x), center.y + randomRange(low.y, high.y), center.z + randomRange(low.z, high.z));
+    };
+    emitter.particleDestinationGenerator = (index, _particle, target) => this.gpuInitialVelocity(emitters[owner[index]].options, target);
+    system.particleEmitterType = emitter;
+    system.emitter = Vector3.Zero();
+    system.particleTexture = this.particleTexture(options.texture);
+    const color = particleColor4(options.color, 1);
+    system.color1.copyFrom(color);
+    system.color2.copyFrom(color);
+    system.colorDead.copyFrom(particleColor4(options.color, 0));
+    system.minSize = system.maxSize = sauerParticleDiameter(options.size);
+    system.minLifeTime = Math.max(0.001, options.fadeMinMs / 1_000);
+    system.maxLifeTime = Math.max(system.minLifeTime, options.fadeMaxMs / 1_000);
+    system.gravity.set(0, options.gravity ? -200 / options.gravity : 0, 0);
+    system.blendMode = options.additive ? ParticleSystem.BLENDMODE_ADD : ParticleSystem.BLENDMODE_STANDARD;
+    system.updateSpeed = 1 / 60;
+    system.layerMask = this.renderingEnabled ? PARTICLE_LAYER_MASK : 0;
+    system.minInitialRotation = 0;
+    system.maxInitialRotation = Math.PI * 2;
+    system.minAngularSpeed = system.maxAngularSpeed = 0;
+    if (tiled) {
+      system.startSpriteCellID = 0;
+      system.endSpriteCellID = 3;
+      system.spriteCellWidth = options.texture === "flames.png" ? 128 : 64;
+      system.spriteCellHeight = system.spriteCellWidth;
+      system.spriteCellLoop = false;
+      system.spriteRandomStartCell = true;
+    }
+    system.addColorGradient(0, particleColor4(options.color, 1));
+    system.addColorGradient(0.75, particleColor4(options.color, 1));
+    system.addColorGradient(1, particleColor4(options.color, 0));
+    system.addSizeGradient(0, 1);
+    system.addSizeGradient(1, 1);
+    system.maxActiveParticleCount = capacity;
+    system.manualEmitCount = -1;
+    system.emitRate = emitters.reduce((total, definition) => total + (definition.options.rate ?? 10), 0);
+    system.start();
+    this.systems.add(system);
+    this.systemRecipes.set(system, this.mapBatchRecipe(options));
+    this.systemEmitterCounts.set(system, emitters.length);
+    this.instrumentParticleSystem(system);
+  }
+
+  private gpuInitialVelocity(options: ParticleOptions, target: Vector3): void {
+    if (options.velocityRadius !== undefined) {
+      target.copyFrom(toBabylonDirection(randomSphereVector(options.velocityRadius))).scaleInPlace(0.2);
+      return;
+    }
+    if (options.velocityBox !== undefined) {
+      const radius = options.velocityBox / 5;
+      target.set(randomRange(-radius, radius), randomRange(-radius, radius), randomRange(-radius, radius));
+      return;
+    }
+    const direction = options.direction ?? Vector3.Up();
+    const spread = options.spread ?? 0;
+    const scale = (options.speed ?? 0) / 5;
+    target.set(randomRange(direction.x - spread, direction.x + spread) * scale,
+      randomRange(direction.y - spread, direction.y + spread) * scale,
+      randomRange(direction.z - spread, direction.z + spread) * scale);
+  }
+
+  private mapEmitterCapacity(options: ParticleOptions): number {
+    return Math.max(1, Math.ceil((options.rate ?? 10) * options.fadeMaxMs / 1_000));
+  }
+
+  private mapBatchRecipe(options: ParticleOptions): string {
+    const vector = (value?: Vector3): string => value ? `${value.x},${value.y},${value.z}` : "";
+    return [options.texture, options.color, options.size, options.fadeMinMs, options.fadeMaxMs, options.rate ?? 10,
+      options.radius ?? 0, vector(options.direction), options.spread ?? 0, options.speed ?? 0, options.velocityRadius ?? "",
+      options.velocityBox ?? "", options.gravity ?? 0, options.additive ? 1 : 0, vector(options.emitBoxMin),
+      vector(options.emitBoxMax)].join(":");
+  }
+
+  private particleSystem(name: string, position: Vec3, options: ParticleOptions): CosmeticParticleSystem | undefined {
+    if (this.collectingMapEmitters && options.count === undefined && !options.forceCpu && !options.startPosition) {
+      this.pendingMapEmitters.push({ name, position: { ...position }, options });
+      return undefined;
+    }
+    if (this.particleBackend === "gpu" && !options.forceCpu && !options.startPosition) {
+      return this.gpuParticleSystem(name, position, options);
+    }
+    return this.cpuParticleSystem(name, position, options);
+  }
+
+  private cpuParticleSystem(name: string, position: Vec3, options: ParticleOptions): ParticleSystem {
+    const capacity = this.particleCapacity(options);
+    const tiled = options.texture === "flames.png" || options.texture === "snow.png";
+    const recipe = this.particleRecipe(options);
+    const pooledIndex = this.systemPool.findIndex((entry) => entry.backend === "cpu" && entry.recipe === recipe &&
+      entry.tiled === tiled && entry.capacity >= capacity &&
       entry.capacity <= capacity * 2);
     const pooled = pooledIndex >= 0 ? this.systemPool.splice(pooledIndex, 1)[0] : undefined;
-    const system = pooled?.system ?? new ParticleSystem(name, capacity, this.scene, undefined, tiled);
+    const system = (pooled?.system as ParticleSystem | undefined) ?? new ParticleSystem(name, capacity, this.scene, undefined, tiled);
     system.reset();
     system.layerMask = this.renderingEnabled ? PARTICLE_LAYER_MASK : 0;
     const states = new WeakMap<Particle, SauerParticleState>();
@@ -1018,8 +1262,8 @@ export class ParticleRenderer {
     const spread = options.spread ?? 0;
     const low = direction.subtract(new Vector3(spread, spread, spread));
     const high = direction.add(new Vector3(spread, spread, spread));
-    system.createBoxEmitter(low, high, new Vector3(-(options.radius ?? 0), 0, -(options.radius ?? 0)),
-      new Vector3(options.radius ?? 0, 0, options.radius ?? 0));
+    system.createBoxEmitter(low, high, options.emitBoxMin ?? new Vector3(-(options.radius ?? 0), 0, -(options.radius ?? 0)),
+      options.emitBoxMax ?? new Vector3(options.radius ?? 0, 0, options.radius ?? 0));
     if (options.startPosition) system.startPositionFunction = (_matrix, target) => target.copyFrom(options.startPosition!());
     system.startDirectionFunction = (_matrix, target, particle) => {
       const velocity = this.nativeParticleVelocity(options, low, high);
@@ -1066,7 +1310,101 @@ export class ParticleRenderer {
     }
     system.start();
     this.systems.add(system);
+    this.systemRecipes.set(system, recipe);
+    this.systemEmitterCounts.set(system, 1);
+    this.instrumentParticleSystem(system);
+    if (options.count !== undefined) this.systemExpiresAt.set(system, performance.now() + options.fadeMaxMs + 50);
     return system;
+  }
+
+  private gpuParticleSystem(name: string, position: Vec3, options: ParticleOptions): GPUParticleSystem {
+    const capacity = this.particleCapacity(options);
+    const tiled = options.texture === "flames.png" || options.texture === "snow.png";
+    const recipe = this.particleRecipe(options);
+    const pooledIndex = this.systemPool.findIndex((entry) => entry.backend === "gpu" && entry.recipe === recipe &&
+      entry.tiled === tiled && entry.capacity >= capacity && entry.capacity <= capacity * 2);
+    const pooled = pooledIndex >= 0 ? this.systemPool.splice(pooledIndex, 1)[0] : undefined;
+    const system = pooled?.system as GPUParticleSystem | undefined ?? new GPUParticleSystem(name, {
+      capacity,
+      randomTextureSize: Math.min(4_096, Math.max(256, capacity)),
+      emitRateControl: options.count === undefined,
+    }, this.scene, undefined, tiled);
+    system.name = name;
+    system.reset();
+    system.layerMask = this.renderingEnabled ? PARTICLE_LAYER_MASK : 0;
+    system.particleTexture = this.particleTexture(options.texture);
+    system.emitter = toBabylonPosition(position);
+    const color = particleColor4(options.color, 1);
+    system.color1.copyFrom(color);
+    system.color2.copyFrom(color);
+    system.colorDead.copyFrom(particleColor4(options.color, 0));
+    system.minSize = system.maxSize = sauerParticleDiameter(options.size);
+    system.minLifeTime = Math.max(0.001, options.fadeMinMs / 1_000);
+    system.maxLifeTime = Math.max(system.minLifeTime, options.fadeMaxMs / 1_000);
+    system.minInitialRotation = 0;
+    system.maxInitialRotation = Math.PI * 2;
+    system.minAngularSpeed = system.maxAngularSpeed = 0;
+    system.blendMode = options.additive ? ParticleSystem.BLENDMODE_ADD : ParticleSystem.BLENDMODE_STANDARD;
+    system.updateSpeed = 1 / 60;
+    system.gravity.set(0, options.gravity ? -200 / options.gravity : 0, 0);
+    if (tiled) {
+      system.startSpriteCellID = 0;
+      system.endSpriteCellID = 3;
+      system.spriteCellWidth = options.texture === "flames.png" ? 128 : 64;
+      system.spriteCellHeight = system.spriteCellWidth;
+      system.spriteCellLoop = false;
+      system.spriteRandomStartCell = true;
+    }
+    const direction = options.direction ?? Vector3.Up();
+    const spread = options.spread ?? 0;
+    const speed = options.speed ?? 0;
+    let low: Vector3, high: Vector3;
+    if (options.velocityRadius !== undefined) {
+      const velocity = options.velocityRadius / 5;
+      low = new Vector3(-velocity, -velocity, -velocity);
+      high = new Vector3(velocity, velocity, velocity);
+    } else if (options.velocityBox !== undefined) {
+      const velocity = options.velocityBox / 5;
+      low = new Vector3(-velocity, -velocity, -velocity);
+      high = new Vector3(velocity, velocity, velocity);
+    } else {
+      low = direction.subtract(new Vector3(spread, spread, spread)).scale(speed / 5);
+      high = direction.add(new Vector3(spread, spread, spread)).scale(speed / 5);
+    }
+    system.createBoxEmitter(low, high, options.emitBoxMin ?? new Vector3(-(options.radius ?? 0), 0, -(options.radius ?? 0)),
+      options.emitBoxMax ?? new Vector3(options.radius ?? 0, 0, options.radius ?? 0));
+    if (!pooled) {
+      system.addColorGradient(0, particleColor4(options.color, 1));
+      system.addColorGradient(0.75, particleColor4(options.color, 1));
+      system.addColorGradient(1, particleColor4(options.color, 0));
+      system.addSizeGradient(0, 1);
+      system.addSizeGradient(1, 1);
+    }
+    system.maxActiveParticleCount = capacity;
+    if (options.count !== undefined) {
+      system.manualEmitCount = Math.min(options.count, capacity);
+      system.emitRate = Math.max(1, options.count * 60);
+    } else {
+      system.manualEmitCount = -1;
+      system.emitRate = options.rate ?? 10;
+    }
+    system.start();
+    this.systems.add(system);
+    this.systemRecipes.set(system, recipe);
+    this.systemEmitterCounts.set(system, 1);
+    this.instrumentParticleSystem(system);
+    if (options.count !== undefined) this.systemExpiresAt.set(system, performance.now() + options.fadeMaxMs + 50);
+    return system;
+  }
+
+  private particleCapacity(options: ParticleOptions): number {
+    const requested = Math.max(8, options.count ?? Math.ceil((options.rate ?? 10) * options.fadeMaxMs / 1_000 * 1.1));
+    return Math.min(requested, this.particleCapacityLimit);
+  }
+
+  private particleRecipe(options: ParticleOptions): string {
+    const tiled = options.texture === "flames.png" || options.texture === "snow.png";
+    return `${options.texture}:${options.color}:${options.additive ? 1 : 0}:${tiled ? 1 : 0}`;
   }
 
   private nativeParticleVelocity(options: ParticleOptions, low: Vector3, high: Vector3): Vector3 {
@@ -1263,6 +1601,8 @@ export class ParticleRenderer {
   }
 
   private update(): void {
+    const updateStartedAt = performance.now();
+    if (this.profilingEnabled) this.gpuSimulationDraws = this.gpuRenderingDraws = this.cpuParticleDraws = 0;
     this.updateBouncerVisuals();
     const now = performance.now();
     for (let index = this.effects.length - 1; index >= 0; index--) {
@@ -1290,14 +1630,32 @@ export class ParticleRenderer {
       }
     }
     this.systems.forEach((system) => {
-      if (!system.isStarted() || system.manualEmitCount !== 0 || system.getActiveCount() > 0) return;
+      const expiresAt = this.systemExpiresAt.get(system);
+      const gpuExpired = system instanceof GPUParticleSystem && expiresAt !== undefined && now >= expiresAt;
+      const cpuExpired = system instanceof ParticleSystem && system.isStarted() && system.manualEmitCount === 0 &&
+        system.getActiveCount() === 0;
+      if (!gpuExpired && !cpuExpired) return;
       this.systems.delete(system);
+      const recipe = this.systemRecipes.get(system) ?? "";
+      this.systemRecipes.delete(system);
+      this.systemExpiresAt.delete(system);
+      this.systemEmitterCounts.delete(system);
       system.stop();
       system.reset();
       if (this.systemPool.length < MAX_POOLED_PARTICLE_SYSTEMS) {
-        this.systemPool.push({ system, capacity: system.getCapacity(), tiled: system.isAnimationSheetEnabled });
-      } else system.dispose(false);
+        this.systemPool.push({
+          system,
+          capacity: system.getCapacity(),
+          tiled: system.isAnimationSheetEnabled,
+          backend: system instanceof GPUParticleSystem ? "gpu" : "cpu",
+          recipe,
+        });
+      } else {
+        this.originalSystemRender.delete(system);
+        system.dispose(false);
+      }
     });
+    this.particleCpuUpdateTime = performance.now() - updateStartedAt;
   }
 
   private updateBouncerVisuals(): void {
@@ -1553,4 +1911,32 @@ function randomInteger(minimum: number, maximum: number): number {
 
 function randomRange(minimum: number, maximum: number): number {
   return minimum + Math.random() * (maximum - minimum);
+}
+
+let batchedCustomEmitterSimulationEnabled = false;
+
+function enableBatchedCustomEmitterSimulation(): void {
+  if (batchedCustomEmitterSimulationEnabled) return;
+  const key = "gpuUpdateParticlesVertexShader";
+  const source = ShaderStore.ShadersStore[key];
+  if (!source) throw new Error("Babylon's GPU particle update shader is unavailable.");
+  const positionSource = "outPosition=position+(direction-position)*ageGradient;";
+  const positionReplacement = "outPosition=position+direction*directionScale;";
+  const gravitySource = `#ifdef CUSTOMEMITTER
+outDirection=direction;
+#else
+vec3 updatedDirection=direction+gravity*timeDelta;`;
+  const gravityReplacement = `#ifdef CUSTOMEMITTER
+outDirection=direction+gravity*timeDelta;
+#else
+vec3 updatedDirection=direction+gravity*timeDelta;`;
+  const patched = source.replace(positionSource, positionReplacement).replace(gravitySource, gravityReplacement);
+  if (patched === source) throw new Error("Babylon's GPU particle shader layout changed; batched emitter patch was not applied.");
+  ShaderStore.ShadersStore[key] = patched;
+  batchedCustomEmitterSimulationEnabled = true;
+}
+
+export function resolveParticleBackend(requested: ParticleBackend, gpuSupported = GPUParticleSystem.IsSupported): ResolvedParticleBackend {
+  if (requested === "cpu") return "cpu";
+  return gpuSupported ? "gpu" : "cpu";
 }

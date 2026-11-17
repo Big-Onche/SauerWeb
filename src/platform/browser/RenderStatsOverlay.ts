@@ -30,6 +30,20 @@ export interface RenderPassSample {
   readonly meshes: number;
 }
 
+export interface ParticleOverlayStats {
+  readonly backend: "GPU" | "CPU";
+  readonly activeEmitters: number;
+  readonly capacity: number;
+  readonly estimatedActiveParticles?: number;
+  readonly drawCalls?: number;
+  readonly gpuBatches: number;
+  readonly gpuSimulationDraws: number;
+  readonly gpuRenderingDraws: number;
+  readonly cpuParticleDraws: number;
+  readonly cpuUpdateTime: number;
+  readonly gpuTime?: number;
+}
+
 interface RenderPassTotal {
   drawCalls: number;
   triangles: number;
@@ -60,7 +74,7 @@ export class RenderStatsOverlay {
               private readonly visibilityChanged: (visible: boolean) => void,
               private readonly staticStats: () => StaticRenderStats = () => ({
                 visibleChunks: 0, totalChunks: 0, worldDrawCalls: 0, mapModelDrawCalls: 0,
-              })) {
+              }), private readonly particleStats?: () => ParticleOverlayStats) {
     this.element = document.createElement("pre");
     this.element.className = "render-stats-overlay";
     this.element.setAttribute("aria-label", "Real-time rendering statistics");
@@ -133,11 +147,13 @@ export class RenderStatsOverlay {
     const activeMeshes = this.scene.getActiveMeshes().length;
     const activeResources = this.activeResources();
     const staticStats = this.staticStats();
+    const particles = this.particleStats?.();
     const gpuNanoseconds = instrumentation.engine?.captureGPUFrameTime
       ? instrumentation.engine.gpuFrameTimeCounter.lastSecAverage || instrumentation.engine.gpuFrameTimeCounter.current
       : 0;
     const heapBytes = (performance as MemoryPerformance).memory?.usedJSHeapSize;
     const average = (total: number): number => total / this.sampleCount;
+    const particleBreakdown = particles ? this.formatParticleBreakdown(particles) : "";
     const passBreakdown = this.showPasses ? this.formatPassBreakdown() : "";
     this.element.textContent = `SAUERWEB | RENDER STATS
 FPS              ${this.engine.getFps().toFixed(0)}
@@ -155,9 +171,27 @@ Textures         ${formatCount(activeResources.textures)}
 Static Chunks    ${formatCount(staticStats.visibleChunks)} / ${formatCount(staticStats.totalChunks)}
 World Draws      ${formatCount(staticStats.worldDrawCalls)}
 Mapmodel Draws   ${formatCount(staticStats.mapModelDrawCalls)}
+${particleBreakdown}
 
 JS Heap          ${heapBytes === undefined ? "N/A" : `${(heapBytes / (1024 * 1024)).toFixed(0)} MB`}${passBreakdown}`;
     this.resetSamples(now);
+  }
+
+  private formatParticleBreakdown(particles: ParticleOverlayStats): string {
+    let result = `\nParticles        ${particles.backend} | ${formatCount(particles.activeEmitters)} emitters | ` +
+      `${formatCount(particles.gpuBatches)} GPU batches`;
+    if (!this.showPasses) return result;
+    result += `\nGPU PARTICLES
+Emitters         ${formatCount(particles.activeEmitters)}
+GPU batches      ${formatCount(particles.gpuBatches)}
+GPU sim draws    ${formatCount(particles.gpuSimulationDraws)}
+GPU render draws ${formatCount(particles.gpuRenderingDraws)}
+CPU part. draws  ${formatCount(particles.cpuParticleDraws)}
+GPU capacity     ${formatCount(particles.capacity)}
+Active estimate  ${particles.estimatedActiveParticles === undefined ? "N/A" : formatCount(particles.estimatedActiveParticles)}
+Particle CPU     ${formatMilliseconds(particles.cpuUpdateTime)}
+Particle GPU     ${particles.gpuTime === undefined ? "N/A" : formatMilliseconds(particles.gpuTime)}`;
+    return result;
   }
 
   private formatPassBreakdown(): string {
