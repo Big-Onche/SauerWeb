@@ -41,9 +41,11 @@ export class SoundSystem {
   private readonly configs = new Map<number | string, SoundConfig>();
   private readonly channels: Array<SoundChannel | undefined> = [];
   private mapSounds: readonly MapSoundConfig[] = [];
-  private mapEntities: readonly RegisteredMapEntity[] = [];
+  private mapSoundEntities: readonly RegisteredMapEntity[] = [];
+  private readonly mapSoundChannels = new Map<RegisteredMapEntity, SoundChannel>();
   private listener: Vec3 = { x: 0, y: 0, z: 0 };
   private listenerYaw = 0;
+  private listenerDirty = true;
   private soundsAtOnce = 0;
   private lastSoundMillis = Number.NEGATIVE_INFINITY;
 
@@ -57,13 +59,17 @@ export class SoundSystem {
 
   setMap(entities: readonly RegisteredMapEntity[], sounds: readonly MapSoundConfig[] = []): void {
     this.stopmapsounds();
-    this.mapEntities = entities;
+    this.mapSoundEntities = entities.filter((entity) => entity.typeName === "sound");
     this.mapSounds = sounds;
   }
 
   setListener(position: Vec3, yaw: number): void {
-    this.listener = { ...position };
+    if (this.listener.x === position.x && this.listener.y === position.y && this.listener.z === position.z && this.listenerYaw === yaw) return;
+    this.listener.x = position.x;
+    this.listener.y = position.y;
+    this.listener.z = position.z;
     this.listenerYaw = yaw;
+    this.listenerDirty = true;
   }
 
   playsound(id: number | string, options: PlaySoundOptions = {}): number {
@@ -103,6 +109,8 @@ export class SoundSystem {
 
   updatesounds(): void {
     this.reclaimchannels();
+    if (!this.listenerDirty) return;
+    this.listenerDirty = false;
     this.checkmapsounds();
     for (const channel of this.channels) if (channel?.loc) this.updatechannel(channel);
   }
@@ -116,9 +124,8 @@ export class SoundSystem {
   }
 
   private checkmapsounds(): void {
-    for (const entity of this.mapEntities) {
-      if (entity.typeName !== "sound") continue;
-      const channel = this.channels.find((candidate) => candidate?.entity === entity), radius = entity.attributes[1] ?? 0;
+    for (const entity of this.mapSoundEntities) {
+      const channel = this.mapSoundChannels.get(entity), radius = entity.attributes[1] ?? 0;
       if (distance(this.listener, entity.position) < radius) {
         if (!channel) this.playmapsound(entity);
       } else if (channel) this.stopchannel(channel.id);
@@ -136,6 +143,7 @@ export class SoundSystem {
     const channel: SoundChannel = { id, config: configId, slot, source, loc: { ...entity.position }, entity,
       radius: entity.attributes[1] ?? 0, volume: -1, pan: -1 };
     this.channels[id] = channel;
+    this.mapSoundChannels.set(entity, channel);
     this.updatechannel(channel);
   }
 
@@ -180,6 +188,8 @@ export class SoundSystem {
   }
 
   private stopchannel(id: number): void {
+    const entity = this.channels[id]?.entity;
+    if (entity) this.mapSoundChannels.delete(entity);
     this.channels[id]?.source.stop();
     this.channels[id] = undefined;
   }
