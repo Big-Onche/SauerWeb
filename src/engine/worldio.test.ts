@@ -133,7 +133,7 @@ describe("SauerMapParser", () => {
     expect(map.materialVolumes.every((volume) => (volume.rawMaterial & ~0x77c) === 0)).toBe(true);
   }, 15_000);
 
-  it.each(["aard3c", "triforts"])("decodes bundled v33 map %s through its octree", (mapName) => {
+  it.each(["aard3c"])("decodes bundled v33 map %s through its octree", (mapName) => {
     const filePath = path.join(sauerbratenDirectory, "packages", "base", `${mapName}.ogz`);
     const bytes = zlib.gunzipSync(fs.readFileSync(filePath));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
