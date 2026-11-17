@@ -70,6 +70,17 @@ describe("native bouncer physics", () => {
     expect(two.velocity).toEqual(one.velocity);
   });
 
+  it("keeps 5 ms grenade physics while publishing only one visual update per rendered frame", () => {
+    const { bouncers, events } = system(emptyWorld);
+    const owner = createDamageable("owner", { x: -100, y: 0, z: 10 });
+    const grenade = bouncers.spawnGrenade({ x: 0, y: 0, z: 10 }, { x: 80, y: 0, z: 10 }, owner);
+
+    bouncers.updatebouncers(100, [owner]);
+
+    expect(grenade.lifetime).toBe(1400);
+    expect(events.filter((event) => event.type === "bouncer-moved")).toHaveLength(1);
+  });
+
   it("uses the native reflection and energy-loss formula for a flat-ground bounce", () => {
     const world = planeWorld("z", 0, 1);
     const { bouncers } = system(world);

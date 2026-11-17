@@ -220,4 +220,51 @@ describe("Sauerbraten particle entity helpers", () => {
       fetchMock.mockRestore();
     }
   });
+
+  it("reuses pooled bouncer instances with shared geometry and reset transforms", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/bouncers") return new Response(JSON.stringify([{
+        index: 1, name: "gibs/gib01", status: "ready", format: "OBJ", geometryPath: "gib.obj", skins: [], scale: 1, reason: "",
+      }]));
+      if (url.includes("gib.obj")) return new Response("v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nf 1/1 2/2 3/3\n");
+      return new Response("not found", { status: 404 });
+    });
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+    renderer.loadMap([]);
+    const spawn = (key: string, position: { x: number; y: number; z: number }): void => events.emit({
+      type: "bouncer-spawned", key, id: 1, ownerId: "owner", bouncerType: 1, position,
+      velocity: { x: 0, y: 0, z: 0 }, variant: 0,
+    });
+
+    try {
+      spawn("first", { x: 1, y: 2, z: 3 });
+      await vi.waitFor(() => expect(scene.meshes.some((mesh) => mesh.name.startsWith("bouncer-first"))).toBe(true));
+      events.emit({
+        type: "bouncer-moved", key: "first", position: { x: 4, y: 5, z: 6 }, velocity: { x: 0, y: 0, z: 0 },
+        yaw: 20, roll: 30, smoke: false, fade: 0.5,
+      });
+      scene.render();
+      const first = scene.meshes.find((mesh) => mesh.name.startsWith("bouncer-first"))!;
+      const firstId = first.uniqueId;
+      expect(first.getClassName()).toBe("InstancedMesh");
+      expect(first.position.asArray()).toEqual([4, 6, 5]);
+      expect(first.instancedBuffers.color.a).toBe(0.5);
+
+      events.emit({ type: "bouncer-removed", key: "first" });
+      spawn("second", { x: 8, y: 9, z: 10 });
+      await vi.waitFor(() => expect(scene.meshes.some((mesh) => mesh.name.startsWith("bouncer-second"))).toBe(true));
+      scene.render();
+      const second = scene.meshes.find((mesh) => mesh.name.startsWith("bouncer-second"))!;
+      expect(second.uniqueId).toBe(firstId);
+      expect(second.scaling.asArray()).toEqual([1, 1, 1]);
+      expect(second.instancedBuffers.color.a).toBe(1);
+    } finally {
+      renderer.clear();
+      engine.dispose();
+      fetchMock.mockRestore();
+    }
+  });
 });

@@ -12,6 +12,7 @@ import { Space } from "@babylonjs/core/Maths/math.axis";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+import type { InstancedMesh } from "@babylonjs/core/Meshes/instancedMesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import type { Particle } from "@babylonjs/core/Particles/particle";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
@@ -71,8 +72,15 @@ interface ProjectileEffect {
 }
 
 interface BouncerEffect {
-  meshes: Mesh[];
+  meshes: InstancedMesh[];
   position: Vec3;
+  rotation: Quaternion;
+  modelIndex: number;
+  yaw: number;
+  roll: number;
+  fade: number;
+  smoke: boolean;
+  dirty: boolean;
 }
 
 interface ParticleOptions {
@@ -108,6 +116,7 @@ const MAX_POOLED_PARTICLE_SYSTEMS = 16;
 const MAX_POOLED_SPRITES = 64;
 const MAX_POOLED_BEAMS = 128;
 const PARTICLE_LAYER_MASK = 0x0fffffff;
+const BOUNCER_PREWARM_CAPACITY = [32, 96, 96, 96, 32, 32, 32, 32, 8, 8, 8, 8] as const;
 
 const EXPLOSION_VERTEX_SHADER = `
   precision highp float;
@@ -201,10 +210,12 @@ export class ParticleRenderer {
   private readonly decals: SpriteEffect[] = [];
   private readonly projectiles = new Map<string, ProjectileEffect>();
   private readonly bouncers = new Map<string, BouncerEffect>();
+  private readonly bouncerMeshPools = new Map<number, InstancedMesh[][]>();
   private bouncerTemplates?: Promise<Map<number, Mesh[]>>;
   private bulletMaterial?: ShaderMaterial;
   private templateGeneration = 0;
   private renderingEnabled = true;
+  private updateRegistered = false;
   private decalQuality = loadDecalQuality();
 
   constructor(private readonly scene: Scene, events: WeaponEvents, private readonly playerCamera: Camera,
@@ -216,7 +227,10 @@ export class ParticleRenderer {
   loadMap(entities: readonly RegisteredMapEntity[]): void {
     this.clear();
     entities.filter((entity) => entity.typeName === "particles").forEach((entity) => this.createMapEmitter(entity));
-    this.scene.onBeforeRenderObservable.add(() => this.update());
+    if (!this.updateRegistered) {
+      this.scene.onBeforeRenderObservable.add(() => this.update());
+      this.updateRegistered = true;
+    }
   }
 
   setRenderingEnabled(enabled: boolean): void {
@@ -280,6 +294,10 @@ export class ParticleRenderer {
     this.effects.forEach((effect) => this.disposeEffect(effect, false));
     this.effects.length = 0;
     this.decals.length = 0;
+    this.bouncers.forEach((bouncer) => bouncer.meshes.forEach((mesh) => mesh.dispose()));
+    this.bouncers.clear();
+    this.bouncerMeshPools.forEach((pool) => pool.forEach((meshes) => meshes.forEach((mesh) => mesh.dispose())));
+    this.bouncerMeshPools.clear();
     this.persistentMeshes.forEach((mesh) => this.disposeMesh(mesh));
     this.persistentMeshes.clear();
     this.projectiles.forEach((projectile) => {
@@ -287,8 +305,6 @@ export class ParticleRenderer {
       projectile.light?.dispose();
     });
     this.projectiles.clear();
-    this.bouncers.forEach((bouncer) => bouncer.meshes.forEach((mesh) => mesh.dispose(false, false)));
-    this.bouncers.clear();
     this.bouncerTemplates = undefined;
     this.templateGeneration++;
     this.systemPool.forEach(({ system }) => system.dispose(false));
@@ -527,38 +543,96 @@ export class ParticleRenderer {
   private async spawnBouncer(key: string, type: number, variant: number, position: Vec3): Promise<void> {
     const modelIndex = type === 0 ? 0 : type === 1 ? 1 + variant : type === 2 ? 4 + variant : 8 + variant;
     if (this.bouncers.has(key)) return;
-    const effect: BouncerEffect = { meshes: [], position: { ...position } };
+    const effect: BouncerEffect = {
+      meshes: [], position: { ...position }, rotation: Quaternion.Identity(), modelIndex, yaw: 0, roll: 0, fade: 1,
+      smoke: false, dirty: true,
+    };
     this.bouncers.set(key, effect);
     const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates(this.templateGeneration));
     if (this.bouncers.get(key) !== effect) return;
-    const meshes = (templates.get(modelIndex) ?? []).map((template) => {
-      const mesh = template.clone(`bouncer-${key}-${template.name}`, null, false)!;
-      mesh.setEnabled(true);
-      mesh.isVisible = this.renderingEnabled;
-      mesh.position.copyFrom(toBabylonPosition(effect.position));
-      mesh.isPickable = false;
-      return mesh;
-    });
-    effect.meshes = meshes;
+    effect.meshes = this.acquireBouncerMeshes(modelIndex, templates);
+    effect.meshes.forEach((mesh, index) => { mesh.name = `bouncer-${key}-${modelIndex}-${index}`; });
+    effect.dirty = true;
   }
 
   private moveBouncer(key: string, position: Vec3, yaw: number, roll: number, smoke: boolean, fade: number): void {
     const bouncer = this.bouncers.get(key);
     if (!bouncer) return;
-    bouncer.position = { ...position };
-    const rotation = Quaternion.RotationYawPitchRoll(-yaw * Math.PI / 180, roll * Math.PI / 180, 0);
-    bouncer.meshes.forEach((mesh) => {
-      mesh.position.copyFrom(toBabylonPosition(position));
-      mesh.rotationQuaternion = rotation;
-      mesh.visibility = fade;
-    });
-    if (smoke) this.splash(position, "smoke.png", 0x404040, 2.4, 1, 150, 50, -20);
+    bouncer.position.x = position.x;
+    bouncer.position.y = position.y;
+    bouncer.position.z = position.z;
+    bouncer.yaw = yaw;
+    bouncer.roll = roll;
+    bouncer.fade = fade;
+    bouncer.smoke ||= smoke;
+    bouncer.dirty = true;
   }
 
   private removeBouncer(key: string): void {
     const bouncer = this.bouncers.get(key);
-    bouncer?.meshes.forEach((mesh) => mesh.dispose(false, false));
+    if (bouncer) this.releaseBouncerMeshes(bouncer.modelIndex, bouncer.meshes);
     this.bouncers.delete(key);
+  }
+
+  private acquireBouncerMeshes(modelIndex: number, templates: Map<number, Mesh[]>): InstancedMesh[] {
+    const pool = this.bouncerMeshPools.get(modelIndex);
+    const meshes = pool?.pop() ?? this.createBouncerMeshGroup(modelIndex, templates);
+    meshes.forEach((mesh) => {
+      mesh.position.setAll(0);
+      mesh.rotation.setAll(0);
+      mesh.rotationQuaternion ??= Quaternion.Identity();
+      mesh.rotationQuaternion.set(0, 0, 0, 1);
+      mesh.scaling.setAll(1);
+      mesh.instancedBuffers.color ??= new Color4(1, 1, 1, 1);
+      mesh.instancedBuffers.color.set(1, 1, 1, 1);
+      mesh.isVisible = this.renderingEnabled;
+      mesh.isPickable = false;
+      mesh.setEnabled(true);
+    });
+    return meshes;
+  }
+
+  private createBouncerMeshGroup(modelIndex: number, templates: Map<number, Mesh[]>): InstancedMesh[] {
+    return (templates.get(modelIndex) ?? []).map((template, index) => {
+      const mesh = template.createInstance(`bouncer-pooled-${modelIndex}-${index}`);
+      mesh.isPickable = false;
+      mesh.setEnabled(false);
+      return mesh;
+    });
+  }
+
+  private releaseBouncerMeshes(modelIndex: number, meshes: InstancedMesh[]): void {
+    if (!meshes.length) return;
+    meshes.forEach((mesh) => {
+      mesh.setEnabled(false);
+      mesh.isVisible = false;
+      mesh.position.setAll(0);
+      mesh.rotation.setAll(0);
+      mesh.rotationQuaternion?.set(0, 0, 0, 1);
+      mesh.scaling.setAll(1);
+      mesh.instancedBuffers.color?.set(1, 1, 1, 1);
+    });
+    let pool = this.bouncerMeshPools.get(modelIndex);
+    if (!pool) this.bouncerMeshPools.set(modelIndex, pool = []);
+    pool.push(meshes);
+  }
+
+  private scheduleBouncerPrewarm(templates: Map<number, Mesh[]>, generation: number): void {
+    const remaining: number[] = [];
+    BOUNCER_PREWARM_CAPACITY.forEach((capacity, modelIndex) => {
+      if (!templates.get(modelIndex)?.length) return;
+      for (let index = 0; index < capacity; index++) remaining.push(modelIndex);
+    });
+    let next = 0;
+    const warmNext = (): void => {
+      if (generation !== this.templateGeneration) return;
+      const modelIndex = remaining[next++];
+      if (modelIndex === undefined) return;
+      const meshes = this.createBouncerMeshGroup(modelIndex, templates);
+      this.releaseBouncerMeshes(modelIndex, meshes);
+      setTimeout(warmNext, 0);
+    };
+    setTimeout(warmNext, 0);
   }
 
   private async loadBouncerTemplates(generation: number): Promise<Map<number, Mesh[]>> {
@@ -618,6 +692,7 @@ export class ParticleRenderer {
           this.materials.set(materialKey, material);
         }
         mesh.material = material;
+        mesh.registerInstancedBuffer("color", 4);
         mesh.setEnabled(false);
         mesh.isPickable = false;
         this.persistentMeshes.add(mesh);
@@ -625,6 +700,7 @@ export class ParticleRenderer {
       });
       result.set(asset.index, meshes);
     }));
+    if (generation === this.templateGeneration) this.scheduleBouncerPrewarm(result, generation);
     return result;
   }
 
@@ -1056,6 +1132,7 @@ export class ParticleRenderer {
   }
 
   private update(): void {
+    this.updateBouncerVisuals();
     const now = performance.now();
     for (let index = this.effects.length - 1; index >= 0; index--) {
       const effect = this.effects[index];
@@ -1089,6 +1166,25 @@ export class ParticleRenderer {
       if (this.systemPool.length < MAX_POOLED_PARTICLE_SYSTEMS) {
         this.systemPool.push({ system, capacity: system.getCapacity(), tiled: system.isAnimationSheetEnabled });
       } else system.dispose(false);
+    });
+  }
+
+  private updateBouncerVisuals(): void {
+    this.bouncers.forEach((bouncer) => {
+      if (bouncer.dirty) {
+        Quaternion.RotationYawPitchRollToRef(-bouncer.yaw * Math.PI / 180, bouncer.roll * Math.PI / 180, 0, bouncer.rotation);
+        bouncer.meshes.forEach((mesh) => {
+          mesh.position.set(bouncer.position.x, bouncer.position.z, bouncer.position.y);
+          mesh.rotationQuaternion!.copyFrom(bouncer.rotation);
+          mesh.instancedBuffers.color.set(1, 1, 1, bouncer.fade);
+          mesh.isVisible = this.renderingEnabled;
+        });
+        bouncer.dirty = false;
+      }
+      if (bouncer.smoke) {
+        this.splash(bouncer.position, "smoke.png", 0x404040, 2.4, 1, 150, 50, -20);
+        bouncer.smoke = false;
+      }
     });
   }
 
