@@ -206,6 +206,55 @@ describe("Sauerbraten particle entity helpers", () => {
     engine.dispose();
   });
 
+  it("batches all same-shot shotgun impacts into one GPU spark burst", () => {
+    const engine = new NullEngine();
+    engine.getCaps().supportTransformFeedbacks = true;
+    const scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined, undefined, {
+      particleBackend: "gpu", particleQuality: "high",
+    });
+    const rays = [{ x: 10, y: 0, z: 0 }, { x: 10, y: 1, z: 0 }, { x: 10, y: -1, z: 0 }];
+
+    events.emit({ type: "shot-effect", gun: Gun.Shotgun, from: { x: 0, y: 0, z: 0 }, to: rays[0], rays });
+
+    expect(scene.particleSystems).toHaveLength(1);
+    const sparks = scene.particleSystems[0] as GPUParticleSystem;
+    expect(sparks.getCapacity()).toBe(60);
+    expect(sparks.manualEmitCount).toBe(60);
+    expect(renderer.getParticleStats()).toMatchObject({ activeEmitters: 3, gpuBatches: 1 });
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("reuses an expired GPU impact system instead of rebuilding its particle buffers", () => {
+    const engine = new NullEngine();
+    engine.getCaps().supportTransformFeedbacks = true;
+    const scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined, undefined, {
+      particleBackend: "gpu", particleQuality: "high",
+    });
+    const shot = {
+      type: "shot-effect" as const, gun: Gun.Pistol, from: { x: 0, y: 0, z: 0 }, to: { x: 10, y: 0, z: 0 }, rays: [],
+    };
+
+    events.emit(shot);
+    const first = scene.particleSystems[0] as GPUParticleSystem;
+    const internals = renderer as unknown as {
+      systemExpiresAt: Map<GPUParticleSystem, number>;
+      update: () => void;
+    };
+    internals.systemExpiresAt.set(first, 0);
+    internals.update();
+    events.emit(shot);
+
+    expect(scene.particleSystems.filter((system) => system === first)).toHaveLength(1);
+    expect(first.manualEmitCount).toBe(200);
+    renderer.clear();
+    engine.dispose();
+  });
+
   it("projects bullet decals onto the map collision surface", () => {
     const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
     const camera = new FreeCamera("camera", Vector3.Zero(), scene);

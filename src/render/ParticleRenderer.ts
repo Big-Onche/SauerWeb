@@ -66,6 +66,7 @@ interface PooledParticleSystem {
   tiled: boolean;
   backend: ResolvedParticleBackend;
   recipe: string;
+  batchData?: { update: RawTexture; render: RawTexture };
 }
 
 type CosmeticParticleSystem = ParticleSystem | GPUParticleSystem;
@@ -258,6 +259,7 @@ export class ParticleRenderer {
   private readonly pendingMapEmitters: MapParticleEmitter[] = [];
   private readonly originalSystemRender = new Map<CosmeticParticleSystem, CosmeticParticleRender>();
   private readonly systemPool: PooledParticleSystem[] = [];
+  private readonly systemBatchData = new Map<CosmeticParticleSystem, { update: RawTexture; render: RawTexture }>();
   private readonly spritePool: Mesh[] = [];
   private readonly beamPool: Mesh[] = [];
   private readonly fireballPools: [Mesh[], Mesh[]] = [[], []];
@@ -517,6 +519,7 @@ export class ParticleRenderer {
     this.systemRecipes.clear();
     this.systemExpiresAt.clear();
     this.systemEmitterCounts.clear();
+    this.systemBatchData.clear();
     this.pendingMapEmitters.length = 0;
     this.originalSystemRender.clear();
     this.effects.forEach((effect) => this.disposeEffect(effect, false));
@@ -687,10 +690,10 @@ export class ParticleRenderer {
     const muzzle = taggedMuzzle?.() ?? this.muzzlePosition(from, to);
     if (gun === Gun.Shotgun) {
       endpoints.forEach((endpoint) => {
-        this.sparks(endpoint, 20, 250);
         this.beam(muzzle, endpoint, "flare.jpg", 0xffc864, 0.28, 300);
         this.bulletDecal(from, endpoint, 2);
       });
+      this.sparks(endpoints, 20, 250);
       this.muzzleFlash(muzzle, "muzzleflash3.jpg", 2.75, 200, 30, taggedMuzzle);
     } else if (gun === Gun.Chaingun || gun === Gun.Pistol) {
       this.sparks(endpoints[0], 200, 250);
@@ -1077,8 +1080,82 @@ export class ParticleRenderer {
     mesh.rotate(normal, angle + Math.PI, Space.WORLD);
   }
 
-  private sparks(position: Vec3, count: number, fadeMs: number): void {
-    this.splash(position, "spark.png", 0xb49b4b, 0.24, count, fadeMs, 150, 2, true);
+  private sparks(position: Vec3 | readonly Vec3[], count: number, fadeMs: number): void {
+    const positions = Array.isArray(position) ? position : [position];
+    if (this.particleBackend === "gpu" && positions.length > 1) {
+      this.gpuSparkBatch(positions, count, fadeMs);
+      return;
+    }
+    this.splash(positions[0], "spark.png", 0xb49b4b, 0.24, count, fadeMs, 150, 2, true);
+  }
+
+  private gpuSparkBatch(positions: readonly Vec3[], countPerEmitter: number, fadeMs: number): void {
+    const maximumFade = fadeMs * 3;
+    const options: ParticleOptions = {
+      texture: "spark.png", color: 0xb49b4b, size: 0.24, fadeMinMs: 1, fadeMaxMs: maximumFade,
+      velocityRadius: 150, gravity: 2, additive: true,
+    };
+    const emitters = positions.map((position, index): MapParticleEmitter => ({ name: `impact-${index}`, position, options }));
+    const capacity = positions.length * countPerEmitter;
+    const recipe = `spark-batch:${positions.length}:${countPerEmitter}:${fadeMs}`;
+    const pooledIndex = this.systemPool.findIndex((entry) => entry.backend === "gpu" && entry.recipe === recipe &&
+      entry.capacity === capacity && entry.batchData !== undefined);
+    const pooled = pooledIndex >= 0 ? this.systemPool.splice(pooledIndex, 1)[0] : undefined;
+    const system = pooled?.system as GPUParticleSystem | undefined ?? new GPUParticleSystem(`weapon-spark-batch-${positions.length}`, {
+      capacity, randomTextureSize: Math.min(4_096, Math.max(256, capacity)), emitRateControl: true,
+    }, this.scene);
+    const emitterData = this.mapEmitterData(emitters);
+    let batchData = pooled?.batchData;
+    if (batchData) {
+      batchData.update.update(emitterData);
+      batchData.render.update(emitterData);
+    } else {
+      const update = RawTexture.CreateRGBATexture(emitterData, positions.length, 7, this.scene, false, false,
+        Texture.NEAREST_SAMPLINGMODE, Constants.TEXTURETYPE_FLOAT);
+      const render = RawTexture.CreateRGBATexture(emitterData, positions.length, 7, this.scene, false, false,
+        Texture.NEAREST_SAMPLINGMODE, Constants.TEXTURETYPE_FLOAT);
+      update.name = `${system.name}-update-data`;
+      render.name = `${system.name}-render-data`;
+      batchData = { update, render };
+      this.batchDataTextures.add(update);
+      this.systemBatchData.set(system, batchData);
+      const emitter = new CustomParticleEmitter();
+      emitter.particlePositionGenerator = (index, _particle, target) => {
+        const emitterIndex = Math.min(positions.length - 1, Math.floor(index / countPerEmitter));
+        target.set((emitterIndex + 0.5) / positions.length, 0, 0);
+      };
+      emitter.particleDestinationGenerator = (_index, _particle, target) => target.setAll(0);
+      system.particleEmitterType = emitter;
+      system.flowMap = update;
+      system.flowMapStrength = positions.length;
+      (system as GPUParticleSystem & { _colorGradientsTexture: RawTexture })._colorGradientsTexture = render;
+      const fillDefines = system.fillDefines.bind(system);
+      system.fillDefines = (defines, blendMode, fillImageProcessing): void => {
+        fillDefines(defines, blendMode, fillImageProcessing);
+        defines.push("#define SAUER_BATCH");
+      };
+      system.emitter = Vector3.Zero();
+      system.particleTexture = this.particleTexture("spark.png");
+      system.minSize = system.maxSize = 1;
+      system.minScaleX = system.maxScaleX = 1;
+      system.minScaleY = system.maxScaleY = 1;
+      system.minLifeTime = 0.001;
+      system.maxLifeTime = maximumFade / 1_000;
+      system.gravity.setAll(0);
+      system.blendMode = ParticleSystem.BLENDMODE_ADD;
+      system.updateSpeed = 1 / 60;
+      system.maxActiveParticleCount = capacity;
+    }
+    system.name = `weapon-spark-batch-${positions.length}`;
+    system.layerMask = this.renderingEnabled ? PARTICLE_LAYER_MASK : 0;
+    system.manualEmitCount = capacity;
+    system.emitRate = Math.max(1, capacity * 60);
+    system.start();
+    this.systems.add(system);
+    this.systemRecipes.set(system, recipe);
+    this.systemEmitterCounts.set(system, positions.length);
+    this.systemExpiresAt.set(system, performance.now() + maximumFade + 50);
+    this.instrumentParticleSystem(system);
   }
 
   private splash(position: Vec3, texture: ParticleTexture, color: number, size: number, count: number, fadeMs: number,
@@ -1401,7 +1478,8 @@ export class ParticleRenderer {
       emitRateControl: true,
     }, this.scene, undefined, tiled);
     system.name = name;
-    system.reset();
+    // A pooled GPU burst retains its transform-feedback buffers. Re-emission overwrites the active slots without rebuilding them.
+    if (!pooled) system.reset();
     system.layerMask = this.renderingEnabled ? PARTICLE_LAYER_MASK : 0;
     system.particleTexture = this.particleTexture(options.texture);
     system.emitter = toBabylonPosition(position);
@@ -1712,7 +1790,7 @@ export class ParticleRenderer {
       this.systemExpiresAt.delete(system);
       this.systemEmitterCounts.delete(system);
       system.stop();
-      system.reset();
+      if (system instanceof ParticleSystem) system.reset();
       if (this.systemPool.length < MAX_POOLED_PARTICLE_SYSTEMS) {
         this.systemPool.push({
           system,
@@ -1720,9 +1798,11 @@ export class ParticleRenderer {
           tiled: system.isAnimationSheetEnabled,
           backend: system instanceof GPUParticleSystem ? "gpu" : "cpu",
           recipe,
+          batchData: this.systemBatchData.get(system),
         });
       } else {
         this.originalSystemRender.delete(system);
+        this.systemBatchData.delete(system);
         system.dispose(false);
       }
     });
