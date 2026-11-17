@@ -13,6 +13,13 @@ interface RenderInstrumentation {
   readonly scene?: SceneInstrumentation;
 }
 
+export interface StaticRenderStats {
+  readonly visibleChunks: number;
+  readonly totalChunks: number;
+  readonly worldDrawCalls: number;
+  readonly mapModelDrawCalls: number;
+}
+
 export interface RenderPassSample {
   readonly name: string;
   readonly drawCalls: number;
@@ -50,7 +57,10 @@ export class RenderStatsOverlay {
 
   constructor(private readonly container: HTMLElement, private readonly engine: Engine, private readonly scene: Scene,
               private readonly instrumentation: () => RenderInstrumentation,
-              private readonly visibilityChanged: (visible: boolean) => void) {
+              private readonly visibilityChanged: (visible: boolean) => void,
+              private readonly staticStats: () => StaticRenderStats = () => ({
+                visibleChunks: 0, totalChunks: 0, worldDrawCalls: 0, mapModelDrawCalls: 0,
+              })) {
     this.element = document.createElement("pre");
     this.element.className = "render-stats-overlay";
     this.element.setAttribute("aria-label", "Real-time rendering statistics");
@@ -76,7 +86,7 @@ export class RenderStatsOverlay {
     this.renderTimeTotal += renderTime;
     this.drawCallTotal += sceneInstrumentation?.drawCallsCounter.current ?? 0;
     this.triangleTotal += Math.floor(this.scene.getActiveIndices() / 3);
-    this.vertexTotal += this.scene.getTotalVertices();
+    this.vertexTotal += this.scene.getActiveIndices();
     if (this.showPasses) for (const pass of passes) {
       let total = this.passTotals.get(pass.name);
       if (!total) {
@@ -122,6 +132,7 @@ export class RenderStatsOverlay {
     const instrumentation = this.instrumentation();
     const activeMeshes = this.scene.getActiveMeshes().length;
     const activeResources = this.activeResources();
+    const staticStats = this.staticStats();
     const gpuNanoseconds = instrumentation.engine?.captureGPUFrameTime
       ? instrumentation.engine.gpuFrameTimeCounter.lastSecAverage || instrumentation.engine.gpuFrameTimeCounter.current
       : 0;
@@ -141,7 +152,9 @@ Vertices         ${formatCount(average(this.vertexTotal))}
 Meshes           ${formatCount(activeMeshes)} / ${formatCount(this.scene.meshes.length)}
 Materials        ${formatCount(activeResources.materials)}
 Textures         ${formatCount(activeResources.textures)}
-Chunks           N/A
+Static Chunks    ${formatCount(staticStats.visibleChunks)} / ${formatCount(staticStats.totalChunks)}
+World Draws      ${formatCount(staticStats.worldDrawCalls)}
+Mapmodel Draws   ${formatCount(staticStats.mapModelDrawCalls)}
 
 JS Heap          ${heapBytes === undefined ? "N/A" : `${(heapBytes / (1024 * 1024)).toFixed(0)} MB`}${passBreakdown}`;
     this.resetSamples(now);
@@ -151,6 +164,7 @@ JS Heap          ${heapBytes === undefined ? "N/A" : `${(heapBytes / (1024 * 102
     let result = "\n\nPASS           DRAWS     TRI   PREP   DRAW  MESHES";
     for (const [name, total] of this.passTotals) {
       const average = (value: number): number => value / this.sampleCount;
+      if (name !== "Main" && total.drawCalls === 0 && total.triangles === 0 && total.cpuTime === 0 && total.meshes === 0) continue;
       const prepare = Math.max(0, average(total.cpuTime - total.drawCpuTime));
       result += `\n${name.padEnd(13)}${formatCount(average(total.drawCalls)).padStart(6)}${formatCount(average(total.triangles)).padStart(8)}` +
         `${prepare.toFixed(1).padStart(7)}${average(total.drawCpuTime).toFixed(1).padStart(7)}${formatCount(average(total.meshes)).padStart(8)}`;

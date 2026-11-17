@@ -205,7 +205,8 @@ function createModelMesh(scene: Scene, source: ModelGeometryMesh, asset: MapMode
   mesh.position.copyFrom(toBabylonPosition(entity.position));
   const yaw = (entity.orientation?.yawDegrees ?? 0) + (asset.yaw ?? 0);
   mesh.rotationQuaternion = Quaternion.RotationYawPitchRoll(-yaw * Math.PI / 180, -(asset.pitch ?? 0) * Math.PI / 180, 0);
-  mesh.metadata = { entityIndex: entity.index, entityType: entity.typeName, mapModelIndex: asset.index, mapModelName: asset.name };
+  mesh.metadata = { entityIndex: entity.index, entityType: entity.typeName, mapModelIndex: asset.index, mapModelName: asset.name,
+    mapModelMeshName: source.name };
   mesh.isPickable = true;
   if (!animated) mesh.freezeWorldMatrix();
   return mesh;

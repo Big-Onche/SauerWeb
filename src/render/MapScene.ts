@@ -20,6 +20,7 @@ import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import { Scene } from "@babylonjs/core/scene";
+import "@babylonjs/core/Culling/Octrees/octreeSceneComponent";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
@@ -79,6 +80,8 @@ import { TouchControls } from "../platform/browser/TouchControls";
 import { KillFeed } from "../platform/browser/KillFeed";
 import { MinimapHUD, minimapRadiusFromGeometry } from "../platform/browser/MinimapHUD";
 import { RenderStatsOverlay, type RenderPassSample } from "../platform/browser/RenderStatsOverlay";
+import { loadEngineSettings } from "./EngineSettings";
+import { buildStaticWorldChunks, staticChunkId, type StaticGeometryBatch } from "./StaticWorldChunks";
 import { expandProjectedBounds, mergeProjectedBounds, projectWorldBounds, projectedBoundsIntersect, projectedBoundsToScissor,
   type PixelScissor, type ProjectedBounds } from "./ReflectionBounds";
 
@@ -196,9 +199,9 @@ export class MapScene {
   private readonly mainPass = createRenderPassAccumulator("Main");
   private readonly reflectionPass = createRenderPassAccumulator("Reflection");
   private readonly refractionPass = createRenderPassAccumulator("Refraction");
-  private readonly renderPasses = [this.mainPass, this.reflectionPass, this.refractionPass];
+  private readonly otherPass = createRenderPassAccumulator("Post/Other");
+  private readonly renderPasses = [this.mainPass, this.reflectionPass, this.refractionPass, this.otherPass];
   private activeRenderPass?: RenderPassAccumulator;
-  private frameDrawCallsStartedAt = 0;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
   private readonly collectRenderer: CollectRenderer;
@@ -246,6 +249,10 @@ export class MapScene {
   private readonly entityMeshes: Mesh[] = [];
   private readonly entityMaterials = new Map<string, StandardMaterial>();
   private readonly mapModelMeshes: Mesh[] = [];
+  private readonly staticWorldMeshes: Mesh[] = [];
+  private readonly staticChunkIds = new Set<string>();
+  private staticChunkSize = 128;
+  private staticHierarchyReady = false;
   private mapModelResources?: MapModelResources;
   private readonly waypointMeshes: Mesh[] = [];
   private lastWaypointDebugUpdate = 0;
@@ -293,6 +300,10 @@ export class MapScene {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
     installSauerFogDistance();
     this.scene = new Scene(this.engine);
+    this.scene.onNewMeshAddedObservable.add((mesh) => {
+      const octree = this.scene.selectionOctree;
+      if (this.staticHierarchyReady && octree && !octree.dynamicContent.includes(mesh)) octree.dynamicContent.push(mesh);
+    });
     this.materialCache = new MaterialCache(this.scene);
     this.scene.useRightHandedSystem = true;
     this.scene.clearColor = new Color4(0.055, 0.067, 0.06, 1);
@@ -319,13 +330,21 @@ export class MapScene {
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
     this.renderStatsOverlay = new RenderStatsOverlay(viewport, this.engine, this.scene,
-      () => ({ engine: this.engineInstrumentation, scene: this.sceneInstrumentation }), this.setRenderStatsEnabled);
+      () => ({ engine: this.engineInstrumentation, scene: this.sceneInstrumentation }), this.setRenderStatsEnabled,
+      this.collectStaticRenderStats);
     this.scene.onBeforeDrawPhaseObservable.add(() => {
-      if (this.renderStatsOverlay.detailed) this.mainPass.drawStartedAt = performance.now();
+      if (!this.renderStatsOverlay.detailed) return;
+      this.mainPass.drawStartedAt = performance.now();
+      this.mainPass.drawCallsStartedAt = this.engine._drawCalls.current;
+      this.mainPass.indicesStartedAt = this.scene.getActiveIndices();
     });
     this.scene.onAfterDrawPhaseObservable.add(() => {
       if (this.renderStatsOverlay.detailed && this.mainPass.drawStartedAt) {
         this.mainPass.drawCpuTime += performance.now() - this.mainPass.drawStartedAt;
+        this.mainPass.drawCalls += this.engine._drawCalls.current - this.mainPass.drawCallsStartedAt;
+        const indices = this.scene.getActiveIndices() - this.mainPass.indicesStartedAt;
+        this.mainPass.triangles += Math.floor(indices / 3);
+        this.mainPass.vertices += indices;
       }
     });
     this.touchControls = new TouchControls(viewport, this.physicsInput, this.weaponInput);
@@ -457,6 +476,7 @@ export class MapScene {
                 mapModels: MapModelAsset[] = [], teleporter?: MapModelAsset, mapSounds: MapSoundAsset[] = [],
                 pickupModels: MapModelAsset[] = [], progress?: (fraction: number, text: string) => void): Promise<SceneStats> {
     const generation = ++this.loadGeneration;
+    this.staticHierarchyReady = false;
     progress?.(0, "clearing world...");
     this.currentMap = map;
     this.waterParameters = resolveMapWater(map, waterOverrides);
@@ -483,6 +503,8 @@ export class MapScene {
     this.entityMaterials.forEach((material) => material.dispose());
     this.entityMaterials.clear();
     this.mapModelMeshes.length = 0;
+    this.staticWorldMeshes.length = 0;
+    this.staticChunkIds.clear();
     this.waypointMeshes.length = 0;
     this.entityModelAnimations.length = 0;
     this.materialCache.dispose();
@@ -506,14 +528,21 @@ export class MapScene {
     this.gameAudio.setMap(map.entityRegistry, mapSounds);
     await this.bots.setMap(map.name, map.entityRegistry, this.localGameMode);
     progress?.(0.08, "loading octree...");
-    const { batches, materialBatches } = this.profiler.measure("mapGeometry", () => ({
-      batches: generateGeometry(map, textures, this.engine.getCaps().uintIndices ? (textureIndex, cubeMaterial, lightmapId, useLightmapAlpha) => {
+    const uintIndices = this.engine.getCaps().uintIndices;
+    this.staticChunkSize = loadEngineSettings().staticChunkSize;
+    const { batches, materialBatches } = this.profiler.measure("mapGeometry", () => {
+      const decodedBatches = generateGeometry(map, textures, uintIndices ? (textureIndex, cubeMaterial, lightmapId, useLightmapAlpha) => {
         const texture = textures[textureIndex];
         return texture ? sauerMaterialKey(describeSauerMaterial(texture, cubeMaterial, lightmapId, useLightmapAlpha))
           : `fallback:${cubeMaterial}:${lightmapId}:${useLightmapAlpha ? 1 : 0}`;
-      } : undefined),
-      materialBatches: generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug"),
-    }));
+      } : undefined);
+      return {
+        batches: this.runtimeMode === "game"
+          ? buildStaticWorldChunks(decodedBatches, this.staticChunkSize, uintIndices)
+          : decodedBatches,
+        materialBatches: generateMaterialGeometry(map, this.waterQuality, this.runtimeMode === "debug"),
+      };
+    });
     this.minimapHUD.setMinimapRadius(minimapRadiusFromGeometry(batches, map.header.worldSize));
     let faces = 0;
     let triangles = 0;
@@ -530,7 +559,7 @@ export class MapScene {
       VertexData.ComputeNormals(batch.positions, batch.indices, normals);
       vertexData.normals = normals;
       vertexData.tangents = computeTangents(batch.positions, normals, batch.uvs, batch.indices);
-      vertexData.applyToMesh(mesh, true);
+      vertexData.applyToMesh(mesh, false);
       const texture = textures[batch.textureIndex];
       mesh.material = texture
         ? this.materialCache.get(describeSauerMaterial(texture, batch.cubeMaterial, batch.lightmapId, batch.useLightmapAlpha))
@@ -538,7 +567,15 @@ export class MapScene {
       // Transparent meshes are sorted by alphaIndex before distance. World batches can span a whole root octant, so sorting their bounding
       // sphere against a water surface is unstable and may put a texture-blend layer on the wrong side of the water pass.
       if (batch.useLightmapAlpha) mesh.alphaIndex = 0;
+      if ("chunkId" in batch) {
+        const chunk = batch as StaticGeometryBatch;
+        mesh.metadata = { staticKind: "world", staticChunkId: chunk.chunkId };
+        mesh.isPickable = false;
+        this.staticWorldMeshes.push(mesh);
+        this.staticChunkIds.add(chunk.chunkId);
+      }
       mesh.freezeWorldMatrix();
+      mesh.geometry?.clearCachedData();
       faces += batch.faceCount;
       triangles += batch.indices.length / 3;
       vertices += batch.positions.length / 3;
@@ -578,7 +615,8 @@ export class MapScene {
     }
     this.mapModelResources = loadedMapModels.resources;
     this.physics.setMapModels(loadedMapModels.collisions);
-    this.mapModelMeshes.push(...loadedMapModels.meshes);
+    const renderedMapModels = this.runtimeMode === "game" ? this.consolidateStaticMapModels(loadedMapModels.meshes) : loadedMapModels.meshes;
+    this.mapModelMeshes.push(...renderedMapModels);
     this.entityModelAnimations.push(...loadedMapModels.animations);
     triangles += loadedMapModels.triangles;
     vertices += loadedMapModels.vertices;
@@ -592,12 +630,19 @@ export class MapScene {
     progress?.(0.78, "loading weapons...");
     const hudGunIssues = await this.weaponRenderer.loadHudGuns();
     if (this.runtimeMode === "game" && hudGunIssues.length) throw new Error(`Required HUD weapon failed to load: ${hudGunIssues[0]}`);
+    if (this.runtimeMode === "game") {
+      const octree = this.scene.createOrUpdateSelectionOctree(64, 4);
+      this.staticHierarchyReady = true;
+      for (const mesh of this.scene.meshes) {
+        if (mesh.alwaysSelectAsActiveMesh && !octree.dynamicContent.includes(mesh)) octree.dynamicContent.push(mesh);
+      }
+    }
     this.placeCamera(map, batches);
     this.fpsClient.multiplayer.synchronizeLocalState();
     this.syncPlayerView();
     progress?.(1, "world initialized");
     return {
-      meshes: batches.length + materialBatches.length + loadedMapModels.meshes.length,
+      meshes: batches.length + materialBatches.length + renderedMapModels.length,
       faces,
       triangles,
       vertices,
@@ -709,6 +754,69 @@ export class MapScene {
       if (mesh.material) mesh.material.wireframe = enabled;
     });
   }
+
+  /** Immutable gameplay mapmodels are baked into chunk-local buffers; entity collision and trigger records remain in PhysicsSimulation. */
+  private consolidateStaticMapModels(meshes: Mesh[]): Mesh[] {
+    const retained: Mesh[] = [];
+    const groups = new Map<Material, Map<string, { chunkId: string; meshes: Mesh[] }>>();
+    for (const mesh of meshes) {
+      const entityIndex = Number(mesh.metadata?.entityIndex);
+      const entity = this.currentMap?.entityRegistry.find((candidate) => candidate.index === entityIndex);
+      const material = mesh.material;
+      mesh.computeWorldMatrix(true);
+      const extent = mesh.getBoundingInfo().boundingBox.extendSizeWorld.scale(2);
+      const large = Math.max(extent.x, extent.y, extent.z) > this.staticChunkSize;
+      const alphaBlended = material?.transparencyMode === Material.MATERIAL_ALPHABLEND;
+      const eligible = entity?.typeName === "mapmodel" && entity.attributes[2] === 0 && Boolean(material);
+      if (!eligible || large || alphaBlended) {
+        if (eligible) {
+          mesh.metadata = { ...mesh.metadata, staticKind: "mapmodel" };
+          mesh.isPickable = false;
+        }
+        retained.push(mesh);
+        continue;
+      }
+      const chunkId = staticChunkId(entity.position, this.staticChunkSize);
+      const instanceKey = `${chunkId}:${String(mesh.metadata?.mapModelIndex)}:${String(mesh.metadata?.mapModelMeshName)}`;
+      let materialGroups = groups.get(material!);
+      if (!materialGroups) groups.set(material!, materialGroups = new Map());
+      const group = materialGroups.get(instanceKey) ?? { chunkId, meshes: [] };
+      group.meshes.push(mesh);
+      materialGroups.set(instanceKey, group);
+    }
+    for (const [material, materialGroups] of groups) for (const { chunkId, meshes: group } of materialGroups.values()) {
+      const mesh = group.length > 1
+        ? Mesh.MergeMeshes(group, true, this.engine.getCaps().uintIndices, undefined, false, false)
+        : group[0];
+      if (!mesh) {
+        retained.push(...group);
+        continue;
+      }
+      mesh.name = `static-mapmodels-${chunkId}-${material.name}`;
+      mesh.material = material;
+      mesh.metadata = { staticKind: "mapmodel", staticChunkId: chunkId };
+      mesh.isPickable = false;
+      mesh.freezeWorldMatrix();
+      mesh.geometry?.clearCachedData();
+      this.staticChunkIds.add(chunkId);
+      retained.push(mesh);
+    }
+    return retained;
+  }
+
+  private readonly collectStaticRenderStats = () => {
+    const visibleChunks = new Set<string>();
+    let worldDrawCalls = 0, mapModelDrawCalls = 0;
+    const activeMeshes = this.scene.getActiveMeshes();
+    for (let index = 0; index < activeMeshes.length; index++) {
+      const metadata = activeMeshes.data[index].metadata;
+      const chunkId = metadata?.staticChunkId;
+      if (typeof chunkId === "string") visibleChunks.add(chunkId);
+      if (metadata?.staticKind === "world") worldDrawCalls++;
+      else if (metadata?.staticKind === "mapmodel") mapModelDrawCalls++;
+    }
+    return { visibleChunks: visibleChunks.size, totalChunks: this.staticChunkIds.size, worldDrawCalls, mapModelDrawCalls };
+  };
 
   setMaterialDebug(enabled: boolean): void {
     this.materialDebug = enabled;
@@ -1052,7 +1160,6 @@ export class MapScene {
     mesh.metadata = { debugOnly: batch.debugOnly, materialKind: batch.kind, materialIndex: batch.materialIndex,
       reflectionHeight: batch.reflectionHeight };
     mesh.isPickable = false;
-    mesh.alwaysSelectAsActiveMesh = true;
     mesh.freezeWorldMatrix();
     if (batch.waterLod) this.waterLodMeshes.push({ mesh, batch, signature: "" });
     if (batch.reflectionHeight !== undefined) {
@@ -1384,7 +1491,11 @@ export class MapScene {
       const transform = this.scene.getTransformMatrix();
       Frustum.GetPlanesToRef(transform, reflection.frustumPlanes);
       reflection.renderMeshes.length = 0;
-      for (const mesh of this.scene.meshes) {
+      const candidates = this.scene.selectionOctree?.select(reflection.frustumPlanes, false);
+      const candidateMeshes = candidates?.data ?? this.scene.meshes;
+      const candidateCount = candidates?.length ?? candidateMeshes.length;
+      for (let index = 0; index < candidateCount; index++) {
+        const mesh = candidateMeshes[index];
         if (!this.isWaterRenderTargetMesh(mesh) || !mesh.isInFrustum(reflection.frustumPlanes)) continue;
         if (!reflection.projectedBounds || mesh.infiniteDistance) {
           reflection.renderMeshes.push(mesh);
@@ -1568,7 +1679,11 @@ export class MapScene {
       const transform = this.scene.getTransformMatrix();
       Frustum.GetPlanesToRef(transform, this.waterRefractionFrustumPlanes);
       this.waterRefractionRenderMeshes.length = 0;
-      for (const mesh of this.scene.meshes) {
+      const candidates = this.scene.selectionOctree?.select(this.waterRefractionFrustumPlanes, false);
+      const candidateMeshes = candidates?.data ?? this.scene.meshes;
+      const candidateCount = candidates?.length ?? candidateMeshes.length;
+      for (let index = 0; index < candidateCount; index++) {
+        const mesh = candidateMeshes[index];
         if (!this.isWaterRenderTargetMesh(mesh) || !mesh.isInFrustum(this.waterRefractionFrustumPlanes)) continue;
         if (!this.waterRefractionProjectedBounds || mesh.infiniteDistance) {
           this.waterRefractionRenderMeshes.push(mesh);
@@ -1589,16 +1704,15 @@ export class MapScene {
 
   private beginRenderPassFrame(): void {
     for (const pass of this.renderPasses) resetRenderPass(pass);
-    this.frameDrawCallsStartedAt = this.engine._drawCalls.current;
   }
 
   private finishRenderPassFrame(cpuTime: number): void {
-    const targets = this.reflectionPass.drawCalls + this.refractionPass.drawCalls;
-    const targetTriangles = this.reflectionPass.triangles + this.refractionPass.triangles;
-    const targetVertices = this.reflectionPass.vertices + this.refractionPass.vertices;
-    this.mainPass.drawCalls = Math.max(0, this.engine._drawCalls.current - this.frameDrawCallsStartedAt - targets);
-    this.mainPass.triangles = Math.max(0, Math.floor(this.scene.getActiveIndices() / 3) - targetTriangles);
-    this.mainPass.vertices = Math.max(0, this.scene.getTotalVertices() - targetVertices);
+    const accountedDrawCalls = this.mainPass.drawCalls + this.reflectionPass.drawCalls + this.refractionPass.drawCalls;
+    const accountedTriangles = this.mainPass.triangles + this.reflectionPass.triangles + this.refractionPass.triangles;
+    const accountedVertices = this.mainPass.vertices + this.reflectionPass.vertices + this.refractionPass.vertices;
+    this.otherPass.drawCalls = Math.max(0, this.engine._drawCalls.current - accountedDrawCalls);
+    this.otherPass.triangles = Math.max(0, Math.floor(this.scene.getActiveIndices() / 3) - accountedTriangles);
+    this.otherPass.vertices = Math.max(0, this.scene.getActiveIndices() - accountedVertices);
     this.mainPass.cpuTime = Math.max(0, cpuTime - this.reflectionPass.cpuTime - this.refractionPass.cpuTime);
     this.mainPass.meshes = this.scene.getActiveMeshes().length;
   }
@@ -1609,7 +1723,7 @@ export class MapScene {
     pass.startedAt = performance.now();
     pass.drawCallsStartedAt = this.engine._drawCalls.current;
     pass.indicesStartedAt = this.scene.getActiveIndices();
-    pass.verticesStartedAt = this.scene.getTotalVertices();
+    pass.verticesStartedAt = this.scene.getActiveIndices();
   }
 
   private finishRenderPass(pass: RenderPassAccumulator): void {
@@ -1617,7 +1731,7 @@ export class MapScene {
     pass.cpuTime += performance.now() - pass.startedAt;
     pass.drawCalls += this.engine._drawCalls.current - pass.drawCallsStartedAt;
     pass.triangles += Math.floor((this.scene.getActiveIndices() - pass.indicesStartedAt) / 3);
-    pass.vertices += this.scene.getTotalVertices() - pass.verticesStartedAt;
+    pass.vertices += this.scene.getActiveIndices() - pass.verticesStartedAt;
     this.activeRenderPass = undefined;
   }
 

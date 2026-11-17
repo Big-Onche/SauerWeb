@@ -83,6 +83,8 @@ app.innerHTML = `
               <span>crosshair..</span></button>
             <button type="button" data-action="touch-settings"><img src="/api/packages/icons/menu.jpg" alt="" />
               <span>controls..</span></button>
+            <button type="button" data-action="options"><img src="/api/packages/icons/menu.jpg" alt="" />
+              <span>options..</span></button>
             <button type="button" data-action="scoreboard"><img src="/api/packages/icons/menu.jpg" alt="" /><span>scoreboard</span></button>
             <button type="button" data-action="menu"><img src="/api/packages/icons/exit.jpg" alt="" /><span>main menu</span></button>
           </div>
@@ -169,6 +171,7 @@ required<HTMLButtonElement>("[data-action='touch-settings']").addEventListener("
   touchSettingsDialog.showModal();
   syncTouchControls();
 });
+required<HTMLButtonElement>("[data-action='options']").addEventListener("click", () => location.assign("/options"));
 required<HTMLButtonElement>("[data-action='scoreboard']").addEventListener("click", () => scene.showTouchScoreboard());
 required<HTMLButtonElement>("[data-action='close-touch-settings']").addEventListener("click", () => touchSettingsDialog.close());
 crosshairDialog.addEventListener("close", syncTouchControls);

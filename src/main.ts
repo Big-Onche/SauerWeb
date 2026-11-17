@@ -16,13 +16,14 @@ import { sauerFormattedMarkup } from "./sauerFormatting";
 import { TEAMKILL_PROTECTION_MESSAGE } from "./fpsgame/teamkillProtection";
 import { loadWaterQuality, saveWaterQuality, waterQualityLabel, type WaterQuality } from "./render/WaterSettings";
 import { decalQualityLabel, loadDecalQuality, saveDecalQuality, type DecalQuality } from "./render/DecalSettings";
+import { loadEngineSettings, saveEngineSettings, STATIC_CHUNK_SIZES, staticChunkSizeLabel } from "./render/EngineSettings";
 
 interface MapListItem {
   name: string;
   supported: boolean;
 }
 
-const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "binds", "console"] as const;
+const OPTION_TABS = ["game", "hud", "gfx", "display", "res", "sound", "mouse", "binds", "engine", "console"] as const;
 type OptionTab = typeof OPTION_TABS[number];
 
 const EXPERIMENTAL_DISCLAIMER_KEY = "sauerweb.experimental-disclaimer-dismissed";
@@ -364,6 +365,13 @@ function renderOptionsMenu(activeTab: OptionTab = "game"): void {
     const output = document.querySelector<HTMLOutputElement>("output[for='decal-quality']");
     if (output) output.value = decalQualityLabel(quality);
   });
+  const staticChunkSize = document.querySelector<HTMLInputElement>("#static-chunk-size");
+  staticChunkSize?.addEventListener("input", () => {
+    const size = STATIC_CHUNK_SIZES[Number(staticChunkSize.value)] ?? STATIC_CHUNK_SIZES[2];
+    saveEngineSettings({ staticChunkSize: size });
+    const output = document.querySelector<HTMLOutputElement>("output[for='static-chunk-size']");
+    if (output) output.value = staticChunkSizeLabel(size);
+  });
   document.querySelector<HTMLButtonElement>("[data-action='open-crosshair']")?.addEventListener("click", () => {
     navigate("/");
     document.querySelector<HTMLButtonElement>("[data-action='crosshair']")?.click();
@@ -416,6 +424,15 @@ function optionTabMarkup(tab: OptionTab, showFps: boolean): string {
     optionInfo("1–7 / wheel", "select weapon"),
     optionInfo("T / Y", "chat / team chat"), optionInfo("F11", "console"), optionInfo("Escape", "pause"),
   ]);
+  if (tab === "engine") {
+    const settings = loadEngineSettings();
+    const chunkIndex = Math.max(0, STATIC_CHUNK_SIZES.indexOf(settings.staticChunkSize));
+    return optionGroup("engine", [
+      optionSlider("static world chunk size", "static-chunk-size", chunkIndex, 0, STATIC_CHUNK_SIZES.length - 1,
+        staticChunkSizeLabel(settings.staticChunkSize)),
+      optionNote("Smaller chunks improve spatial culling but can increase draw calls. The setting applies when the next map loads."),
+    ]);
+  }
   return optionGroup("console", [
     optionInfo("F11", "open full console"), optionInfo("Page Up / Page Down", "scroll console"),
     optionInfo("/", "enter command"), optionNote("The in-game console reports map, network and gameplay messages."),
