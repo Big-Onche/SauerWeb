@@ -175,7 +175,33 @@ describe("Sauerbraten particle entity helpers", () => {
 
     expect(scene.particleSystems).toHaveLength(1);
     expect(scene.particleSystems[0]).toBeInstanceOf(GPUParticleSystem);
+    const batch = scene.particleSystems[0] as GPUParticleSystem;
+    expect(batch.manualEmitCount).toBe(batch.getCapacity());
+    expect(batch.emitRateControl).toBe(false);
+    expect(ShaderStore.ShadersStore.gpuUpdateParticlesVertexShader).toContain("outLife=sauerFadeLife");
+    expect(ShaderStore.ShadersStore.gpuUpdateParticlesVertexShader).not.toContain("outLife=sauer2.w");
     expect(renderer.getParticleStats()).toMatchObject({ backend: "GPU", activeEmitters: 292, gpuBatches: 1 });
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("emits GPU impact sparks once instead of recycling the burst", () => {
+    const engine = new NullEngine();
+    engine.getCaps().supportTransformFeedbacks = true;
+    const scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined, undefined, {
+      particleBackend: "gpu", particleQuality: "high",
+    });
+
+    events.emit({
+      type: "shot-effect", gun: Gun.Pistol, from: { x: 0, y: 0, z: 0 }, to: { x: 10, y: 0, z: 0 }, rays: [],
+    });
+
+    expect(scene.particleSystems).toHaveLength(1);
+    const sparks = scene.particleSystems[0] as GPUParticleSystem;
+    expect(sparks.emitRateControl).toBe(true);
+    expect(sparks.manualEmitCount).toBe(200);
     renderer.clear();
     engine.dispose();
   });

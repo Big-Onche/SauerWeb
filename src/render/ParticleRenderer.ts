@@ -7,6 +7,7 @@ import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { Material } from "@babylonjs/core/Materials/material";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { RawTexture } from "@babylonjs/core/Materials/Textures/rawTexture";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Space } from "@babylonjs/core/Maths/math.axis";
@@ -124,6 +125,9 @@ interface ParticleOptions {
   texture: ParticleTexture;
   color: number;
   size: number;
+  minSize?: number;
+  maxSize?: number;
+  endSize?: number;
   fadeMinMs: number;
   fadeMaxMs: number;
   rate?: number;
@@ -132,6 +136,8 @@ interface ParticleOptions {
   direction?: Vector3;
   spread?: number;
   speed?: number;
+  minSpeed?: number;
+  maxSpeed?: number;
   velocityRadius?: number;
   velocityBox?: number;
   gravity?: number;
@@ -256,6 +262,7 @@ export class ParticleRenderer {
   private readonly beamPool: Mesh[] = [];
   private readonly fireballPools: [Mesh[], Mesh[]] = [[], []];
   private readonly textures = new Map<string, Texture>();
+  private readonly batchDataTextures = new Set<RawTexture>();
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly persistentMeshes = new Set<Mesh>();
   private readonly effects: SpriteEffect[] = [];
@@ -548,6 +555,8 @@ export class ParticleRenderer {
     });
     this.textures.forEach((texture) => texture.dispose());
     this.textures.clear();
+    this.batchDataTextures.forEach((texture) => texture.dispose());
+    this.batchDataTextures.clear();
   }
 
   private createMapEmitter(entity: RegisteredMapEntity): void {
@@ -1127,31 +1136,43 @@ export class ParticleRenderer {
     const system = new GPUParticleSystem(`map-particle-batch-${options.texture}-${this.systems.size}`, {
       capacity,
       randomTextureSize: Math.min(4_096, Math.max(256, capacity)),
-      emitRateControl: true,
+      emitRateControl: false,
     }, this.scene, undefined, tiled);
-    const owner = new Uint16Array(capacity);
-    const positions = emitters.map((emitter) => toBabylonPosition(emitter.position));
-    for (let slot = 0; slot < capacity; slot++) owner[slot] = slot % emitters.length;
+    const owner = this.mapEmitterSlotOwners(emitters, capacity);
+    const emitterData = this.mapEmitterData(emitters);
+    const updateDataTexture = RawTexture.CreateRGBATexture(emitterData, emitters.length, 7, this.scene, false, false,
+      Texture.NEAREST_SAMPLINGMODE, Constants.TEXTURETYPE_FLOAT);
+    const renderDataTexture = RawTexture.CreateRGBATexture(emitterData, emitters.length, 7, this.scene, false, false,
+      Texture.NEAREST_SAMPLINGMODE, Constants.TEXTURETYPE_FLOAT);
+    updateDataTexture.name = `${system.name}-update-data`;
+    renderDataTexture.name = `${system.name}-render-data`;
+    this.batchDataTextures.add(updateDataTexture);
     const emitter = new CustomParticleEmitter();
+    const assigned = new Uint32Array(emitters.length);
+    const totals = emitters.map((definition) => this.mapEmitterCapacity(definition.options));
     emitter.particlePositionGenerator = (index, _particle, target) => {
-      const definition = emitters[owner[index]].options;
-      const center = positions[owner[index]];
-      const low = definition.emitBoxMin ?? new Vector3(-(definition.radius ?? 0), 0, -(definition.radius ?? 0));
-      const high = definition.emitBoxMax ?? new Vector3(definition.radius ?? 0, 0, definition.radius ?? 0);
-      target.set(center.x + randomRange(low.x, high.x), center.y + randomRange(low.y, high.y), center.z + randomRange(low.z, high.z));
+      const emitterIndex = owner[index];
+      const phase = assigned[emitterIndex]++ / Math.max(1, totals[emitterIndex]);
+      target.set((emitterIndex + 0.5) / emitters.length, phase, 0);
     };
-    emitter.particleDestinationGenerator = (index, _particle, target) => this.gpuInitialVelocity(emitters[owner[index]].options, target);
+    emitter.particleDestinationGenerator = (_index, _particle, target) => target.setAll(0);
     system.particleEmitterType = emitter;
+    system.flowMap = updateDataTexture;
+    system.flowMapStrength = emitters.length;
+    (system as GPUParticleSystem & { _colorGradientsTexture: RawTexture })._colorGradientsTexture = renderDataTexture;
+    const fillDefines = system.fillDefines.bind(system);
+    system.fillDefines = (defines, blendMode, fillImageProcessing): void => {
+      fillDefines(defines, blendMode, fillImageProcessing);
+      defines.push("#define SAUER_BATCH");
+    };
     system.emitter = Vector3.Zero();
     system.particleTexture = this.particleTexture(options.texture);
-    const color = particleColor4(options.color, 1);
-    system.color1.copyFrom(color);
-    system.color2.copyFrom(color);
-    system.colorDead.copyFrom(particleColor4(options.color, 0));
-    system.minSize = system.maxSize = sauerParticleDiameter(options.size);
-    system.minLifeTime = Math.max(0.001, options.fadeMinMs / 1_000);
-    system.maxLifeTime = Math.max(system.minLifeTime, options.fadeMaxMs / 1_000);
-    system.gravity.set(0, options.gravity ? -200 / options.gravity : 0, 0);
+    system.minSize = system.maxSize = 1;
+    system.minScaleX = system.maxScaleX = 1;
+    system.minScaleY = system.maxScaleY = 1;
+    system.minLifeTime = Math.min(...emitters.map((definition) => Math.max(0.001, definition.options.fadeMinMs / 1_000)));
+    system.maxLifeTime = Math.max(...emitters.map((definition) => Math.max(0.001, definition.options.fadeMaxMs / 1_000)));
+    system.gravity.setAll(0);
     system.blendMode = options.additive ? ParticleSystem.BLENDMODE_ADD : ParticleSystem.BLENDMODE_STANDARD;
     system.updateSpeed = 1 / 60;
     system.layerMask = this.renderingEnabled ? PARTICLE_LAYER_MASK : 0;
@@ -1166,13 +1187,10 @@ export class ParticleRenderer {
       system.spriteCellLoop = false;
       system.spriteRandomStartCell = true;
     }
-    system.addColorGradient(0, particleColor4(options.color, 1));
-    system.addColorGradient(0.75, particleColor4(options.color, 1));
-    system.addColorGradient(1, particleColor4(options.color, 0));
-    system.addSizeGradient(0, 1);
-    system.addSizeGradient(1, 1);
     system.maxActiveParticleCount = capacity;
-    system.manualEmitCount = -1;
+    // Seed the entire steady-state population in one update. The custom shader applies a deterministic per-emitter phase,
+    // so legacy recycling remains evenly staggered instead of filling the batch in periodic clumps.
+    system.manualEmitCount = capacity;
     system.emitRate = emitters.reduce((total, definition) => total + (definition.options.rate ?? 10), 0);
     system.start();
     this.systems.add(system);
@@ -1181,34 +1199,86 @@ export class ParticleRenderer {
     this.instrumentParticleSystem(system);
   }
 
-  private gpuInitialVelocity(options: ParticleOptions, target: Vector3): void {
+  private mapEmitterData(emitters: readonly MapParticleEmitter[]): Float32Array {
+    const rowCount = 7, componentCount = 4;
+    const data = new Float32Array(emitters.length * rowCount * componentCount);
+    const write = (emitter: number, row: number, x: number, y: number, z: number, w: number): void => {
+      const offset = (row * emitters.length + emitter) * componentCount;
+      data[offset] = x;
+      data[offset + 1] = y;
+      data[offset + 2] = z;
+      data[offset + 3] = w;
+    };
+    emitters.forEach((definition, index) => {
+      const options = definition.options;
+      const position = toBabylonPosition(definition.position);
+      const { low: velocityLow, high: velocityHigh, mode } = this.gpuVelocityBounds(options);
+      const boxLow = options.emitBoxMin ?? new Vector3(-(options.radius ?? 0), 0, -(options.radius ?? 0));
+      const boxHigh = options.emitBoxMax ?? new Vector3(options.radius ?? 0, 0, options.radius ?? 0);
+      const color = particleColor4(options.color, 1);
+      const minimumSize = sauerParticleDiameter(options.minSize ?? options.size);
+      const maximumSize = sauerParticleDiameter(options.maxSize ?? options.size);
+      const endSize = sauerParticleDiameter(options.endSize ?? options.size);
+      write(index, 0, position.x, position.y, position.z, mode);
+      write(index, 1, velocityLow.x, velocityLow.y, velocityLow.z, Math.max(0.001, options.fadeMinMs / 1_000));
+      write(index, 2, velocityHigh.x, velocityHigh.y, velocityHigh.z, Math.max(0.001, options.fadeMaxMs / 1_000));
+      write(index, 3, options.gravity ? -200 / options.gravity : 0, minimumSize, maximumSize, endSize);
+      write(index, 4, color.r, color.g, color.b, color.a);
+      write(index, 5, boxLow.x, boxLow.y, boxLow.z, options.rate ?? 10);
+      write(index, 6, boxHigh.x, boxHigh.y, boxHigh.z, 0);
+    });
+    return data;
+  }
+
+  private mapEmitterSlotOwners(emitters: readonly MapParticleEmitter[], capacity: number): Uint16Array {
+    const counts = emitters.map((emitter) => this.mapEmitterCapacity(emitter.options));
+    const assigned = new Uint32Array(emitters.length);
+    const owners = new Uint16Array(capacity);
+    for (let slot = 0; slot < capacity; slot++) {
+      let selected = 0, selectedScore = Number.NEGATIVE_INFINITY;
+      for (let emitter = 0; emitter < emitters.length; emitter++) {
+        if (assigned[emitter] >= counts[emitter]) continue;
+        const score = (slot + 1) * counts[emitter] / capacity - assigned[emitter];
+        if (score > selectedScore) {
+          selected = emitter;
+          selectedScore = score;
+        }
+      }
+      owners[slot] = selected;
+      assigned[selected]++;
+    }
+    return owners;
+  }
+
+  private gpuVelocityBounds(options: ParticleOptions): { low: Vector3; high: Vector3; mode: number } {
     if (options.velocityRadius !== undefined) {
-      target.copyFrom(toBabylonDirection(randomSphereVector(options.velocityRadius))).scaleInPlace(0.2);
-      return;
+      const radius = options.velocityRadius / 5;
+      return { low: new Vector3(-radius, -radius, -radius), high: new Vector3(radius, radius, radius), mode: 1 };
     }
     if (options.velocityBox !== undefined) {
       const radius = options.velocityBox / 5;
-      target.set(randomRange(-radius, radius), randomRange(-radius, radius), randomRange(-radius, radius));
-      return;
+      return { low: new Vector3(-radius, -radius, -radius), high: new Vector3(radius, radius, radius), mode: 2 };
     }
     const direction = options.direction ?? Vector3.Up();
     const spread = options.spread ?? 0;
-    const scale = (options.speed ?? 0) / 5;
-    target.set(randomRange(direction.x - spread, direction.x + spread) * scale,
-      randomRange(direction.y - spread, direction.y + spread) * scale,
-      randomRange(direction.z - spread, direction.z + spread) * scale);
+    const minimumSpeed = (options.minSpeed ?? options.speed ?? 0) / 5;
+    const maximumSpeed = (options.maxSpeed ?? options.speed ?? 0) / 5;
+    return {
+      low: direction.subtract(new Vector3(spread, spread, spread)).scale(minimumSpeed),
+      high: direction.add(new Vector3(spread, spread, spread)).scale(maximumSpeed),
+      mode: 0,
+    };
   }
 
   private mapEmitterCapacity(options: ParticleOptions): number {
-    return Math.max(1, Math.ceil((options.rate ?? 10) * options.fadeMaxMs / 1_000));
+    const minimumLife = Math.max(1, options.fadeMinMs);
+    const maximumLife = Math.max(minimumLife, options.fadeMaxMs);
+    return Math.max(1, Math.ceil((options.rate ?? 10) * (minimumLife + maximumLife) / 2_000));
   }
 
   private mapBatchRecipe(options: ParticleOptions): string {
-    const vector = (value?: Vector3): string => value ? `${value.x},${value.y},${value.z}` : "";
-    return [options.texture, options.color, options.size, options.fadeMinMs, options.fadeMaxMs, options.rate ?? 10,
-      options.radius ?? 0, vector(options.direction), options.spread ?? 0, options.speed ?? 0, options.velocityRadius ?? "",
-      options.velocityBox ?? "", options.gravity ?? 0, options.additive ? 1 : 0, vector(options.emitBoxMin),
-      vector(options.emitBoxMax)].join(":");
+    const tiled = options.texture === "flames.png" || options.texture === "snow.png";
+    return `${options.texture}:${options.additive ? 1 : 0}:${tiled ? 1 : 0}`;
   }
 
   private particleSystem(name: string, position: Vec3, options: ParticleOptions): CosmeticParticleSystem | undefined {
@@ -1327,7 +1397,8 @@ export class ParticleRenderer {
     const system = pooled?.system as GPUParticleSystem | undefined ?? new GPUParticleSystem(name, {
       capacity,
       randomTextureSize: Math.min(4_096, Math.max(256, capacity)),
-      emitRateControl: options.count === undefined,
+      // Dynamic GPU systems are finite bursts. Emit-rate control prevents dead slots from being recycled after the one manual emission.
+      emitRateControl: true,
     }, this.scene, undefined, tiled);
     system.name = name;
     system.reset();
@@ -1922,18 +1993,88 @@ function enableBatchedCustomEmitterSimulation(): void {
   if (!source) throw new Error("Babylon's GPU particle update shader is unavailable.");
   const positionSource = "outPosition=position+(direction-position)*ageGradient;";
   const positionReplacement = "outPosition=position+direction*directionScale;";
+  const randomSource = "vec4 getRandomVec4(float offset) {return texture(randomSampler,vec2(float(gl_VertexID)*offset/currentCount,0));}";
+  const randomReplacement = `${randomSource}
+#ifdef CUSTOMEMITTER
+vec4 sauerEmitterData(float emitterU,float row) {return texture(flowMapSampler,vec2(emitterU,(row+0.5)/7.0));}
+#endif`;
+  const spawnSource = "newPosition=initialPosition;outInitialPosition=initialPosition;";
+  const spawnReplacement = `vec4 sauer0=sauerEmitterData(initialPosition.x,0.0);
+vec4 sauer1=sauerEmitterData(initialPosition.x,1.0);
+vec4 sauer2=sauerEmitterData(initialPosition.x,2.0);
+vec4 sauer3=sauerEmitterData(initialPosition.x,3.0);
+vec4 sauer5=sauerEmitterData(initialPosition.x,5.0);
+vec4 sauer6=sauerEmitterData(initialPosition.x,6.0);
+vec3 sauerRandomPosition=getRandomVec3(seed.y);
+vec3 sauerRandomVelocity=getRandomVec3(seed.z);
+newPosition=sauer0.xyz+mix(sauer5.xyz,sauer6.xyz,sauerRandomPosition);
+if (sauer0.w<0.5) {newDirection=mix(sauer1.xyz,sauer2.xyz,sauerRandomVelocity);}
+else if (sauer0.w<1.5) {
+vec3 sphereDirection=normalize(sauerRandomVelocity*2.0-1.0);
+newDirection=sphereDirection*pow(max(randoms.a,0.000001),1.0/3.0)*sauer2.x;
+} else {newDirection=mix(sauer1.xyz,sauer2.xyz,sauerRandomVelocity);}
+float sauerFadeLife=mix(sauer1.w,sauer2.w,randoms.r);
+outLife=sauerFadeLife;
+outAge=life<=0.0 ? initialPosition.y*outLife : 0.0;
+if (life<=0.0) {
+float sauerInitialGravity=sauer3.x;
+newPosition+=newDirection*outAge+vec3(0.0,0.5*sauerInitialGravity*outAge*outAge,0.0);
+newDirection+=vec3(0.0,sauerInitialGravity*outAge,0.0);
+}
+outSize=vec3(mix(sauer3.y,sauer3.z,randoms.g),initialPosition.x,sauerFadeLife);
+outInitialPosition=initialPosition;`;
+  const spawnDirectionSource = `#ifdef CUSTOMEMITTER
+outDirection=direction;
+#ifndef BILLBOARD`;
+  const spawnDirectionReplacement = `#ifdef CUSTOMEMITTER
+outDirection=newDirection;
+#ifndef BILLBOARD`;
   const gravitySource = `#ifdef CUSTOMEMITTER
 outDirection=direction;
 #else
 vec3 updatedDirection=direction+gravity*timeDelta;`;
   const gravityReplacement = `#ifdef CUSTOMEMITTER
-outDirection=direction+gravity*timeDelta;
+outDirection=direction+vec3(0.0,sauerEmitterData(initialPosition.x,3.0).x,0.0)*timeDelta;
 #else
 vec3 updatedDirection=direction+gravity*timeDelta;`;
-  const patched = source.replace(positionSource, positionReplacement).replace(gravitySource, gravityReplacement);
+  const patched = source.replace(randomSource, randomReplacement).replace(spawnSource, spawnReplacement)
+    .replace(spawnDirectionSource, spawnDirectionReplacement).replace(positionSource, positionReplacement)
+    .replace(gravitySource, gravityReplacement);
   if (patched === source) throw new Error("Babylon's GPU particle shader layout changed; batched emitter patch was not applied.");
   ShaderStore.ShadersStore[key] = patched;
+  patchBatchedParticleRenderShader();
   batchedCustomEmitterSimulationEnabled = true;
+}
+
+function patchBatchedParticleRenderShader(): void {
+  const key = "gpuRenderParticlesVertexShader";
+  const source = ShaderStore.ShadersStore[key];
+  if (!source) throw new Error("Babylon's GPU particle render shader is unavailable.");
+  const deadSource = "#endif\n#ifdef ANIMATESHEET\nfloat rowOffset=";
+  const deadReplacement = `#endif
+#ifdef SAUER_BATCH
+if (age>=size.z) {gl_Position=vec4(0.0,0.0,2.0,1.0);vColor=vec4(0.0);vUV=vec2(0.0);vPositionW=vec3(0.0);return;}
+#endif
+#ifdef ANIMATESHEET
+float rowOffset=`;
+  const colorSource = "vColor=texture2D(colorGradientSampler,vec2(ratio,0));";
+  const colorReplacement = `#ifdef SAUER_BATCH
+vec4 sauerColor=texture2D(colorGradientSampler,vec2(size.y,4.5/7.0));
+vColor=vec4(sauerColor.rgb,sauerColor.a*clamp((1.0-age/size.z)*4.0,0.0,1.0));
+#else
+vColor=texture2D(colorGradientSampler,vec2(ratio,0));
+#endif`;
+  const sizeSource = "vec2 cornerPos=(offset-translationPivot)*size.yz*size.x;";
+  const sizeReplacement = `#ifdef SAUER_BATCH
+float sauerEndSize=texture2D(colorGradientSampler,vec2(size.y,3.5/7.0)).w;
+vec2 cornerPos=(offset-translationPivot)*mix(size.x,sauerEndSize,min(1.0,age/size.z));
+#else
+vec2 cornerPos=(offset-translationPivot)*size.yz*size.x;
+#endif`;
+  const patched = source.replace(deadSource, deadReplacement).replace(colorSource, colorReplacement)
+    .replace(sizeSource, sizeReplacement);
+  if (patched === source) throw new Error("Babylon's GPU particle render shader layout changed; batching patch was not applied.");
+  ShaderStore.ShadersStore[key] = patched;
 }
 
 export function resolveParticleBackend(requested: ParticleBackend, gpuSupported = GPUParticleSystem.IsSupported): ResolvedParticleBackend {
