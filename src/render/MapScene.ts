@@ -78,6 +78,7 @@ import { DevToolsProfiler } from "../platform/browser/DevToolsProfiler";
 import { TouchControls } from "../platform/browser/TouchControls";
 import { KillFeed } from "../platform/browser/KillFeed";
 import { MinimapHUD, minimapRadiusFromGeometry } from "../platform/browser/MinimapHUD";
+import { RenderStatsOverlay } from "../platform/browser/RenderStatsOverlay";
 import { expandProjectedBounds, mergeProjectedBounds, projectWorldBounds, projectedBoundsIntersect, projectedBoundsToScissor,
   type PixelScissor, type ProjectedBounds } from "./ReflectionBounds";
 
@@ -177,6 +178,7 @@ export class MapScene {
   private readonly spectatorHUD: SpectatorHUD;
   private readonly killFeed: KillFeed;
   private readonly minimapHUD: MinimapHUD;
+  private readonly renderStatsOverlay: RenderStatsOverlay;
   private readonly playerRenderer: PlayerRenderer;
   private readonly ctfRenderer: CtfRenderer;
   private readonly collectRenderer: CollectRenderer;
@@ -296,6 +298,8 @@ export class MapScene {
     this.weaponInput = new BrowserWeaponInput(canvas, this.weapons.controller);
     const viewport = canvas.parentElement;
     if (!viewport) throw new Error("The weapon HUD requires a viewport parent.");
+    this.renderStatsOverlay = new RenderStatsOverlay(viewport, this.engine, this.scene,
+      () => ({ engine: this.engineInstrumentation, scene: this.sceneInstrumentation }), this.setRenderStatsEnabled);
     this.touchControls = new TouchControls(viewport, this.physicsInput, this.weaponInput);
     this.initializeRendererProfiling();
     this.physics.raycastPerformanceRecorder = (milliseconds) => this.profiler.recordRaycast(milliseconds);
@@ -395,11 +399,17 @@ export class MapScene {
         } finally {
           this.profiler.finish("sceneUpdate", sceneUpdateStartedAt);
         }
-        const sceneRenderStartedAt = this.profiler.start();
+        const measureSceneRender = this.profiler.enabled || this.renderStatsOverlay.visible;
+        const sceneRenderStartedAt = measureSceneRender ? performance.now() : 0;
         try {
           this.scene.render();
         } finally {
           this.profiler.finish("sceneRender", sceneRenderStartedAt);
+        }
+        if (this.renderStatsOverlay.visible) {
+          const sceneRenderFinishedAt = performance.now();
+          this.renderStatsOverlay.sample(this.engine.getDeltaTime(), sceneRenderStartedAt - frameStartedAt,
+            sceneRenderFinishedAt - sceneRenderStartedAt);
         }
         if (this.profiler.shouldSampleFrame()) this.sampleRendererDiagnostics();
       } finally {
@@ -851,6 +861,7 @@ export class MapScene {
     this.spectatorHUD.dispose();
     this.killFeed.dispose();
     this.minimapHUD.dispose();
+    this.renderStatsOverlay.dispose();
     this.canvas.removeEventListener("pointerdown", this.onSpectatorPointerDown, { capture: true });
     this.canvas.removeEventListener("contextmenu", this.onSpectatorContextMenu);
     window.removeEventListener("keydown", this.onSpectatorKeyDown, { capture: true });
@@ -1953,10 +1964,32 @@ export class MapScene {
 
   private initializeRendererProfiling(): void {
     if (!this.profiler.enabled) return;
-    this.sceneInstrumentation = new SceneInstrumentation(this.scene);
-    this.engineInstrumentation = new EngineInstrumentation(this.engine);
-    if (this.engine.getCaps().timerQuery) this.engineInstrumentation.captureGPUFrameTime = true;
+    this.enableRendererInstrumentation();
     this.installSceneProfilingObservers();
+  }
+
+  private readonly setRenderStatsEnabled = (enabled: boolean): void => {
+    if (enabled) {
+      this.enableRendererInstrumentation();
+      return;
+    }
+    if (this.profiler.enabled) return;
+    this.sceneInstrumentation?.dispose();
+    this.sceneInstrumentation = undefined;
+    this.engineInstrumentation?.dispose();
+    this.engineInstrumentation = undefined;
+  };
+
+  private enableRendererInstrumentation(): void {
+    this.sceneInstrumentation ??= new SceneInstrumentation(this.scene);
+    this.engineInstrumentation ??= new EngineInstrumentation(this.engine);
+    if (this.engine.getCaps().timerQuery) {
+      try {
+        this.engineInstrumentation.captureGPUFrameTime = true;
+      } catch {
+        // Some WebGL fallback paths expose the extension but not a usable query implementation.
+      }
+    }
   }
 
   private installSceneProfilingObservers(): void {
