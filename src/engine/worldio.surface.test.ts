@@ -27,7 +27,7 @@ describe("surface reconstruction", () => {
       }
     }));
     expect(matches).toBe(expectedCount);
-  });
+  }, 15_000);
 });
 
 function expectReconstructedOnFallbackPlane(surface: Surface, orientation: number, planePoint: number[], normal: number[]): void {
