@@ -7,6 +7,7 @@ import "@babylonjs/core/Engines/Extensions/engine.query";
 import { EngineInstrumentation } from "@babylonjs/core/Instrumentation/engineInstrumentation";
 import { SceneInstrumentation } from "@babylonjs/core/Instrumentation/sceneInstrumentation";
 import { Constants } from "@babylonjs/core/Engines/constants";
+import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { RenderTargetTexture } from "@babylonjs/core/Materials/Textures/renderTargetTexture";
@@ -248,13 +249,21 @@ export class MapScene {
   private drawPhaseStartedAt = 0;
   private readonly botUpdatePlayers: Damageable[] = [];
   private readonly dynamicCollisionEntities: DynamicEntityCollision[] = [];
+  private sessionPrewarm?: { mode: number; multiplayer: boolean; mobile: boolean };
+  private contextRestorePrewarm?: Promise<void>;
   private readonly onWaterQualityChanged = (event: Event): void => {
     const quality = (event as CustomEvent<WaterQuality>).detail;
-    if (quality >= 0 && quality <= 3) this.setWaterQuality(quality);
+    if (quality >= 0 && quality <= 3) {
+      this.setWaterQuality(quality);
+      this.queueRenderCacheRebuild();
+    }
   };
   private readonly onDecalQualityChanged = (event: Event): void => {
     const quality = (event as CustomEvent<DecalQuality>).detail;
-    if (quality >= 0 && quality <= 4) this.particleRenderer.setDecalQuality(quality);
+    if (quality >= 0 && quality <= 4) {
+      this.particleRenderer.setDecalQuality(quality);
+      this.queueRenderCacheRebuild();
+    }
   };
 
   constructor(canvas: HTMLCanvasElement, readonly runtimeMode: RuntimeMode) {
@@ -265,6 +274,9 @@ export class MapScene {
     this.materialCache = new MaterialCache(this.scene);
     this.scene.useRightHandedSystem = true;
     this.scene.clearColor = new Color4(0.055, 0.067, 0.06, 1);
+    this.engine.onContextRestoredObservable.add(() => {
+      this.queueRenderCacheRebuild();
+    });
     window.addEventListener(WATER_QUALITY_CHANGED, this.onWaterQualityChanged);
     window.addEventListener(DECAL_QUALITY_CHANGED, this.onDecalQualityChanged);
 
@@ -557,29 +569,92 @@ export class MapScene {
   async preloadSession(mode: number, playerModel: number, multiplayer: boolean, mapSounds: readonly MapSoundAsset[],
                        progress?: (fraction: number, text: string) => void): Promise<void> {
     progress?.(0, "preloading game assets...");
+    const mobile = isMemoryConstrainedDevice();
+    this.sessionPrewarm = { mode, multiplayer, mobile };
     const jobs: Array<Promise<void>> = [
       this.playerRenderer.preload(playerModel, gameModeHas(mode, GameModeFlag.Team), multiplayer,
-        (complete, total, label) => progress?.(0.05 + 0.45 * complete / total, `loading player model ${label}...`)),
+        (complete, total, label) => progress?.(0.05 + 0.38 * complete / total, `loading player model ${label}...`)),
       this.gameAudio.preload(mode, mapSounds,
-        (complete, total, path) => progress?.(0.5 + 0.25 * complete / total, path)),
+        (complete, total, path) => progress?.(0.43 + 0.2 * complete / total, path)),
     ];
     if (gameModeHas(mode, GameModeFlag.Ctf)) jobs.push(this.ctfRenderer.preload(gameModeHas(mode, GameModeFlag.Hold)));
     if (gameModeHas(mode, GameModeFlag.Capture)) jobs.push(this.captureRenderer.preload());
     if (gameModeHas(mode, GameModeFlag.Collect)) jobs.push(this.collectRenderer.preload());
     await Promise.all(jobs);
-    progress?.(0.78, "compiling shaders...");
-    const compiled = new Set<Material>();
-    await Promise.all(this.scene.meshes.map(async (mesh) => {
-      const material = mesh.material;
-      if (!material || compiled.has(material)) return;
-      compiled.add(material);
-      await material.forceCompilationAsync(mesh);
-    }));
-    progress?.(0.92, "uploading textures...");
+    progress?.(0.64, "preparing combat effects...");
+    await this.particleRenderer.prewarmCombatEffects(mode, multiplayer, mobile,
+      (fraction, detail) => progress?.(0.64 + 0.2 * fraction, detail));
+    progress?.(0.84, "compiling scene shaders...");
+    await this.compileSceneMaterialVariants((fraction, detail) => progress?.(0.84 + 0.05 * fraction, detail));
+    await this.compileDynamicLightVariants(
+      (fraction, detail) => progress?.(0.89 + 0.07 * fraction, detail));
+    progress?.(0.96, "uploading textures...");
     await this.scene.whenReadyAsync(true);
     this.scene.render();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     progress?.(1, "ready");
+  }
+
+  private async compileSceneMaterialVariants(progress?: (fraction: number, detail: string) => void, litOnly = false): Promise<void> {
+    const variants: Array<{ material: Material; mesh: AbstractMesh; useInstances: boolean }> = [];
+    const signatures = new Map<Material, Set<string>>();
+    for (const mesh of this.scene.meshes) {
+      const material = mesh.material;
+      if (!material || !mesh.getTotalVertices()) continue;
+      if (litOnly && (!(material instanceof StandardMaterial) || material.disableLighting)) continue;
+      const vertexKinds = ["position", "normal", "tangent", "uv", "uv2", "color", "matricesIndices", "matricesWeights"]
+        .filter((kind) => mesh.isVerticesDataPresent(kind)).join(",");
+      const base = `${vertexKinds}|bones:${mesh.skeleton ? mesh.numBoneInfluencers : 0}|morph:${mesh.morphTargetManager?.numInfluencers ?? 0}`;
+      const add = (useInstances: boolean): void => {
+        let materialSignatures = signatures.get(material);
+        if (!materialSignatures) signatures.set(material, materialSignatures = new Set<string>());
+        const signature = `${base}|instances:${useInstances ? 1 : 0}`;
+        if (materialSignatures.has(signature)) return;
+        materialSignatures.add(signature);
+        variants.push({ material, mesh, useInstances });
+      };
+      add(false);
+      if (mesh instanceof Mesh && mesh.instances.length) add(true);
+    }
+    for (let index = 0; index < variants.length; index++) {
+      const { material, mesh, useInstances } = variants[index];
+      const frozen = material.isFrozen;
+      if (frozen) material.unfreeze();
+      await material.forceCompilationAsync(mesh, { useInstances });
+      if (frozen) material.freeze();
+      progress?.((index + 1) / Math.max(1, variants.length), `${material.name}${useInstances ? " (instances)" : ""}`);
+      if (index % 6 === 5) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  }
+
+  private async rebuildRenderCaches(session: { mode: number; multiplayer: boolean; mobile: boolean }): Promise<void> {
+    await this.particleRenderer.prewarmCombatEffects(session.mode, session.multiplayer, session.mobile);
+    await this.compileSceneMaterialVariants();
+    await this.compileDynamicLightVariants();
+    await this.scene.whenReadyAsync(true);
+  }
+
+  private async compileDynamicLightVariants(progress?: (fraction: number, detail: string) => void): Promise<void> {
+    const prewarmLights: PointLight[] = [];
+    try {
+      for (let lightCount = 1; lightCount <= 4; lightCount++) {
+        const light = new PointLight(`combat-prewarm-light-${lightCount}`, this.playerCamera.globalPosition, this.scene);
+        light.range = 64;
+        prewarmLights.push(light);
+        await this.compileSceneMaterialVariants(
+          (fraction, detail) => progress?.((lightCount - 1 + fraction) / 4, `${detail}, ${lightCount} dynamic light(s)`), true);
+      }
+    } finally {
+      prewarmLights.forEach((light) => light.dispose());
+    }
+  }
+
+  private queueRenderCacheRebuild(): void {
+    const session = this.sessionPrewarm;
+    if (!session || this.contextRestorePrewarm) return;
+    this.contextRestorePrewarm = this.rebuildRenderCaches(session)
+      .catch((error: unknown) => console.warn("Could not rebuild render caches after a renderer change.", error))
+      .finally(() => { this.contextRestorePrewarm = undefined; });
   }
 
   setWireframe(enabled: boolean): void {
@@ -2802,4 +2877,9 @@ function engineObserverCount(engine: Engine): number {
   return engine.onBeginFrameObservable.observers.length + engine.onEndFrameObservable.observers.length +
     engine.onResizeObservable.observers.length + engine.onContextLostObservable.observers.length +
     engine.onContextRestoredObservable.observers.length + engine.onDisposeObservable.observers.length;
+}
+
+function isMemoryConstrainedDevice(): boolean {
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  return (memory !== undefined && memory <= 4) || navigator.maxTouchPoints > 0 && matchMedia("(any-pointer: coarse)").matches;
 }

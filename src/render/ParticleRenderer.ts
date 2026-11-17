@@ -26,6 +26,7 @@ import { parseIqm, parseMd2, parseMd3, parseMd5, parseObj, type ModelGeometry } 
 import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
 import type { WeaponEvent, WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { projectileRenderPose, projectileVisualPosition } from "../fpsgame/weapon/ProjectileSystem";
+import { GameModeFlag, gameModeHas } from "../fpsgame/game";
 import { toBabylonDirection, toBabylonPosition } from "./coordinates";
 import { DECAL_QUALITY_SETTINGS, loadDecalQuality, type DecalQuality } from "./DecalSettings";
 import { selectModelSkin } from "./modelSkin";
@@ -40,13 +41,12 @@ interface SpriteEffect {
   duration: number;
   startScale: number;
   endScale: number;
-  reusableMesh?: "sprite" | "beam";
+  reusableMesh?: "sprite" | "beam" | "fireball-red" | "fireball-blue";
   light?: PointLight;
   track?: () => Vec3 | undefined;
   update?: (progress: number) => void;
   fadeMesh?: boolean;
   fadeStart?: number;
-  ownedMaterial?: Material;
 }
 
 export interface DecalSurface {
@@ -67,8 +67,20 @@ interface ProjectileEffect {
   direction: Vec3;
   offset: Vec3;
   offsetMillis: number;
-  meshes: Mesh[];
+  meshes: InstancedMesh[];
   light?: PointLight;
+}
+
+interface ExplosionMeshMetadata {
+  center: Vector3;
+  color: Color3;
+  fade: number;
+}
+
+export interface CombatPrewarmReport {
+  variants: string[];
+  materials: number;
+  pooledMeshes: number;
 }
 
 interface BouncerEffect {
@@ -115,8 +127,8 @@ const SAUER_EMIT_MILLIS = 17;
 const MAX_POOLED_PARTICLE_SYSTEMS = 16;
 const MAX_POOLED_SPRITES = 64;
 const MAX_POOLED_BEAMS = 128;
+const MAX_POOLED_FIREBALLS = 12;
 const PARTICLE_LAYER_MASK = 0x0fffffff;
-const BOUNCER_PREWARM_CAPACITY = [32, 96, 96, 96, 32, 32, 32, 32, 8, 8, 8, 8] as const;
 
 const EXPLOSION_VERTEX_SHADER = `
   precision highp float;
@@ -203,6 +215,7 @@ export class ParticleRenderer {
   private readonly systemPool: PooledParticleSystem[] = [];
   private readonly spritePool: Mesh[] = [];
   private readonly beamPool: Mesh[] = [];
+  private readonly fireballPools: [Mesh[], Mesh[]] = [[], []];
   private readonly textures = new Map<string, Texture>();
   private readonly materials = new Map<string, StandardMaterial>();
   private readonly persistentMeshes = new Set<Mesh>();
@@ -213,6 +226,8 @@ export class ParticleRenderer {
   private readonly bouncerMeshPools = new Map<number, InstancedMesh[][]>();
   private bouncerTemplates?: Promise<Map<number, Mesh[]>>;
   private bulletMaterial?: ShaderMaterial;
+  private readonly fireballMaterials: Array<ShaderMaterial | undefined> = [undefined, undefined];
+  private fireballTemplate?: Mesh;
   private templateGeneration = 0;
   private renderingEnabled = true;
   private updateRegistered = false;
@@ -250,6 +265,103 @@ export class ParticleRenderer {
     this.decalQuality = quality;
     const maximum = DECAL_QUALITY_SETTINGS[quality].maximum;
     while (this.decals.length > maximum) this.removeDecal(this.decals[0]);
+  }
+
+  /** Prepares only combat variants reachable in the selected mode. All helper meshes remain disabled. */
+  async prewarmCombatEffects(mode: number, multiplayer: boolean, mobile: boolean,
+                             progress?: (fraction: number, detail: string) => void): Promise<CombatPrewarmReport> {
+    const generation = this.templateGeneration;
+    const guns = combatGunsForMode(mode, multiplayer);
+    const variants = combatVariantNames(guns, this.decalQuality > 0);
+    const compilationMesh = MeshBuilder.CreatePlane("combat-prewarm-plane", { size: 1 }, this.scene);
+    compilationMesh.setEnabled(false);
+    compilationMesh.isPickable = false;
+    const materials = new Set<Material>();
+    const compile = async (material: Material, mesh: Mesh, useInstances = false): Promise<void> => {
+      materials.add(material);
+      material.unfreeze();
+      await material.forceCompilationAsync(mesh, { useInstances });
+    };
+    try {
+      const spriteVariants = combatSpriteVariants(guns);
+      for (let index = 0; index < spriteVariants.length; index++) {
+        const variant = spriteVariants[index];
+        const material = this.spriteMaterial(`prewarm-${variant.texture}`, variant.texture, variant.color, variant.additive);
+        compilationMesh.material = material;
+        await compile(material, compilationMesh);
+        progress?.(0.05 + 0.3 * (index + 1) / Math.max(1, spriteVariants.length), variants[index] ?? variant.texture);
+        await yieldForPrewarm();
+      }
+      if (this.decalQuality > 0 && guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Chaingun || gun === Gun.Rifle || gun === Gun.Pistol)) {
+        const material = this.bulletDecalMaterial();
+        compilationMesh.material = material;
+        await compile(material, compilationMesh);
+      }
+      if (this.decalQuality > 0) {
+        const decalVariants: Array<[ParticleTexture, number]> = [["blood.png", 0x60ffff]];
+        if (guns.some((gun) => gun === Gun.Rocket || gun === Gun.Grenade)) decalVariants.push(["scorch.png", 0xffffff]);
+        for (const [texture, color] of decalVariants) {
+          const material = this.decalMaterial(texture, color);
+          compilationMesh.material = material;
+          await compile(material, compilationMesh);
+        }
+      }
+      for (const blue of [false, true]) {
+        if (!guns.includes(blue ? Gun.Grenade : Gun.Rocket)) continue;
+        const material = this.fireballMaterial(blue);
+        const mesh = this.explosionTemplate();
+        mesh.material = material;
+        await compile(material, mesh);
+      }
+      const particleTexture = this.particleTexture("spark.png");
+      if (!particleTexture.isReady()) {
+        await new Promise<void>((resolve) => particleTexture.onLoadObservable.addOnce(() => resolve()));
+      }
+      const particleCapacities = mobile ? [8, 32, 128, 256] : [8, 32, 128, 256, 512];
+      for (const capacity of particleCapacities) {
+        if (this.systemPool.some((entry) => !entry.tiled && entry.capacity === capacity)) continue;
+        const system = new ParticleSystem(`combat-particle-pooled-${capacity}`, capacity, this.scene);
+        system.particleTexture = particleTexture;
+        system.layerMask = 0;
+        system.isReady();
+        system.stop();
+        system.reset();
+        this.systemPool.push({ system, capacity, tiled: false });
+      }
+      progress?.(0.45, "loading combat models...");
+      const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates(generation));
+      if (generation !== this.templateGeneration) return { variants: [], materials: 0, pooledMeshes: 0 };
+      const modelCapacities = combatBouncerCapacities(guns, mobile);
+      let pooledMeshes = 0, completedModels = 0;
+      for (const [modelIndex, capacity] of modelCapacities) {
+        const modelTemplates = templates.get(modelIndex) ?? [];
+        for (const template of modelTemplates) {
+          if (template.material) await compile(template.material, template, true);
+        }
+        const missing = Math.max(0, capacity - (this.bouncerMeshPools.get(modelIndex)?.length ?? 0));
+        for (let index = 0; index < missing; index++) {
+          const meshes = this.createBouncerMeshGroup(modelIndex, templates);
+          pooledMeshes += meshes.length;
+          this.releaseBouncerMeshes(modelIndex, meshes);
+        }
+        completedModels++;
+        progress?.(0.45 + 0.45 * completedModels / Math.max(1, modelCapacities.length), `preparing ${bouncerVariantName(modelIndex)}...`);
+        await yieldForPrewarm();
+      }
+      const spriteCapacity = mobile ? 12 : 32;
+      while (this.spritePool.length < spriteCapacity) {
+        const mesh = MeshBuilder.CreatePlane("particle-sprite-pooled", { size: 1 }, this.scene);
+        mesh.setEnabled(false);
+        mesh.isPickable = false;
+        this.spritePool.push(mesh);
+        pooledMeshes++;
+      }
+      materials.forEach((material) => material.freeze());
+      progress?.(1, `${variants.length} combat variants ready`);
+      return { variants, materials: materials.size, pooledMeshes };
+    } finally {
+      compilationMesh.dispose();
+    }
   }
 
   // Original: src/fpsgame/entities.cpp, N_ITEMSPAWN and pickupeffects() particle_icon calls.
@@ -301,7 +413,7 @@ export class ParticleRenderer {
     this.persistentMeshes.forEach((mesh) => this.disposeMesh(mesh));
     this.persistentMeshes.clear();
     this.projectiles.forEach((projectile) => {
-      projectile.meshes.forEach((mesh) => this.disposeMesh(mesh));
+      projectile.meshes.forEach((mesh) => mesh.dispose());
       projectile.light?.dispose();
     });
     this.projectiles.clear();
@@ -313,10 +425,18 @@ export class ParticleRenderer {
     this.spritePool.length = 0;
     this.beamPool.forEach((mesh) => mesh.dispose());
     this.beamPool.length = 0;
+    this.fireballPools.forEach((pool) => pool.forEach((mesh) => mesh.dispose()));
+    this.fireballPools.forEach((pool) => { pool.length = 0; });
+    this.fireballTemplate?.dispose();
+    this.fireballTemplate = undefined;
     this.materials.forEach((material) => material.dispose(false, false));
     this.materials.clear();
     this.bulletMaterial?.dispose(false, false);
     this.bulletMaterial = undefined;
+    this.fireballMaterials.forEach((material, index) => {
+      material?.dispose(false, false);
+      this.fireballMaterials[index] = undefined;
+    });
     this.textures.forEach((texture) => texture.dispose());
     this.textures.clear();
   }
@@ -475,13 +595,8 @@ export class ParticleRenderer {
     if (gun === Gun.Rocket) {
       const templates = await (this.bouncerTemplates ??= this.loadBouncerTemplates(this.templateGeneration));
       if (this.projectiles.get(event.key) !== projectile) return;
-      projectile.meshes = (templates.get(12) ?? []).map((template) => {
-        const mesh = template.clone(`weapon-projectile-${event.key}-${template.name}`, null, false)!;
-        mesh.setEnabled(true);
-        mesh.isVisible = this.renderingEnabled;
-        mesh.isPickable = false;
-        return mesh;
-      });
+      projectile.meshes = this.acquireBouncerMeshes(12, templates);
+      projectile.meshes.forEach((mesh, index) => { mesh.name = `weapon-projectile-${event.key}-${index}`; });
       const light = new PointLight(`weapon-projectile-light-${event.key}`, Vector3.Zero(), this.scene);
       light.diffuse = new Color3(1, 0.75, 0.5);
       light.intensity = 1;
@@ -534,7 +649,8 @@ export class ParticleRenderer {
   private removeProjectile(key: string): void {
     const projectile = this.projectiles.get(key);
     if (!projectile) return;
-    projectile.meshes.forEach((mesh) => this.disposeMesh(mesh));
+    if (projectile.gun === Gun.Rocket) this.releaseBouncerMeshes(12, projectile.meshes);
+    else projectile.meshes.forEach((mesh) => mesh.dispose());
     projectile.light?.dispose();
     this.projectiles.delete(key);
   }
@@ -603,7 +719,8 @@ export class ParticleRenderer {
 
   private releaseBouncerMeshes(modelIndex: number, meshes: InstancedMesh[]): void {
     if (!meshes.length) return;
-    meshes.forEach((mesh) => {
+    meshes.forEach((mesh, index) => {
+      mesh.name = `bouncer-pooled-${modelIndex}-${index}`;
       mesh.setEnabled(false);
       mesh.isVisible = false;
       mesh.position.setAll(0);
@@ -615,24 +732,6 @@ export class ParticleRenderer {
     let pool = this.bouncerMeshPools.get(modelIndex);
     if (!pool) this.bouncerMeshPools.set(modelIndex, pool = []);
     pool.push(meshes);
-  }
-
-  private scheduleBouncerPrewarm(templates: Map<number, Mesh[]>, generation: number): void {
-    const remaining: number[] = [];
-    BOUNCER_PREWARM_CAPACITY.forEach((capacity, modelIndex) => {
-      if (!templates.get(modelIndex)?.length) return;
-      for (let index = 0; index < capacity; index++) remaining.push(modelIndex);
-    });
-    let next = 0;
-    const warmNext = (): void => {
-      if (generation !== this.templateGeneration) return;
-      const modelIndex = remaining[next++];
-      if (modelIndex === undefined) return;
-      const meshes = this.createBouncerMeshGroup(modelIndex, templates);
-      this.releaseBouncerMeshes(modelIndex, meshes);
-      setTimeout(warmNext, 0);
-    };
-    setTimeout(warmNext, 0);
   }
 
   private async loadBouncerTemplates(generation: number): Promise<Map<number, Mesh[]>> {
@@ -700,7 +799,6 @@ export class ParticleRenderer {
       });
       result.set(asset.index, meshes);
     }));
-    if (generation === this.templateGeneration) this.scheduleBouncerPrewarm(result, generation);
     return result;
   }
 
@@ -736,6 +834,34 @@ export class ParticleRenderer {
   // Original: src/engine/explosion.h and data/glsl.cfg. Native Sauerbraten renders
   // fireballs as expanding, shader-wobbled spheres rather than billboard particles.
   private fireball(position: Vec3, radius: number, duration: number, blue: boolean): SpriteEffect {
+    const material = this.fireballMaterial(blue);
+    const pool = this.fireballPools[blue ? 1 : 0];
+    const mesh = pool.pop() ?? this.explosionTemplate().clone("weapon-explosion-fireball", null, false)!;
+    mesh.name = "weapon-explosion-fireball";
+    mesh.setEnabled(true);
+    mesh.position.copyFrom(toBabylonPosition(position));
+    mesh.scaling.setAll(4);
+    mesh.isPickable = false;
+    mesh.isVisible = this.renderingEnabled;
+    mesh.material = material;
+    const metadata: ExplosionMeshMetadata = {
+      center: toBabylonPosition(position), color: particleColor3(blue ? 0x80ffff : 0xff8080), fade: 1,
+    };
+    mesh.metadata = metadata;
+    const started = performance.now();
+    const effect: SpriteEffect = {
+      mesh, started, duration, startScale: 4, endScale: radius, fadeMesh: false,
+      reusableMesh: blue ? "fireball-blue" : "fireball-red",
+      update: (progress) => { metadata.fade = Math.min(1, (1 - progress) * 4); },
+    };
+    this.effects.push(effect);
+    return effect;
+  }
+
+  private fireballMaterial(blue: boolean): ShaderMaterial {
+    const materialIndex = blue ? 1 : 0;
+    const cached = this.fireballMaterials[materialIndex];
+    if (cached) return cached;
     const texture = this.particleTexture(blue ? "plasma.png" : "explosion.png");
     texture.wrapU = Texture.WRAP_ADDRESSMODE;
     texture.wrapV = Texture.WRAP_ADDRESSMODE;
@@ -752,33 +878,32 @@ export class ParticleRenderer {
     material.disableDepthWrite = true;
     material.alphaMode = 1;
     material.setTexture("explosionSampler", texture);
-    material.setVector3("center", toBabylonPosition(position));
-    material.setColor3("color", particleColor3(blue ? 0x80ffff : 0xff8080));
     material.setFloat("fade", 1);
-    material.onBindObservable.add(() => {
+    material.onBindObservable.add((boundMesh) => {
+      const metadata = boundMesh.metadata as ExplosionMeshMetadata | undefined;
+      if (!metadata) return;
       const camera = this.scene.activeCamera ?? this.playerCamera;
-      const basis = explosionTexgenBasis(toBabylonPosition(position), camera.globalPosition,
+      const basis = explosionTexgenBasis(metadata.center, camera.globalPosition,
         camera.getDirection(Vector3.Right()), camera.getDirection(Vector3.Up()));
+      material.setVector3("center", metadata.center);
+      material.setColor3("color", metadata.color);
+      material.setFloat("millis", performance.now() / 1000);
+      material.setFloat("fade", metadata.fade);
       material.setVector3("cameraRight", basis.right);
       material.setVector3("cameraUp", basis.up);
     });
+    this.fireballMaterials[materialIndex] = material;
+    return material;
+  }
 
+  private explosionTemplate(): Mesh {
+    if (this.fireballTemplate) return this.fireballTemplate;
     const mesh = createExplosionSphere(this.scene);
-    mesh.position.copyFrom(toBabylonPosition(position));
-    mesh.scaling.setAll(4);
+    mesh.name = "weapon-explosion-template";
+    mesh.setEnabled(false);
     mesh.isPickable = false;
-    mesh.isVisible = this.renderingEnabled;
-    mesh.material = material;
-    const started = performance.now();
-    const effect: SpriteEffect = {
-      mesh, started, duration, startScale: 4, endScale: radius, fadeMesh: false, ownedMaterial: material,
-      update: (progress) => {
-        material.setFloat("millis", performance.now() / 1000);
-        material.setFloat("fade", Math.min(1, (1 - progress) * 4));
-      },
-    };
-    this.effects.push(effect);
-    return effect;
+    this.fireballTemplate = mesh;
+    return mesh;
   }
 
   private decal(position: Vec3, normal: Vec3, texture: ParticleTexture, color: number, size: number): void {
@@ -1190,12 +1315,15 @@ export class ParticleRenderer {
 
   private disposeEffect(effect: SpriteEffect, reuseMesh = true): void {
     effect.light?.dispose();
-    effect.ownedMaterial?.dispose(false, false);
-    const pool = effect.reusableMesh === "sprite" ? this.spritePool : effect.reusableMesh === "beam" ? this.beamPool : undefined;
-    const limit = effect.reusableMesh === "beam" ? MAX_POOLED_BEAMS : MAX_POOLED_SPRITES;
+    const pool = effect.reusableMesh === "sprite" ? this.spritePool : effect.reusableMesh === "beam" ? this.beamPool
+      : effect.reusableMesh === "fireball-red" ? this.fireballPools[0]
+        : effect.reusableMesh === "fireball-blue" ? this.fireballPools[1] : undefined;
+    const limit = effect.reusableMesh === "beam" ? MAX_POOLED_BEAMS
+      : effect.reusableMesh === "fireball-red" || effect.reusableMesh === "fireball-blue" ? MAX_POOLED_FIREBALLS : MAX_POOLED_SPRITES;
     if (reuseMesh && pool && pool.length < limit) {
       effect.mesh.setEnabled(false);
       effect.mesh.visibility = 1;
+      effect.mesh.metadata = undefined;
       pool.push(effect.mesh);
     } else this.disposeMesh(effect.mesh);
   }
@@ -1286,6 +1414,86 @@ export function explosionTexgenBasis(center: Vector3, cameraPosition: Vector3, c
   right.normalize();
   const up = Vector3.Cross(view, right).normalize();
   return { right, up };
+}
+
+// Original: src/fpsgame/game.h, src/fpsgame/render.cpp
+// Functions: m_insta, preload()
+// Sauerbraten reference: SVN r6488
+export function combatGunsForMode(mode: number, multiplayer: boolean): Gun[] {
+  if (gameModeHas(mode, GameModeFlag.Insta)) return [Gun.Rifle];
+  const guns = [Gun.Fist, Gun.Shotgun, Gun.Chaingun, Gun.Rocket, Gun.Rifle, Gun.Grenade, Gun.Pistol];
+  if (!multiplayer && (gameModeHas(mode, GameModeFlag.ClassicSp) || gameModeHas(mode, GameModeFlag.Dmsp))) {
+    guns.push(Gun.Fireball, Gun.Iceball, Gun.Slimeball, Gun.Bite, Gun.Barrel);
+  }
+  return guns;
+}
+
+function combatVariantNames(guns: readonly Gun[], decals: boolean): string[] {
+  const variants = new Set<string>();
+  const hasHitscan = guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Chaingun || gun === Gun.Rifle || gun === Gun.Pistol);
+  if (hasHitscan) variants.add("sparks:additive");
+  if (guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Chaingun || gun === Gun.Pistol)) variants.add("tracer:additive");
+  if (guns.some((gun) => gun >= Gun.Shotgun && gun <= Gun.Grenade || gun === Gun.Pistol)) variants.add("muzzle-flash:additive");
+  if (guns.some((gun) => gun === Gun.Rifle || gun === Gun.Rocket || gun === Gun.Grenade ||
+      gun === Gun.Fireball || gun === Gun.Iceball || gun === Gun.Slimeball)) variants.add("smoke:alpha");
+  if (guns.includes(Gun.Rocket)) variants.add("explosion:red-shader");
+  if (guns.includes(Gun.Grenade)) variants.add("explosion:blue-shader");
+  if (guns.some((gun) => gun === Gun.Fireball || gun === Gun.Iceball || gun === Gun.Slimeball)) variants.add("monster-projectiles:alpha");
+  if (decals && hasHitscan) variants.add("decal:bullet-multiply");
+  if (decals) variants.add("decal:blood-alpha-test");
+  if (decals && guns.some((gun) => gun === Gun.Rocket || gun === Gun.Grenade)) variants.add("decal:scorch-alpha-test");
+  variants.add("bouncers:gibs-instanced");
+  if (guns.includes(Gun.Grenade)) variants.add("bouncers:grenade-instanced");
+  if (guns.includes(Gun.Rocket)) variants.add("projectile:rocket-instanced");
+  if (guns.some((gun) => gun === Gun.Rocket || gun === Gun.Grenade || gun === Gun.Barrel)) variants.add("bouncers:debris-instanced");
+  return [...variants];
+}
+
+function combatSpriteVariants(guns: readonly Gun[]): Array<{ texture: ParticleTexture; color: number; additive: boolean }> {
+  const variants: Array<{ texture: ParticleTexture; color: number; additive: boolean }> = [];
+  const add = (texture: ParticleTexture, color: number, additive: boolean): void => {
+    if (!variants.some((variant) => variant.texture === texture && variant.color === color && variant.additive === additive)) {
+      variants.push({ texture, color, additive });
+    }
+  };
+  const hasHitscan = guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Chaingun || gun === Gun.Rifle || gun === Gun.Pistol);
+  if (hasHitscan) add("spark.png", 0xb49b4b, true);
+  if (guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Chaingun || gun === Gun.Pistol)) add("flare.jpg", 0xffc864, true);
+  if (guns.some((gun) => gun === Gun.Rifle || gun === Gun.Rocket || gun === Gun.Grenade || gun >= Gun.Fireball && gun <= Gun.Slimeball)) {
+    add("smoke.png", 0x404040, false);
+  }
+  if (guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Rifle)) add("muzzleflash3.jpg", 0xffffff, true);
+  if (guns.some((gun) => gun === Gun.Chaingun || gun === Gun.Pistol)) add("muzzleflash1.jpg", 0xffffff, true);
+  if (guns.some((gun) => gun === Gun.Rocket || gun === Gun.Grenade)) add("muzzleflash2.jpg", 0xffffff, true);
+  if (guns.includes(Gun.Fireball)) add("ball1.png", 0xffc8c8, false);
+  if (guns.includes(Gun.Iceball)) add("ball2.png", 0xffffff, false);
+  if (guns.includes(Gun.Slimeball)) add("ball3.png", 0xffffff, false);
+  return variants;
+}
+
+function combatBouncerCapacities(guns: readonly Gun[], mobile: boolean): Array<[number, number]> {
+  const result: Array<[number, number]> = [];
+  if (guns.includes(Gun.Grenade)) result.push([0, mobile ? 3 : 8]);
+  for (let modelIndex = 1; modelIndex <= 3; modelIndex++) result.push([modelIndex, mobile ? 5 : 14]);
+  if (guns.some((gun) => gun === Gun.Rocket || gun === Gun.Grenade || gun === Gun.Barrel)) {
+    for (let modelIndex = 4; modelIndex <= 7; modelIndex++) result.push([modelIndex, mobile ? 3 : 8]);
+  }
+  if (guns.includes(Gun.Barrel)) for (let modelIndex = 8; modelIndex <= 11; modelIndex++) result.push([modelIndex, mobile ? 2 : 4]);
+  if (guns.includes(Gun.Rocket)) result.push([12, mobile ? 3 : 8]);
+  return result;
+}
+
+function bouncerVariantName(modelIndex: number): string {
+  if (modelIndex === 0) return "grenade mesh";
+  if (modelIndex <= 3) return "gib mesh";
+  if (modelIndex <= 7) return "debris mesh";
+  if (modelIndex <= 11) return "barrel debris mesh";
+  return "rocket mesh";
+}
+
+async function yieldForPrewarm(): Promise<void> {
+  if (typeof requestAnimationFrame === "function") await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  else await Promise.resolve();
 }
 
 /** Exact 12x6 sphere topology and UV layout from src/engine/explosion.h. */

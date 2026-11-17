@@ -8,8 +8,8 @@ import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it, vi } from "vitest";
 import { WeaponEvents } from "../fpsgame/weapon/WeaponEvents";
 import { Gun } from "../fpsgame/weapon/WeaponDefinitions";
-import { decalCapacityOpacity, explosionTexgenBasis, ParticleRenderer, sauerParticleColor, sauerParticleDiameter, sauerParticleOffset,
-  sauerParticlePosition } from "./ParticleRenderer";
+import { combatGunsForMode, decalCapacityOpacity, explosionTexgenBasis, ParticleRenderer, sauerParticleColor, sauerParticleDiameter,
+  sauerParticleOffset, sauerParticlePosition } from "./ParticleRenderer";
 
 describe("Sauerbraten particle entity helpers", () => {
   it("bundles Babylon's particle shaders instead of requesting them as runtime URLs", () => {
@@ -106,6 +106,29 @@ describe("Sauerbraten particle entity helpers", () => {
     expect((fireball!.material as ShaderMaterial).alphaMode).toBe(1);
     expect(scene.particleSystems).toHaveLength(0);
     expect(() => scene.render()).not.toThrow();
+
+    renderer.clear();
+    engine.dispose();
+  });
+
+  it("selects only mode-relevant combat shader variants", () => {
+    expect(combatGunsForMode(3, true)).toEqual([Gun.Rifle]);
+    expect(combatGunsForMode(-2, false)).toContain(Gun.Fireball);
+    expect(combatGunsForMode(0, true)).not.toContain(Gun.Fireball);
+  });
+
+  it("shares one prepared explosion material across concurrent fireballs", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", new Vector3(0, 0, -100), scene);
+    scene.activeCamera = camera;
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+
+    events.emit({ type: "explosion", gun: Gun.Rocket, position: { x: 0, y: 0, z: 0 }, radius: 40 });
+    events.emit({ type: "explosion", gun: Gun.Rocket, position: { x: 20, y: 0, z: 0 }, radius: 40 });
+    const fireballs = scene.meshes.filter((mesh) => mesh.name === "weapon-explosion-fireball");
+    expect(fireballs).toHaveLength(2);
+    expect(fireballs[0].material).toBe(fireballs[1].material);
+    expect(scene.materials.filter((material) => material.name === "weapon-explosion-red-material")).toHaveLength(1);
 
     renderer.clear();
     engine.dispose();
