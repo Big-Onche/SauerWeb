@@ -1038,8 +1038,14 @@ export class ParticleRenderer {
         if (!state) continue;
         state.ageMs += elapsedMs;
         if (state.ageMs >= state.fadeMs) {
+          const lastParticle = particles[particles.length - 1];
+          const lastState = states.get(lastParticle);
           states.delete(particle);
-          particles.splice(index, 1);
+          system.recycleParticle(particle);
+          if (lastParticle !== particle) {
+            states.delete(lastParticle);
+            if (lastState) states.set(particle, lastState);
+          }
           continue;
         }
         const particleMillis = state.fadeMs <= 5 ? 1 : Math.min(state.ageMs, state.fadeMs);
