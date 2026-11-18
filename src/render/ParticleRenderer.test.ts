@@ -4,6 +4,7 @@ import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { GPUParticleSystem } from "@babylonjs/core/Particles/gpuParticleSystem";
 import { Scene } from "@babylonjs/core/scene";
 import { describe, expect, it, vi } from "vitest";
@@ -148,7 +149,7 @@ describe("Sauerbraten particle entity helpers", () => {
       type: "shot-effect", gun: Gun.Pistol, from: { x: 0, y: 0, z: 0 }, to: { x: 10, y: 0, z: 0 }, rays: [],
     });
 
-    expect(splash).toHaveBeenCalledWith({ x: 10, y: 0, z: 0 }, "spark.png", 0xb49b4b, 0.24, 200, 250, 150, 2, true);
+    expect(splash).toHaveBeenCalledWith({ x: 10, y: 0, z: 0 }, "spark.png", 0xb49b4b, 0.5, 200, 250, 150, 2, true);
     renderer.clear();
     engine.dispose();
   });
@@ -255,6 +256,26 @@ describe("Sauerbraten particle entity helpers", () => {
     engine.dispose();
   });
 
+  it("renders concurrent player muzzle flashes through one preallocated instance source", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+    const shot = (y: number): void => events.emit({
+      type: "shot-effect", gun: Gun.Pistol, from: { x: 0, y, z: 0 }, to: { x: 10, y, z: 0 }, rays: [],
+    });
+
+    shot(0);
+    shot(10);
+
+    const source = scene.getMeshByName("muzzle-flash-source-muzzleflash1.jpg") as Mesh;
+    expect(source).not.toBeNull();
+    expect(source.instances).toHaveLength(128);
+    expect(source.instances.filter((instance) => instance.isEnabled())).toHaveLength(2);
+    expect(source.instances.every((instance) => instance.billboardMode === Mesh.BILLBOARDMODE_ALL)).toBe(true);
+    renderer.clear();
+    engine.dispose();
+  });
+
   it("projects bullet decals onto the map collision surface", () => {
     const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
     const camera = new FreeCamera("camera", Vector3.Zero(), scene);
@@ -345,6 +366,27 @@ describe("Sauerbraten particle entity helpers", () => {
       engine.dispose();
       fetchMock.mockRestore();
     }
+  });
+
+  it("keeps one moving smoke emitter per projectile instead of allocating a burst on every movement", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), events = new WeaponEvents();
+    const camera = new FreeCamera("camera", Vector3.Zero(), scene);
+    const renderer = new ParticleRenderer(scene, events, camera, () => undefined);
+    events.emit({
+      type: "projectile-spawned", key: "fireball", gun: Gun.Fireball, id: 1, ownerId: "owner", local: false,
+      position: { x: 0, y: 0, z: 0 }, destination: { x: 64, y: 0, z: 0 }, direction: { x: 1, y: 0, z: 0 },
+      offset: { x: 0, y: 0, z: 0 }, offsetMillis: 0,
+    });
+    for (let x = 1; x <= 3; x++) events.emit({
+      type: "projectile-moved", key: "fireball", gun: Gun.Fireball, position: { x, y: 2, z: 3 },
+      destination: { x: 64, y: 2, z: 3 }, direction: { x: 1, y: 0, z: 0 }, offset: { x: 0, y: 0, z: 0 }, offsetMillis: 0,
+    });
+
+    const smoke = scene.particleSystems.filter((system) => system.name === "weapon-moving-smoke");
+    expect(smoke).toHaveLength(1);
+    expect((smoke[0].emitter as Vector3).asArray()).toEqual([3, 3, 2]);
+    renderer.clear();
+    engine.dispose();
   });
 
   it("reuses pooled bouncer instances with shared geometry and reset transforms", async () => {

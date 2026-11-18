@@ -47,12 +47,27 @@ interface SpriteEffect {
   duration: number;
   startScale: number;
   endScale: number;
-  reusableMesh?: "sprite" | "beam" | "fireball-red" | "fireball-blue";
+  reusableMesh?: "beam" | "fireball-red" | "fireball-blue";
   light?: PointLight;
   track?: () => Vec3 | undefined;
   update?: (progress: number) => void;
   fadeMesh?: boolean;
   fadeStart?: number;
+}
+
+interface MuzzleFlashSlot {
+  mesh: InstancedMesh;
+  active: boolean;
+  started: number;
+  duration: number;
+  scale: number;
+  track?: () => Vec3 | undefined;
+  light?: PointLight;
+}
+
+interface MuzzleFlashPool {
+  source: Mesh;
+  slots: MuzzleFlashSlot[];
 }
 
 export interface DecalSurface {
@@ -96,6 +111,7 @@ interface ProjectileEffect {
   offsetMillis: number;
   meshes: InstancedMesh[];
   light?: PointLight;
+  smokeSystem?: CosmeticParticleSystem;
 }
 
 interface ExplosionMeshMetadata {
@@ -119,6 +135,8 @@ interface BouncerEffect {
   roll: number;
   fade: number;
   smoke: boolean;
+  smokeSystem?: CosmeticParticleSystem;
+  smokeUntil?: number;
   dirty: boolean;
 }
 
@@ -166,9 +184,9 @@ interface MapParticleEmitter {
 
 const SAUER_EMIT_MILLIS = 17;
 const MAX_POOLED_PARTICLE_SYSTEMS = 16;
-const MAX_POOLED_SPRITES = 64;
 const MAX_POOLED_BEAMS = 128;
 const MAX_POOLED_FIREBALLS = 12;
+const MAX_MUZZLE_FLASHES = 128;
 const PARTICLE_LAYER_MASK = 0x0fffffff;
 
 const EXPLOSION_VERTEX_SHADER = `
@@ -260,9 +278,9 @@ export class ParticleRenderer {
   private readonly originalSystemRender = new Map<CosmeticParticleSystem, CosmeticParticleRender>();
   private readonly systemPool: PooledParticleSystem[] = [];
   private readonly systemBatchData = new Map<CosmeticParticleSystem, { update: RawTexture; render: RawTexture }>();
-  private readonly spritePool: Mesh[] = [];
   private readonly beamPool: Mesh[] = [];
   private readonly fireballPools: [Mesh[], Mesh[]] = [[], []];
+  private readonly muzzleFlashPools = new Map<ParticleTexture, MuzzleFlashPool>();
   private readonly textures = new Map<string, Texture>();
   private readonly batchDataTextures = new Set<RawTexture>();
   private readonly materials = new Map<string, StandardMaterial>();
@@ -365,6 +383,10 @@ export class ParticleRenderer {
     this.systemPool.forEach(({ system }) => { system.layerMask = enabled ? PARTICLE_LAYER_MASK : 0; });
     this.persistentMeshes.forEach((mesh) => { mesh.isVisible = enabled; });
     this.effects.forEach((effect) => { effect.mesh.isVisible = enabled; });
+    this.muzzleFlashPools.forEach((pool) => pool.slots.forEach((slot) => {
+      slot.mesh.isVisible = enabled;
+      slot.light?.setEnabled(enabled && slot.active);
+    }));
     this.projectiles.forEach((projectile) => {
       projectile.meshes.forEach((mesh) => { mesh.isVisible = enabled; });
       projectile.light?.setEnabled(enabled);
@@ -403,6 +425,11 @@ export class ParticleRenderer {
         progress?.(0.05 + 0.3 * (index + 1) / Math.max(1, spriteVariants.length), variants[index] ?? variant.texture);
         await yieldForPrewarm();
       }
+      const muzzleTextures = new Set<ParticleTexture>();
+      if (guns.some((gun) => gun === Gun.Chaingun || gun === Gun.Pistol)) muzzleTextures.add("muzzleflash1.jpg");
+      if (guns.some((gun) => gun === Gun.Rocket || gun === Gun.Grenade)) muzzleTextures.add("muzzleflash2.jpg");
+      if (guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Rifle)) muzzleTextures.add("muzzleflash3.jpg");
+      muzzleTextures.forEach((texture) => this.prepareMuzzleFlashPool(texture));
       if (this.decalQuality > 0 && guns.some((gun) => gun === Gun.Shotgun || gun === Gun.Chaingun || gun === Gun.Rifle || gun === Gun.Pistol)) {
         const material = this.bulletDecalMaterial();
         compilationMesh.material = material;
@@ -460,14 +487,6 @@ export class ParticleRenderer {
         completedModels++;
         progress?.(0.45 + 0.45 * completedModels / Math.max(1, modelCapacities.length), `preparing ${bouncerVariantName(modelIndex)}...`);
         await yieldForPrewarm();
-      }
-      const spriteCapacity = mobile ? 12 : 32;
-      while (this.spritePool.length < spriteCapacity) {
-        const mesh = MeshBuilder.CreatePlane("particle-sprite-pooled", { size: 1 }, this.scene);
-        mesh.setEnabled(false);
-        mesh.isPickable = false;
-        this.spritePool.push(mesh);
-        pooledMeshes++;
       }
       materials.forEach((material) => material.freeze());
       progress?.(1, `${variants.length} combat variants ready`);
@@ -540,12 +559,15 @@ export class ParticleRenderer {
     this.templateGeneration++;
     this.systemPool.forEach(({ system }) => system.dispose(false));
     this.systemPool.length = 0;
-    this.spritePool.forEach((mesh) => mesh.dispose());
-    this.spritePool.length = 0;
     this.beamPool.forEach((mesh) => mesh.dispose());
     this.beamPool.length = 0;
     this.fireballPools.forEach((pool) => pool.forEach((mesh) => mesh.dispose()));
     this.fireballPools.forEach((pool) => { pool.length = 0; });
+    this.muzzleFlashPools.forEach((pool) => {
+      pool.slots.forEach((slot) => slot.light?.dispose());
+      pool.source.dispose(false, false);
+    });
+    this.muzzleFlashPools.clear();
     this.fireballTemplate?.dispose();
     this.fireballTemplate = undefined;
     this.materials.forEach((material) => material.dispose(false, false));
@@ -751,7 +773,10 @@ export class ParticleRenderer {
     const visualPosition = projectileVisualPosition({ o: projectile.position, offset: projectile.offset,
       offsetmillis: projectile.offsetMillis });
     const magic = projectile.gun === Gun.Fireball || projectile.gun === Gun.Iceball || projectile.gun === Gun.Slimeball;
-    this.splash(visualPosition, "smoke.png", 0x404040, magic ? 0.6 : 2.4, 2, 300, magic ? 150 : 50, -20);
+    if (!projectile.smokeSystem) {
+      projectile.smokeSystem = this.movingSmokeEmitter(visualPosition, magic ? 0.6 : 2.4, 2 * 1000 / SAUER_EMIT_MILLIS,
+        300, magic ? 150 : 50);
+    } else this.moveParticleEmitter(projectile.smokeSystem, visualPosition);
     if (magic) {
       const texture = projectile.gun === Gun.Iceball ? "ball2.png" : projectile.gun === Gun.Slimeball ? "ball3.png" : "ball1.png";
       this.splash(visualPosition, texture, projectile.gun === Gun.Fireball ? 0xffc8c8 : 0xffffff, 4.8, 1, 1, 150, 20);
@@ -778,6 +803,7 @@ export class ParticleRenderer {
     if (projectile.gun === Gun.Rocket) this.releaseBouncerMeshes(12, projectile.meshes);
     else projectile.meshes.forEach((mesh) => mesh.dispose());
     projectile.light?.dispose();
+    if (projectile.smokeSystem) this.retireMovingEmitter(projectile.smokeSystem, 900);
     this.projectiles.delete(key);
   }
 
@@ -812,7 +838,10 @@ export class ParticleRenderer {
 
   private removeBouncer(key: string): void {
     const bouncer = this.bouncers.get(key);
-    if (bouncer) this.releaseBouncerMeshes(bouncer.modelIndex, bouncer.meshes);
+    if (bouncer) {
+      this.releaseBouncerMeshes(bouncer.modelIndex, bouncer.meshes);
+      if (bouncer.smokeSystem) this.retireMovingEmitter(bouncer.smokeSystem, 450);
+    }
     this.bouncers.delete(key);
   }
 
@@ -1086,13 +1115,13 @@ export class ParticleRenderer {
       this.gpuSparkBatch(positions, count, fadeMs);
       return;
     }
-    this.splash(positions[0], "spark.png", 0xb49b4b, 0.24, count, fadeMs, 150, 2, true);
+    this.splash(positions[0], "spark.png", 0xb49b4b, 0.5, count, fadeMs, 150, 2, true);
   }
 
   private gpuSparkBatch(positions: readonly Vec3[], countPerEmitter: number, fadeMs: number): void {
     const maximumFade = fadeMs * 3;
     const options: ParticleOptions = {
-      texture: "spark.png", color: 0xb49b4b, size: 0.24, fadeMinMs: 1, fadeMaxMs: maximumFade,
+      texture: "spark.png", color: 0xb49b4b, size: 0.5, fadeMinMs: 1, fadeMaxMs: maximumFade,
       velocityRadius: 150, gravity: 2, additive: true,
     };
     const emitters = positions.map((position, index): MapParticleEmitter => ({ name: `impact-${index}`, position, options }));
@@ -1166,6 +1195,24 @@ export class ParticleRenderer {
       fadeAtIndex: (index) => count < 10 ? 1 + Math.floor(Math.random() * maximumFade) :
         Math.trunc(maximumFade - index * (maximumFade - 1) / (count - 1)),
     });
+  }
+
+  private movingSmokeEmitter(position: Vec3, size: number, rate: number, fadeMs: number,
+                             velocityRadius: number): CosmeticParticleSystem | undefined {
+    return this.particleSystem("weapon-moving-smoke", position, {
+      texture: "smoke.png", color: 0x404040, size, fadeMinMs: 1, fadeMaxMs: fadeMs * 3,
+      rate, velocityRadius, gravity: -20,
+    });
+  }
+
+  private moveParticleEmitter(system: CosmeticParticleSystem, position: Vec3): void {
+    const emitter = system.emitter;
+    if (emitter instanceof Vector3) emitter.copyFrom(toBabylonPosition(position));
+  }
+
+  private retireMovingEmitter(system: CosmeticParticleSystem, fadeMs: number): void {
+    system.stop();
+    this.systemExpiresAt.set(system, performance.now() + fadeMs + 50);
   }
 
   private trail(from: Vec3, to: Vec3, texture: ParticleTexture, color: number, size: number, fade: number, gravity: number,
@@ -1526,8 +1573,6 @@ export class ParticleRenderer {
       system.addColorGradient(0, particleColor4(options.color, 1));
       system.addColorGradient(0.75, particleColor4(options.color, 1));
       system.addColorGradient(1, particleColor4(options.color, 0));
-      system.addSizeGradient(0, 1);
-      system.addSizeGradient(1, 1);
     }
     system.maxActiveParticleCount = capacity;
     if (options.count !== undefined) {
@@ -1578,35 +1623,67 @@ export class ParticleRenderer {
 
   private muzzleFlash(position: Vec3, texture: ParticleTexture, size: number, duration: number, lightRange = 0,
                       track?: () => Vec3 | undefined): void {
-    // Native muzzle particles use the supplied value as their visible width and PT_TRACK keeps them on tag_muzzle.
-    const effect = this.sprite(position, texture, 0xffffff, size * 0.5, duration, true);
-    effect.track = track;
-    if (!lightRange) return;
-    const light = new PointLight("weapon-muzzle-light", toBabylonPosition(position), this.scene);
-    light.diffuse = new Color3(1, 0.75, 0.5);
-    light.intensity = 1;
-    light.range = lightRange;
-    effect.light = light;
+    const pool = this.prepareMuzzleFlashPool(texture);
+    const slot = pool.slots.find((candidate) => !candidate.active) ?? pool.slots.reduce((oldest, candidate) =>
+      candidate.started < oldest.started ? candidate : oldest);
+    slot.active = true;
+    slot.started = performance.now();
+    slot.duration = duration;
+    slot.scale = size;
+    slot.track = track;
+    slot.mesh.position.copyFrom(toBabylonPosition(position));
+    slot.mesh.scaling.setAll(size);
+    slot.mesh.visibility = 1;
+    slot.mesh.isVisible = this.renderingEnabled;
+    slot.mesh.setEnabled(true);
+    if (lightRange) {
+      const light = slot.light ??= new PointLight("weapon-muzzle-light", slot.mesh.position, this.scene);
+      light.position.copyFrom(slot.mesh.position);
+      light.diffuse.set(1, 0.75, 0.5);
+      light.intensity = 1;
+      light.range = lightRange;
+      light.setEnabled(this.renderingEnabled);
+    } else slot.light?.setEnabled(false);
   }
 
-  private sprite(position: Vec3, texture: ParticleTexture, color: number, size: number, duration: number, additive: boolean,
-                 endScale = size): SpriteEffect {
-    const material = this.spriteMaterial(`particle-${texture}`, texture, color, additive);
-    const mesh = this.spritePool.pop() ?? MeshBuilder.CreatePlane("particle-sprite", { size: 1 }, this.scene);
-    mesh.setEnabled(true);
-    mesh.isVisible = this.renderingEnabled;
-    mesh.visibility = 1;
-    mesh.position.copyFrom(toBabylonPosition(position));
-    mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
-    mesh.scaling.setAll(sauerParticleDiameter(size));
-    mesh.isPickable = false;
-    mesh.material = material;
-    const effect = {
-      mesh, started: performance.now(), duration, startScale: sauerParticleDiameter(size), endScale: sauerParticleDiameter(endScale),
-      reusableMesh: "sprite" as const,
-    };
-    this.effects.push(effect);
-    return effect;
+  private prepareMuzzleFlashPool(texture: ParticleTexture): MuzzleFlashPool {
+    const existing = this.muzzleFlashPools.get(texture);
+    if (existing) return existing;
+    const source = MeshBuilder.CreatePlane(`muzzle-flash-source-${texture}`, { size: 1 }, this.scene);
+    source.material = this.spriteMaterial(`particle-${texture}`, texture, 0xffffff, true);
+    source.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    source.scaling.setAll(0);
+    source.isPickable = false;
+    const slots = Array.from({ length: MAX_MUZZLE_FLASHES }, (_, index): MuzzleFlashSlot => {
+      const mesh = source.createInstance(`muzzle-flash-${texture}-${index}`);
+      mesh.isPickable = false;
+      mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
+      mesh.setEnabled(false);
+      return { mesh, active: false, started: 0, duration: 0, scale: 0 };
+    });
+    const pool = { source, slots };
+    this.muzzleFlashPools.set(texture, pool);
+    return pool;
+  }
+
+  private updateMuzzleFlashes(now: number): void {
+    this.muzzleFlashPools.forEach((pool) => pool.slots.forEach((slot) => {
+      if (!slot.active) return;
+      const progress = Math.min(1, (now - slot.started) / slot.duration);
+      const trackedPosition = slot.track?.();
+      if (trackedPosition) slot.mesh.position.copyFrom(toBabylonPosition(trackedPosition));
+      slot.mesh.visibility = this.renderingEnabled ? 1 - progress : 0;
+      slot.mesh.scaling.setAll(slot.scale);
+      if (slot.light) {
+        slot.light.position.copyFrom(slot.mesh.position);
+        slot.light.intensity = (1 - progress) * 2;
+      }
+      if (progress < 1) return;
+      slot.active = false;
+      slot.track = undefined;
+      slot.mesh.setEnabled(false);
+      slot.light?.setEnabled(false);
+    }));
   }
 
   private persistentSprite(position: Vec3, texture: ParticleTexture, color: number, size: number, additive: boolean): void {
@@ -1754,6 +1831,7 @@ export class ParticleRenderer {
     if (this.profilingEnabled) this.gpuSimulationDraws = this.gpuRenderingDraws = this.cpuParticleDraws = 0;
     this.updateBouncerVisuals();
     const now = performance.now();
+    this.updateMuzzleFlashes(now);
     for (let index = this.effects.length - 1; index >= 0; index--) {
       const effect = this.effects[index];
       const progress = Math.min(1, (now - effect.started) / effect.duration);
@@ -1822,19 +1900,26 @@ export class ParticleRenderer {
         bouncer.dirty = false;
       }
       if (bouncer.smoke) {
-        this.splash(bouncer.position, "smoke.png", 0x404040, 2.4, 1, 150, 50, -20);
+        if (!bouncer.smokeSystem) {
+          bouncer.smokeSystem = this.movingSmokeEmitter(bouncer.position, 2.4, 1000 / SAUER_EMIT_MILLIS, 150, 50);
+        } else {
+          this.moveParticleEmitter(bouncer.smokeSystem, bouncer.position);
+          bouncer.smokeSystem.start();
+        }
+        bouncer.smokeUntil = performance.now() + SAUER_EMIT_MILLIS * 3;
         bouncer.smoke = false;
+      } else if (bouncer.smokeSystem && performance.now() >= (bouncer.smokeUntil ?? 0)) {
+        bouncer.smokeSystem.stop();
       }
     });
   }
 
   private disposeEffect(effect: SpriteEffect, reuseMesh = true): void {
     effect.light?.dispose();
-    const pool = effect.reusableMesh === "sprite" ? this.spritePool : effect.reusableMesh === "beam" ? this.beamPool
-      : effect.reusableMesh === "fireball-red" ? this.fireballPools[0]
+    const pool = effect.reusableMesh === "beam" ? this.beamPool : effect.reusableMesh === "fireball-red" ? this.fireballPools[0]
         : effect.reusableMesh === "fireball-blue" ? this.fireballPools[1] : undefined;
     const limit = effect.reusableMesh === "beam" ? MAX_POOLED_BEAMS
-      : effect.reusableMesh === "fireball-red" || effect.reusableMesh === "fireball-blue" ? MAX_POOLED_FIREBALLS : MAX_POOLED_SPRITES;
+      : effect.reusableMesh === "fireball-red" || effect.reusableMesh === "fireball-blue" ? MAX_POOLED_FIREBALLS : 0;
     if (reuseMesh && pool && pool.length < limit) {
       effect.mesh.setEnabled(false);
       effect.mesh.visibility = 1;
